@@ -67,6 +67,7 @@
 				materialType: 'standard',
 				probeIntensity: 1,
 				probeHelperIntensity: 1,
+				band1Intensity: 1,
 				band2Intensity: 0.55,
 				normalBias: 0.5,
 				viewBias: 0,
@@ -284,6 +285,7 @@
 					projectionPrecision: params.projectionPrecision,
 					probeIntensity: params.probeIntensity,
 					helperIntensity: params.probeHelperIntensity,
+					band1Intensity: params.band1Intensity,
 					band2Intensity: params.band2Intensity,
 					normalBias: params.normalBias,
 					viewBias: params.viewBias,
@@ -692,6 +694,319 @@
 					chromaSpread: Math.max( color.r, color.g, color.b ) - Math.min( color.r, color.g, color.b )
 				} );
 
+				const roundMetric = ( value ) => Number( value.toFixed( 4 ) );
+
+				const sphericalHarmonics3Basis = ( dir ) => {
+
+					const x = dir.x;
+					const y = dir.y;
+					const z = dir.z;
+
+					return [
+						0.282095,
+						0.488603 * y,
+						0.488603 * z,
+						0.488603 * x,
+						1.092548 * x * y,
+						1.092548 * y * z,
+						0.315392 * ( 3 * z * z - 1 ),
+						1.092548 * x * z,
+						0.546274 * ( x * x - y * y )
+					];
+
+				};
+
+				const projectionConventionDirection = ( convention, faceIndex, ix, iy, imageWidth ) => {
+
+					const pixelSize = 2 / imageWidth;
+					const textureCol = - 1 + ( ix + 0.5 ) * pixelSize;
+					const shaderCol = 1 - ( ix + 0.5 ) * pixelSize;
+					const row = 1 - ( iy + 0.5 ) * pixelSize;
+
+					if ( convention === 'shader-webgpu' ||
+						convention === 'generator-render-target-webgpu' ||
+						convention === 'cube-texture' ) {
+
+						switch ( faceIndex ) {
+
+							case 0: return new THREE.Vector3( - 1, row, shaderCol );
+							case 1: return new THREE.Vector3( 1, row, - shaderCol );
+							case 2: return new THREE.Vector3( shaderCol, 1, - row );
+							case 3: return new THREE.Vector3( shaderCol, - 1, row );
+							case 4: return new THREE.Vector3( shaderCol, row, 1 );
+							default: return new THREE.Vector3( - shaderCol, row, - 1 );
+
+						}
+
+					}
+
+					if ( convention === 'webgl-light-probe-grid' ||
+						convention === 'generator-render-target-webgl' ) {
+
+						switch ( faceIndex ) {
+
+							case 0: return new THREE.Vector3( 1, row, - textureCol );
+							case 1: return new THREE.Vector3( - 1, row, textureCol );
+							case 2: return new THREE.Vector3( textureCol, 1, - row );
+							case 3: return new THREE.Vector3( textureCol, - 1, row );
+							case 4: return new THREE.Vector3( textureCol, row, 1 );
+							default: return new THREE.Vector3( - textureCol, row, - 1 );
+
+						}
+
+					}
+
+					throw new Error( `Unknown projection convention ${ convention }.` );
+
+				};
+
+				const projectionFixtureColor = ( fixture, faceIndex, dir ) => {
+
+					if ( fixture === 'constant' ) return { r: 0.7, g: 0.45, b: 0.25 };
+
+					if ( fixture === 'direction-rgb' ) {
+
+						return {
+							r: dir.x * 0.5 + 0.5,
+							g: dir.y * 0.5 + 0.5,
+							b: dir.z * 0.5 + 0.5
+						};
+
+					}
+
+					if ( fixture === 'positive-axis-lobes' ) {
+
+						return {
+							r: Math.max( dir.x, 0 ),
+							g: Math.max( dir.y, 0 ),
+							b: Math.max( dir.z, 0 )
+						};
+
+					}
+
+					const faceColors = [
+						{ r: 1.0, g: 0.15, b: 0.05 },
+						{ r: 0.05, g: 0.9, b: 0.2 },
+						{ r: 0.15, g: 0.2, b: 1.0 },
+						{ r: 0.95, g: 0.8, b: 0.1 },
+						{ r: 0.2, g: 0.85, b: 0.85 },
+						{ r: 0.85, g: 0.25, b: 0.9 }
+					];
+
+					return faceColors[ faceIndex ];
+
+				};
+
+				const projectSyntheticCube = ( convention, fixture, imageWidth = 8 ) => {
+
+					let totalWeight = 0;
+					const coefficients = Array.from( { length: 9 }, () => ( { r: 0, g: 0, b: 0 } ) );
+
+					for ( let faceIndex = 0; faceIndex < 6; faceIndex ++ ) {
+
+						for ( let iy = 0; iy < imageWidth; iy ++ ) {
+
+							for ( let ix = 0; ix < imageWidth; ix ++ ) {
+
+								const coord = projectionConventionDirection( convention, faceIndex, ix, iy, imageWidth );
+								const lengthSq = coord.lengthSq();
+								const weight = 4 / ( Math.sqrt( lengthSq ) * lengthSq );
+								const dir = coord.clone().normalize();
+								const color = projectionFixtureColor( fixture, faceIndex, dir );
+								const basis = sphericalHarmonics3Basis( dir );
+
+								totalWeight += weight;
+
+								for ( let coefficientIndex = 0; coefficientIndex < 9; coefficientIndex ++ ) {
+
+									coefficients[ coefficientIndex ].r += basis[ coefficientIndex ] * color.r * weight;
+									coefficients[ coefficientIndex ].g += basis[ coefficientIndex ] * color.g * weight;
+									coefficients[ coefficientIndex ].b += basis[ coefficientIndex ] * color.b * weight;
+
+								}
+
+							}
+
+						}
+
+					}
+
+					const norm = 4 * Math.PI / totalWeight;
+
+					for ( const coefficient of coefficients ) {
+
+						coefficient.r *= norm;
+						coefficient.g *= norm;
+						coefficient.b *= norm;
+
+					}
+
+					return coefficients;
+
+				};
+
+				const maxCoefficientDelta = ( a, b ) => {
+
+					let maxDelta = 0;
+
+					for ( let i = 0; i < a.length; i ++ ) {
+
+						maxDelta = Math.max(
+							maxDelta,
+							Math.abs( a[ i ].r - b[ i ].r ),
+							Math.abs( a[ i ].g - b[ i ].g ),
+							Math.abs( a[ i ].b - b[ i ].b )
+						);
+
+					}
+
+					return maxDelta;
+
+				};
+
+				const inspectProjectionParity = () => {
+
+					const fixtures = [ 'constant', 'six-face-colors', 'direction-rgb', 'positive-axis-lobes' ].map( ( fixture ) => {
+
+						const shaderWebGPU = projectSyntheticCube( 'shader-webgpu', fixture );
+						const generatorWebGPU = projectSyntheticCube( 'generator-render-target-webgpu', fixture );
+						const cubeTexture = projectSyntheticCube( 'cube-texture', fixture );
+						const webglGrid = projectSyntheticCube( 'webgl-light-probe-grid', fixture );
+						const generatorWebGL = projectSyntheticCube( 'generator-render-target-webgl', fixture );
+
+						return {
+							fixture,
+							shaderToGeneratorDelta: maxCoefficientDelta( shaderWebGPU, generatorWebGPU ),
+							webglGridToGeneratorDelta: maxCoefficientDelta( webglGrid, generatorWebGL ),
+							shaderToCubeTextureDelta: maxCoefficientDelta( shaderWebGPU, cubeTexture ),
+							shaderToWebGLGridDelta: maxCoefficientDelta( shaderWebGPU, webglGrid )
+						};
+
+					} );
+
+					return {
+						fixtures,
+						maxShaderToGeneratorDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToGeneratorDelta ) ),
+						maxWebGLGridToGeneratorDelta: Math.max( ...fixtures.map( fixture => fixture.webglGridToGeneratorDelta ) ),
+						maxShaderToCubeTextureDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToCubeTextureDelta ) ),
+						maxShaderToWebGLGridDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToWebGLGridDelta ) )
+					};
+
+				};
+
+				const createLocalArtifactMetric = ( region = { x0: 0.24, x1: 0.82, y0: 0.2, y1: 0.9 } ) => {
+
+					renderer.render( scene, camera );
+
+					const source = renderer.domElement;
+					const canvas = document.createElement( 'canvas' );
+					canvas.width = source.width;
+					canvas.height = source.height;
+
+					const context = canvas.getContext( '2d', { willReadFrequently: true } );
+					context.drawImage( source, 0, 0 );
+
+					const x0 = Math.floor( canvas.width * region.x0 );
+					const x1 = Math.floor( canvas.width * region.x1 );
+					const y0 = Math.floor( canvas.height * region.y0 );
+					const y1 = Math.floor( canvas.height * region.y1 );
+					const width = Math.max( x1 - x0, 1 );
+					const height = Math.max( y1 - y0, 1 );
+					const image = context.getImageData( x0, y0, width, height );
+					const luminance = [];
+					let sum = 0;
+
+					for ( let i = 0; i < image.data.length; i += 4 ) {
+
+						const value = image.data[ i ] * 0.2126 + image.data[ i + 1 ] * 0.7152 + image.data[ i + 2 ] * 0.0722;
+						luminance.push( value );
+						sum += value;
+
+					}
+
+					const sorted = [ ...luminance ].sort( ( a, b ) => a - b );
+					const percentile = ( value ) => sorted[ Math.min( sorted.length - 1, Math.max( 0, Math.floor( ( sorted.length - 1 ) * value ) ) ) ];
+					const cellCount = Math.max( 2, Math.min( 8, params.resolution ) );
+					const cellMeans = [];
+
+					for ( let cy = 0; cy < cellCount; cy ++ ) {
+
+						cellMeans[ cy ] = [];
+
+						for ( let cx = 0; cx < cellCount; cx ++ ) {
+
+							const cellX0 = Math.floor( cx * width / cellCount );
+							const cellX1 = Math.max( cellX0 + 1, Math.floor( ( cx + 1 ) * width / cellCount ) );
+							const cellY0 = Math.floor( cy * height / cellCount );
+							const cellY1 = Math.max( cellY0 + 1, Math.floor( ( cy + 1 ) * height / cellCount ) );
+							let cellSum = 0;
+							let cellSamples = 0;
+
+							for ( let y = cellY0; y < cellY1; y ++ ) {
+
+								for ( let x = cellX0; x < cellX1; x ++ ) {
+
+									cellSum += luminance[ y * width + x ];
+									cellSamples ++;
+
+								}
+
+							}
+
+							cellMeans[ cy ][ cx ] = cellSum / Math.max( cellSamples, 1 );
+
+						}
+
+					}
+
+					let maxCellEdgeContrast = 0;
+					let totalCellEdgeContrast = 0;
+					let cellEdgeSamples = 0;
+
+					for ( let cy = 0; cy < cellCount; cy ++ ) {
+
+						for ( let cx = 0; cx < cellCount; cx ++ ) {
+
+							if ( cx + 1 < cellCount ) {
+
+								const contrast = Math.abs( cellMeans[ cy ][ cx ] - cellMeans[ cy ][ cx + 1 ] );
+								maxCellEdgeContrast = Math.max( maxCellEdgeContrast, contrast );
+								totalCellEdgeContrast += contrast;
+								cellEdgeSamples ++;
+
+							}
+
+							if ( cy + 1 < cellCount ) {
+
+								const contrast = Math.abs( cellMeans[ cy ][ cx ] - cellMeans[ cy + 1 ][ cx ] );
+								maxCellEdgeContrast = Math.max( maxCellEdgeContrast, contrast );
+								totalCellEdgeContrast += contrast;
+								cellEdgeSamples ++;
+
+							}
+
+						}
+
+					}
+
+					return {
+						region,
+						samples: luminance.length,
+						gridCells: cellCount,
+						luminance: {
+							min: roundMetric( sorted[ 0 ] ),
+							p05: roundMetric( percentile( 0.05 ) ),
+							median: roundMetric( percentile( 0.5 ) ),
+							p95: roundMetric( percentile( 0.95 ) ),
+							max: roundMetric( sorted[ sorted.length - 1 ] ),
+							mean: roundMetric( sum / Math.max( luminance.length, 1 ) )
+						},
+						cellEdgeContrast: roundMetric( maxCellEdgeContrast ),
+						averageCellEdgeContrast: roundMetric( totalCellEdgeContrast / Math.max( cellEdgeSamples, 1 ) )
+					};
+
+				};
+
 				const captureArtifactSignature = () => {
 
 					renderer.render( scene, camera );
@@ -727,6 +1042,238 @@
 					totalBakeMs: nextTimings.totalBakeMs,
 					frameMs: timings.frameMs
 				} );
+
+				const runProbeDiagnosticMatrix = async () => {
+
+					const previousResolution = params.resolution;
+					const previousCubemapSize = params.cubemapSize;
+					const previousPrecision = params.projectionPrecision;
+					const previousBand1Intensity = params.band1Intensity;
+					const previousBand2Intensity = params.band2Intensity;
+					const previousNormalBias = params.normalBias;
+					const previousViewBias = params.viewBias;
+					const previousLeakReductionMode = params.leakReductionMode;
+					const previousLightingMode = params.lightingMode;
+					const previousMaterialType = params.materialType;
+					const previousProbeHelper = params.probeHelper;
+					const rows = [];
+					const cases = [
+						{
+							label: 'l0-only',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 0,
+							band2Intensity: 0,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'l0-l1',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'l0-l1-l2',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'float-linear',
+							resolution: 4,
+							projectionPrecision: 'float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'leak-normal',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'normal'
+						},
+						{
+							label: 'resolution-6',
+							resolution: 6,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'cubemap-16',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 16,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'cubemap-32',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 32,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						}
+					];
+
+					const restoreState = async () => {
+
+						params.resolution = previousResolution;
+						params.cubemapSize = previousCubemapSize;
+						params.projectionPrecision = previousPrecision;
+						params.band1Intensity = previousBand1Intensity;
+						params.band2Intensity = previousBand2Intensity;
+						params.normalBias = previousNormalBias;
+						params.viewBias = previousViewBias;
+						params.leakReductionMode = previousLeakReductionMode;
+						params.lightingMode = previousLightingMode;
+						params.probeHelper = previousProbeHelper;
+						probeHelper.visible = previousProbeHelper;
+
+						if ( params.materialType !== previousMaterialType ) {
+
+							params.materialType = previousMaterialType;
+							updateMaterialType();
+
+						}
+
+						await recreateAndBakeRequired( 'diagnostic matrix restore' );
+
+					};
+
+					const captureDiagnosticRow = async ( label, overrides = {} ) => {
+
+						const colorSanity = await captureColorSanity();
+						const artifactSignature = captureArtifactSignature();
+						const localArtifactMetric = createLocalArtifactMetric();
+
+						rows.push( {
+							label,
+							resolution: params.resolution,
+							probes: probeGrid.totalProbes,
+							cubemapSize: params.cubemapSize,
+							projectionPrecision: overrides.projectionPrecision ?? params.projectionPrecision,
+							band1Intensity: params.band1Intensity,
+							band2Intensity: params.band2Intensity,
+							normalBias: params.normalBias,
+							viewBias: params.viewBias,
+							leakReductionMode: params.leakReductionMode,
+							lightingMode: params.lightingMode,
+							materialType: params.materialType,
+							precision: probeGrid.getPrecisionInfo( renderer ),
+							sampling: probeGrid.getSamplingInfo(),
+							colorSanity,
+							artifactSignature,
+							localArtifactMetric,
+							cubemapMs: timings.cubemapMs,
+							projectionMs: timings.projectionMs,
+							copyMs: timings.copyMs,
+							totalBakeMs: timings.totalBakeMs,
+							frameMs: timings.frameMs
+						} );
+
+					};
+
+					try {
+
+						for ( const diagnosticCase of cases ) {
+
+							params.resolution = diagnosticCase.resolution;
+							params.cubemapSize = diagnosticCase.cubemapSize;
+							params.projectionPrecision = diagnosticCase.projectionPrecision;
+							params.band1Intensity = diagnosticCase.band1Intensity;
+							params.band2Intensity = diagnosticCase.band2Intensity;
+							params.normalBias = 0.5;
+							params.viewBias = 0;
+							params.leakReductionMode = diagnosticCase.leakReductionMode;
+							params.lightingMode = 'probes only';
+							params.probeHelper = false;
+							probeHelper.visible = false;
+
+							if ( params.materialType !== 'standard' ) {
+
+								params.materialType = 'standard';
+								updateMaterialType();
+
+							}
+
+							await recreateAndBakeRequired( `diagnostic matrix ${ diagnosticCase.label }` );
+
+							await captureDiagnosticRow( diagnosticCase.label );
+
+							if ( diagnosticCase.label === 'float-linear' ) {
+
+								const previousManualFloatSampling = probeGrid.manualFloatSampling;
+								const previousActiveProjectionPrecision = probeGrid.activeProjectionPrecision;
+
+								try {
+
+									// Rebind only the material graph so hardware/manual sampling read the same baked atlas.
+									probeGrid.manualFloatSampling = true;
+									probeGrid.activeProjectionPrecision = 'float-manual (same-atlas diagnostic)';
+									syncProbeGridBindings();
+									await captureDiagnosticRow( 'float-manual', { projectionPrecision: 'float manual' } );
+
+								} finally {
+
+									probeGrid.manualFloatSampling = previousManualFloatSampling;
+									probeGrid.activeProjectionPrecision = previousActiveProjectionPrecision;
+									syncProbeGridBindings();
+
+								}
+
+							}
+
+						}
+
+					} finally {
+
+						await restoreState();
+
+					}
+
+					const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
+					const delta = ( a, b, read ) => roundMetric( Math.abs( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) );
+					const centerLuminance = row => row.artifactSignature.center.luminance;
+					const cellEdgeContrast = row => row.localArtifactMetric.cellEdgeContrast;
+
+					return {
+						rows,
+						comparisons: {
+							sampler: {
+								centerLuminanceDelta: delta( 'float-linear', 'float-manual', centerLuminance ),
+								cellEdgeContrastDelta: delta( 'float-linear', 'float-manual', cellEdgeContrast )
+							},
+							band: {
+								l0ToL1CellEdgeDelta: delta( 'l0-only', 'l0-l1', cellEdgeContrast ),
+								l1ToL2CellEdgeDelta: delta( 'l0-l1', 'l0-l1-l2', cellEdgeContrast )
+							},
+							density: {
+								resolution4To6CellEdgeDelta: delta( 'l0-l1-l2', 'resolution-6', cellEdgeContrast ),
+								cubemap8To16CellEdgeDelta: delta( 'l0-l1-l2', 'cubemap-16', cellEdgeContrast ),
+								cubemap16To32CellEdgeDelta: delta( 'cubemap-16', 'cubemap-32', cellEdgeContrast )
+							}
+						},
+						restored: window.__webgpuLightProbeGridCornell.getMetrics()
+					};
+
+				};
 
 				window.__webgpuLightProbeGridCornell = {
 					getMetrics: () => ( {
@@ -946,6 +1493,7 @@
 						return result;
 
 					},
+					inspectProjectionParity,
 					compareLeakReductionModes: async () => {
 
 						const previousLeakReductionMode = params.leakReductionMode;
@@ -985,145 +1533,8 @@
 						};
 
 					},
-					runArtifactMatrix: async () => {
-
-						const previousResolution = params.resolution;
-						const previousCubemapSize = params.cubemapSize;
-						const previousPrecision = params.projectionPrecision;
-						const previousBand2Intensity = params.band2Intensity;
-						const previousNormalBias = params.normalBias;
-						const previousViewBias = params.viewBias;
-						const previousLeakReductionMode = params.leakReductionMode;
-						const previousLightingMode = params.lightingMode;
-						const previousMaterialType = params.materialType;
-						const previousProbeHelper = params.probeHelper;
-						const rows = [];
-						const cases = [
-							{
-								label: 'baseline',
-								projectionPrecision: 'half float',
-								cubemapSize: 8,
-								band2Intensity: 0.55,
-								leakReductionMode: 'off'
-							},
-							{
-								label: 'no-band2',
-								projectionPrecision: 'half float',
-								cubemapSize: 8,
-								band2Intensity: 0,
-								leakReductionMode: 'off'
-							},
-							{
-								label: 'float',
-								projectionPrecision: 'float',
-								cubemapSize: 8,
-								band2Intensity: 0.55,
-								leakReductionMode: 'off'
-							},
-							{
-								label: 'leak-normal',
-								projectionPrecision: 'half float',
-								cubemapSize: 8,
-								band2Intensity: 0.55,
-								leakReductionMode: 'normal'
-							},
-							{
-								label: 'cubemap-16',
-								projectionPrecision: 'half float',
-								cubemapSize: 16,
-								band2Intensity: 0.55,
-								leakReductionMode: 'off'
-							}
-						];
-
-						const restoreState = async () => {
-
-							params.resolution = previousResolution;
-							params.cubemapSize = previousCubemapSize;
-							params.projectionPrecision = previousPrecision;
-							params.band2Intensity = previousBand2Intensity;
-							params.normalBias = previousNormalBias;
-							params.viewBias = previousViewBias;
-							params.leakReductionMode = previousLeakReductionMode;
-							params.lightingMode = previousLightingMode;
-							params.probeHelper = previousProbeHelper;
-							probeHelper.visible = previousProbeHelper;
-
-							if ( params.materialType !== previousMaterialType ) {
-
-								params.materialType = previousMaterialType;
-								updateMaterialType();
-
-							}
-
-							await recreateAndBakeRequired( 'artifact matrix restore' );
-
-						};
-
-						try {
-
-							for ( const artifactCase of cases ) {
-
-								params.resolution = 4;
-								params.cubemapSize = artifactCase.cubemapSize;
-								params.projectionPrecision = artifactCase.projectionPrecision;
-								params.band2Intensity = artifactCase.band2Intensity;
-								params.normalBias = 0.5;
-								params.viewBias = 0;
-								params.leakReductionMode = artifactCase.leakReductionMode;
-								params.lightingMode = 'probes only';
-								params.probeHelper = false;
-								probeHelper.visible = false;
-
-								if ( params.materialType !== 'standard' ) {
-
-									params.materialType = 'standard';
-									updateMaterialType();
-
-								}
-
-								await recreateAndBakeRequired( `artifact matrix ${ artifactCase.label }` );
-
-								const colorSanity = await captureColorSanity();
-								const artifactSignature = captureArtifactSignature();
-
-								rows.push( {
-									label: artifactCase.label,
-									resolution: params.resolution,
-									probes: probeGrid.totalProbes,
-									cubemapSize: params.cubemapSize,
-									projectionPrecision: params.projectionPrecision,
-									band2Intensity: params.band2Intensity,
-									normalBias: params.normalBias,
-									viewBias: params.viewBias,
-									leakReductionMode: params.leakReductionMode,
-									lightingMode: params.lightingMode,
-									materialType: params.materialType,
-									precision: probeGrid.getPrecisionInfo( renderer ),
-									sampling: probeGrid.getSamplingInfo(),
-									colorSanity,
-									artifactSignature,
-									cubemapMs: timings.cubemapMs,
-									projectionMs: timings.projectionMs,
-									copyMs: timings.copyMs,
-									totalBakeMs: timings.totalBakeMs,
-									frameMs: timings.frameMs
-								} );
-
-							}
-
-						} finally {
-
-							await restoreState();
-
-						}
-
-						return {
-							rows,
-							restored: window.__webgpuLightProbeGridCornell.getMetrics()
-						};
-
-					},
+					runArtifactMatrix: runProbeDiagnosticMatrix,
+					runProbeDiagnosticMatrix,
 					testBakeCoalescing: async () => {
 
 						let result = null;

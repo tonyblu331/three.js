@@ -108,6 +108,7 @@ class LightProbeGridGPU extends Object3D {
 	 * @param {'auto'|'half float'|'float'|'float manual'} [options.projectionPrecision='auto'] - Projection texture precision policy.
 	 * @param {number} [options.probeIntensity=1] - Runtime irradiance intensity.
 	 * @param {number} [options.helperIntensity=1] - Helper display intensity.
+	 * @param {number} [options.band1Intensity=1] - Diagnostic multiplier for first-band SH coefficients.
 	 * @param {number} [options.band2Intensity=1] - Runtime multiplier for second-band SH coefficients.
 	 * @param {number} [options.normalBias=0.5] - Sample offset along the receiver normal, in probe-spacing units.
 	 * @param {number} [options.viewBias=0] - Sample offset toward the active camera, in probe-spacing units.
@@ -152,6 +153,7 @@ class LightProbeGridGPU extends Object3D {
 
 		this.probeIntensity = uniform( options.probeIntensity ?? 1 );
 		this.helperIntensity = uniform( options.helperIntensity ?? 1 );
+		this.band1Intensity = uniform( options.band1Intensity ?? 1 );
 		this.band2Intensity = uniform( options.band2Intensity ?? 1 );
 		this.normalBias = uniform( options.normalBias ?? 0.5 );
 		this.viewBias = uniform( options.viewBias ?? 0 );
@@ -218,6 +220,7 @@ class LightProbeGridGPU extends Object3D {
 
 		if ( options.probeIntensity !== undefined ) this.probeIntensity.value = options.probeIntensity;
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
+		if ( options.band1Intensity !== undefined ) this.band1Intensity.value = options.band1Intensity;
 		if ( options.band2Intensity !== undefined ) this.band2Intensity.value = options.band2Intensity;
 		if ( options.normalBias !== undefined ) this.normalBias.value = options.normalBias;
 		if ( options.viewBias !== undefined ) this.viewBias.value = options.viewBias;
@@ -586,12 +589,13 @@ class LightProbeGridGPU extends Object3D {
 		const x = normal.x;
 		const y = normal.y;
 		const z = normal.z;
+		const band1Intensity = this.band1Intensity;
 		const band2Intensity = this.band2Intensity;
 
 		let result = c0.mul( 0.886227 );
-		result = result.add( c1.mul( 2.0 * 0.511664 ).mul( y ) );
-		result = result.add( c2.mul( 2.0 * 0.511664 ).mul( z ) );
-		result = result.add( c3.mul( 2.0 * 0.511664 ).mul( x ) );
+		result = result.add( c1.mul( 2.0 * 0.511664 ).mul( y ).mul( band1Intensity ) );
+		result = result.add( c2.mul( 2.0 * 0.511664 ).mul( z ).mul( band1Intensity ) );
+		result = result.add( c3.mul( 2.0 * 0.511664 ).mul( x ).mul( band1Intensity ) );
 		result = result.add( c4.mul( 2.0 * 0.429043 ).mul( x ).mul( y ).mul( band2Intensity ) );
 		result = result.add( c5.mul( 2.0 * 0.429043 ).mul( y ).mul( z ).mul( band2Intensity ) );
 		result = result.add( c6.mul( z.mul( z ).mul( 0.743125 ).sub( 0.247708 ) ).mul( band2Intensity ) );

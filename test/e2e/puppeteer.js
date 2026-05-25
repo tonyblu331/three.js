@@ -736,11 +736,37 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 
 	requireSource(
 		source.includes( 'this.band2Intensity = uniform' ) &&
+			source.includes( 'this.band1Intensity = uniform' ) &&
+			/const band1Intensity = this\.band1Intensity/.test( source ) &&
+			/c1\.mul[\s\S]*band1Intensity/.test( source ) &&
+			/c3\.mul[\s\S]*band1Intensity/.test( source ) &&
 			/const band2Intensity = this\.band2Intensity/.test( source ) &&
 			/c4\.mul[\s\S]*band2Intensity/.test( source ) &&
 			/c8\.mul[\s\S]*band2Intensity/.test( source ) &&
 			example.includes( 'band2Intensity: 0.55' ),
-		'Probe irradiance must expose band-2 damping so high-contrast L2 SH does not clamp into black patches.'
+		'Probe irradiance must expose diagnostic band-1 and band-2 controls so SH ringing can be isolated from probe blending.'
+	);
+
+	requireSource(
+		example.includes( 'inspectProjectionParity' ) &&
+			example.includes( 'projectSyntheticCube' ) &&
+			example.includes( 'projectionConventionDirection' ) &&
+			example.includes( 'shader-webgpu' ) &&
+			example.includes( 'generator-render-target-webgpu' ) &&
+			example.includes( 'webgl-light-probe-grid' ),
+		'Cornell harness must include a synthetic cubemap projection parity fixture for WebGPU, WebGL, LightProbeGenerator, and SphericalHarmonics3 conventions.'
+	);
+
+	requireSource(
+		example.includes( 'createLocalArtifactMetric' ) &&
+			example.includes( 'cellEdgeContrast' ) &&
+			example.includes( 'runProbeDiagnosticMatrix' ) &&
+			example.includes( 'float-manual' ) &&
+			example.includes( 'l0-only' ) &&
+			example.includes( 'l0-l1-l2' ) &&
+			example.includes( 'resolution-6' ) &&
+			example.includes( 'cubemap-32' ),
+		'Cornell harness must expose sampler, SH-band, density, and local artifact diagnostics without adding primary UI knobs.'
 	);
 
 	requireSource(
@@ -818,7 +844,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'compareLeakReductionModes', 'runArtifactMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -1018,43 +1044,85 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	'leak comparison: expected normal mode to remain visible.' );
 	results.push( { step: 'leak reduction comparison', leakReductionComparison } );
 
-	const artifactMatrix = await call( 'runArtifactMatrix' );
-	assert( Array.isArray( artifactMatrix.rows ) && artifactMatrix.rows.length === 5,
-		'artifact matrix: expected five bounded diagnostic rows.' );
+	const projectionParity = await call( 'inspectProjectionParity' );
+	assert( Array.isArray( projectionParity.fixtures ) && projectionParity.fixtures.length >= 3,
+		'projection parity: expected synthetic cubemap fixtures.' );
+	assert( projectionParity.maxShaderToGeneratorDelta < 1e-9,
+		'projection parity: expected WebGPU shader mapping to match LightProbeGenerator WebGPU render-target convention.' );
+	assert( projectionParity.maxWebGLGridToGeneratorDelta < 1e-9,
+		'projection parity: expected WebGL LightProbeGrid mapping to match LightProbeGenerator WebGL render-target convention.' );
+	assert( projectionParity.maxShaderToCubeTextureDelta < 1e-9,
+		'projection parity: expected WebGPU shader mapping to match CubeTexture convention for synthetic face data.' );
+	assert( projectionParity.maxShaderToWebGLGridDelta > 1e-3,
+		'projection parity: expected asymmetric fixture to prove WebGPU and WebGL render-target conventions are not directly interchangeable.' );
+	results.push( { step: 'projection parity', projectionParity } );
+
+	const artifactMatrix = await call( 'runProbeDiagnosticMatrix' );
+	assert( Array.isArray( artifactMatrix.rows ) && artifactMatrix.rows.length === 9,
+		'artifact matrix: expected nine bounded diagnostic rows.' );
 
 	const artifactRows = new Map( artifactMatrix.rows.map( row => [ row.label, row ] ) );
-	const baselineArtifact = artifactRows.get( 'baseline' );
-	const noBand2Artifact = artifactRows.get( 'no-band2' );
-	const floatArtifact = artifactRows.get( 'float' );
+	const l0L1L2Artifact = artifactRows.get( 'l0-l1-l2' );
+	const l0OnlyArtifact = artifactRows.get( 'l0-only' );
+	const l0L1Artifact = artifactRows.get( 'l0-l1' );
+	const floatLinearArtifact = artifactRows.get( 'float-linear' );
+	const floatManualArtifact = artifactRows.get( 'float-manual' );
 	const leakNormalArtifact = artifactRows.get( 'leak-normal' );
+	const resolution6Artifact = artifactRows.get( 'resolution-6' );
 	const cubemap16Artifact = artifactRows.get( 'cubemap-16' );
+	const cubemap32Artifact = artifactRows.get( 'cubemap-32' );
 
-	assert( baselineArtifact !== undefined &&
-		noBand2Artifact !== undefined &&
-		floatArtifact !== undefined &&
+	assert( l0L1L2Artifact !== undefined &&
+		l0OnlyArtifact !== undefined &&
+		l0L1Artifact !== undefined &&
+		floatLinearArtifact !== undefined &&
+		floatManualArtifact !== undefined &&
 		leakNormalArtifact !== undefined &&
-		cubemap16Artifact !== undefined,
-	'artifact matrix: expected baseline, no-band2, float, leak-normal, and cubemap-16 labels.' );
-	assert( baselineArtifact.band2Intensity === 0.55 && baselineArtifact.sampling.weightedProbeSampling === false,
-		'artifact matrix: expected baseline to capture unweighted band-2 probe lighting.' );
-	assert( noBand2Artifact.band2Intensity === 0,
-		'artifact matrix: expected no-band2 row to disable second-band SH.' );
-	assert( floatArtifact.precision.requestedPrecision === 'float',
-		'artifact matrix: expected float precision row.' );
+		resolution6Artifact !== undefined &&
+		cubemap16Artifact !== undefined &&
+		cubemap32Artifact !== undefined,
+	'artifact matrix: expected baseline, SH-band, sampler, leak, resolution, and cubemap labels.' );
+	assert( l0L1L2Artifact.band1Intensity === 1 && l0L1L2Artifact.band2Intensity === 0.55 && l0L1L2Artifact.sampling.weightedProbeSampling === false,
+		'artifact matrix: expected L0+L1+L2 row to capture unweighted band-2 probe lighting.' );
+	assert( l0OnlyArtifact.band1Intensity === 0 && l0OnlyArtifact.band2Intensity === 0,
+		'artifact matrix: expected L0 row to disable first and second SH bands.' );
+	assert( l0L1Artifact.band1Intensity === 1 && l0L1Artifact.band2Intensity === 0,
+		'artifact matrix: expected L0+L1 row to disable only second-band SH.' );
+	assert( floatLinearArtifact.precision.requestedPrecision === 'float',
+		'artifact matrix: expected float-linear precision row.' );
+	assert( floatManualArtifact.projectionPrecision === 'float manual' &&
+		floatManualArtifact.precision.manualFloatSampling === true,
+	'artifact matrix: expected float-manual same-atlas sampling row.' );
 	assert( leakNormalArtifact.sampling.weightedProbeSampling === true,
 		'artifact matrix: expected normal leak reduction row to use weighted sampling.' );
+	assert( resolution6Artifact.resolution === 6,
+		'artifact matrix: expected density row to increase probe resolution.' );
 	assert( cubemap16Artifact.cubemapSize === 16,
-		'artifact matrix: expected cubemap sampling row.' );
+		'artifact matrix: expected cubemap-16 sampling row.' );
+	assert( cubemap32Artifact.cubemapSize === 32,
+		'artifact matrix: expected cubemap-32 sampling row.' );
 
 	for ( const row of artifactMatrix.rows ) {
 
 		assert( row.lightingMode === 'probes only', `artifact matrix ${ row.label }: expected probes-only capture.` );
 		assert( Number.isFinite( row.totalBakeMs ), `artifact matrix ${ row.label }: expected finite bake timing.` );
 		assert( Number.isFinite( row.artifactSignature.center.luminance ), `artifact matrix ${ row.label }: expected finite center luminance.` );
+		assert( Number.isFinite( row.localArtifactMetric.luminance.min ), `artifact matrix ${ row.label }: expected finite luminance minimum.` );
+		assert( Number.isFinite( row.localArtifactMetric.luminance.p05 ), `artifact matrix ${ row.label }: expected finite luminance p05.` );
+		assert( Number.isFinite( row.localArtifactMetric.luminance.median ), `artifact matrix ${ row.label }: expected finite luminance median.` );
+		assert( Number.isFinite( row.localArtifactMetric.luminance.p95 ), `artifact matrix ${ row.label }: expected finite luminance p95.` );
+		assert( Number.isFinite( row.localArtifactMetric.cellEdgeContrast ), `artifact matrix ${ row.label }: expected finite cell-edge contrast.` );
 		assert( row.colorSanity.center.r + row.colorSanity.center.g + row.colorSanity.center.b > 18,
 			`artifact matrix ${ row.label }: expected visible probe-lit center geometry.` );
 
 	}
+
+	assert( Number.isFinite( artifactMatrix.comparisons.sampler.centerLuminanceDelta ),
+		'artifact matrix: expected finite sampler parity delta.' );
+	assert( Number.isFinite( artifactMatrix.comparisons.band.l0ToL1CellEdgeDelta ),
+		'artifact matrix: expected finite SH band diagnostic delta.' );
+	assert( Number.isFinite( artifactMatrix.comparisons.density.resolution4To6CellEdgeDelta ),
+		'artifact matrix: expected finite density diagnostic delta.' );
 
 	assert( artifactMatrix.restored.lightingMode === 'direct + probes',
 		'artifact matrix: expected lighting mode restoration.' );
