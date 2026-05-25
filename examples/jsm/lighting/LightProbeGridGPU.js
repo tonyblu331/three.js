@@ -26,6 +26,7 @@ import {
 import {
 	clamp,
 	cubeTexture,
+	cameraPosition,
 	float,
 	floor,
 	Fn,
@@ -52,6 +53,7 @@ import {
 const SH_COEFFICIENTS = 9;
 const PACKED_SH_TEXTURES = 7;
 const ATLAS_PADDING = 1;
+const PROBE_VALIDITY_FLOOR = 0.05;
 const BACKEND_LABELS = {
 	projection: 'fragment',
 	atlas: 'render-pass',
@@ -73,6 +75,11 @@ const _matrix = /*@__PURE__*/ new Matrix4();
  * runtime, hardware filtering provides trilinear interpolation for filterable
  * textures, while the explicit float-manual mode performs the same interpolation
  * from nearest-loads for debugging and compatibility checks.
+ * Optional leak reduction translates DDGI-style wrap weighting and APV-style
+ * surface bias into a small manual neighbor blend. It is not a full DDGI
+ * visibility system: the atlas keeps a constant validity channel for future
+ * geometry classification and weights probes behind the receiver normal less
+ * aggressively.
  *
  * Every packed sub-volume has one copied padding slice on both Z boundaries so
  * trilinear filtering cannot bleed into the next SH sub-volume in the atlas.
@@ -102,6 +109,9 @@ class LightProbeGridGPU extends Object3D {
 	 * @param {number} [options.probeIntensity=1] - Runtime irradiance intensity.
 	 * @param {number} [options.helperIntensity=1] - Helper display intensity.
 	 * @param {number} [options.band2Intensity=1] - Runtime multiplier for second-band SH coefficients.
+	 * @param {number} [options.normalBias=0.5] - Sample offset along the receiver normal, in probe-spacing units.
+	 * @param {number} [options.viewBias=0] - Sample offset toward the active camera, in probe-spacing units.
+	 * @param {'off'|'normal'} [options.leakReductionMode='off'] - Optional scoped probe leak reduction.
 	 * @param {?Renderer} [options.renderer=null] - Optional renderer for feature detection during construction.
 	 */
 	constructor( min, max, options = {} ) {
@@ -143,6 +153,9 @@ class LightProbeGridGPU extends Object3D {
 		this.probeIntensity = uniform( options.probeIntensity ?? 1 );
 		this.helperIntensity = uniform( options.helperIntensity ?? 1 );
 		this.band2Intensity = uniform( options.band2Intensity ?? 1 );
+		this.normalBias = uniform( options.normalBias ?? 0.5 );
+		this.viewBias = uniform( options.viewBias ?? 0 );
+		this.leakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? 'off' );
 
 		this.cubeRenderTarget = null;
 		this.cubeCamera = null;
@@ -191,18 +204,23 @@ class LightProbeGridGPU extends Object3D {
 		const nextResolution = this._validateResolution( options.resolution ?? this.resolution );
 		const nextCubemapSize = options.cubemapSize ?? this.cubemapSize;
 		const nextProjectionPrecision = options.projectionPrecision ?? this.projectionPrecision;
+		const nextLeakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? this.leakReductionMode );
 
 		const recreate = nextResolution !== this.resolution ||
 			nextCubemapSize !== this.cubemapSize ||
-			nextProjectionPrecision !== this.projectionPrecision;
+			nextProjectionPrecision !== this.projectionPrecision ||
+			nextLeakReductionMode !== this.leakReductionMode;
 
 		this.resolution = nextResolution;
 		this.cubemapSize = nextCubemapSize;
 		this.projectionPrecision = nextProjectionPrecision;
+		this.leakReductionMode = nextLeakReductionMode;
 
 		if ( options.probeIntensity !== undefined ) this.probeIntensity.value = options.probeIntensity;
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
 		if ( options.band2Intensity !== undefined ) this.band2Intensity.value = options.band2Intensity;
+		if ( options.normalBias !== undefined ) this.normalBias.value = options.normalBias;
+		if ( options.viewBias !== undefined ) this.viewBias.value = options.viewBias;
 
 		if ( recreate ) this._createResources( renderer );
 
@@ -217,6 +235,18 @@ class LightProbeGridGPU extends Object3D {
 		}
 
 		return resolution;
+
+	}
+
+	_validateLeakReductionMode( mode ) {
+
+		if ( mode !== 'off' && mode !== 'normal' ) {
+
+			throw new Error( 'LightProbeGridGPU: leakReductionMode must be "off" or "normal".' );
+
+		}
+
+		return mode;
 
 	}
 
@@ -316,6 +346,31 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
+	getSamplingInfo() {
+
+		return {
+			normalBias: this.normalBias.value,
+			viewBias: this.viewBias.value,
+			leakReductionMode: this.leakReductionMode,
+			probeValidityMode: 'constant',
+			manualIrradianceSampling: this._usesManualIrradianceSampling(),
+			weightedProbeSampling: this._usesWeightedProbeSampling()
+		};
+
+	}
+
+	_usesWeightedProbeSampling() {
+
+		return this.leakReductionMode !== 'off';
+
+	}
+
+	_usesManualIrradianceSampling() {
+
+		return this.manualFloatSampling || this._usesWeightedProbeSampling();
+
+	}
+
 	_getPackedAtlasBaseLayer( textureIndex ) {
 
 		return textureIndex * this.paddedSlices + ATLAS_PADDING;
@@ -342,7 +397,24 @@ class LightProbeGridGPU extends Object3D {
 
 	createIrradianceNode() {
 
-		return this.manualFloatSampling ? this._createManualIrradianceNode() : this._createAtlasIrradianceNode();
+		return this._usesManualIrradianceSampling() ? this._createManualIrradianceNode() : this._createAtlasIrradianceNode();
+
+	}
+
+	_safeNormalize( vector ) {
+
+		return vector.div( vector.length().max( 0.0001 ) );
+
+	}
+
+	_getBiasedSamplePosition( probeSpacing ) {
+
+		const surfaceNormal = normalWorld.normalize();
+		const viewDirection = this._safeNormalize( cameraPosition.sub( positionWorld ) );
+
+		return positionWorld
+			.add( surfaceNormal.mul( probeSpacing ).mul( this.normalBias ) )
+			.add( viewDirection.mul( probeSpacing ).mul( this.viewBias ) );
 
 	}
 
@@ -361,7 +433,7 @@ class LightProbeGridGPU extends Object3D {
 		const sampleAtlas = Fn( () => {
 
 			const probeSpacing = gridExtentNode.div( resolutionMinusOne );
-			const samplePosition = positionWorld.add( normalWorld.normalize().mul( probeSpacing ).mul( 0.5 ) );
+			const samplePosition = this._getBiasedSamplePosition( probeSpacing );
 			const probeCoord = clamp( samplePosition.sub( gridMinNode ).div( gridExtentNode ), 0, 1 );
 			const uvw = vec3(
 				probeCoord.x.mul( resolutionMinusOne ).add( 0.5 ).div( resolution ),
@@ -390,6 +462,7 @@ class LightProbeGridGPU extends Object3D {
 
 		const resolution = this.resolution;
 		const resolutionMinusOne = resolution - 1;
+		const weightedProbeSampling = this._usesWeightedProbeSampling();
 		const gridMinNode = vec3( this.min.x, this.min.y, this.min.z );
 		const gridExtentNode = vec3(
 			this.max.x - this.min.x,
@@ -411,14 +484,14 @@ class LightProbeGridGPU extends Object3D {
 			const s5 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 5 ) );
 			const s6 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 6 ) );
 
-			return this._evaluatePackedSH( s0, s1, s2, s3, s4, s5, s6 );
+			return vec4( this._evaluatePackedSH( s0, s1, s2, s3, s4, s5, s6 ), s6.w );
 
 		} );
 
 		const sampleManual = Fn( () => {
 
 			const probeSpacing = gridExtentNode.div( resolutionMinusOne );
-			const samplePosition = positionWorld.add( normalWorld.normalize().mul( probeSpacing ).mul( 0.5 ) );
+			const samplePosition = this._getBiasedSamplePosition( probeSpacing );
 			const probeCoord = clamp( samplePosition.sub( gridMinNode ).div( gridExtentNode ), 0, 1 ).mul( resolutionMinusOne );
 			const base = floor( probeCoord ).toVar();
 			const blend = probeCoord.sub( base );
@@ -430,14 +503,51 @@ class LightProbeGridGPU extends Object3D {
 			const y1 = int( clamp( base.y.add( 1 ), 0, resolutionMinusOne ) );
 			const z1 = int( clamp( base.z.add( 1 ), 0, resolutionMinusOne ) );
 
-			const c000 = samplePackedProbe( { coord: vec3( x0, y0, z0 ) } );
-			const c100 = samplePackedProbe( { coord: vec3( x1, y0, z0 ) } );
-			const c010 = samplePackedProbe( { coord: vec3( x0, y1, z0 ) } );
-			const c110 = samplePackedProbe( { coord: vec3( x1, y1, z0 ) } );
-			const c001 = samplePackedProbe( { coord: vec3( x0, y0, z1 ) } );
-			const c101 = samplePackedProbe( { coord: vec3( x1, y0, z1 ) } );
-			const c011 = samplePackedProbe( { coord: vec3( x0, y1, z1 ) } );
-			const c111 = samplePackedProbe( { coord: vec3( x1, y1, z1 ) } );
+			if ( weightedProbeSampling ) {
+
+				const irradiance = vec3( 0 ).toVar();
+				const totalWeight = float( 0 ).toVar();
+				const normal = normalWorld.normalize();
+				const wx0 = blend.x.oneMinus();
+				const wy0 = blend.y.oneMinus();
+				const wz0 = blend.z.oneMinus();
+
+				const addProbe = ( coord, trilinearWeight ) => {
+
+					const sample = samplePackedProbe( { coord } );
+					const probePosition = gridMinNode.add( coord.toFloat().div( resolutionMinusOne ).mul( gridExtentNode ) );
+					const probeDirection = this._safeNormalize( probePosition.sub( positionWorld ) );
+					const wrapShading = normal.dot( probeDirection ).add( 1 ).mul( 0.5 );
+					const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
+					const validityWeight = sample.w.max( PROBE_VALIDITY_FLOOR );
+					const weight = trilinearWeight.mul( normalWeight ).mul( validityWeight );
+
+					irradiance.addAssign( sample.xyz.mul( weight ) );
+					totalWeight.addAssign( weight );
+
+				};
+
+				addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ) );
+				addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ) );
+				addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ) );
+				addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ) );
+				addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ) );
+				addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ) );
+				addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ) );
+				addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ) );
+
+				return irradiance.div( totalWeight.max( 0.0001 ) ).mul( this.probeIntensity );
+
+			}
+
+			const c000 = samplePackedProbe( { coord: vec3( x0, y0, z0 ) } ).xyz;
+			const c100 = samplePackedProbe( { coord: vec3( x1, y0, z0 ) } ).xyz;
+			const c010 = samplePackedProbe( { coord: vec3( x0, y1, z0 ) } ).xyz;
+			const c110 = samplePackedProbe( { coord: vec3( x1, y1, z0 ) } ).xyz;
+			const c001 = samplePackedProbe( { coord: vec3( x0, y0, z1 ) } ).xyz;
+			const c101 = samplePackedProbe( { coord: vec3( x1, y0, z1 ) } ).xyz;
+			const c011 = samplePackedProbe( { coord: vec3( x0, y1, z1 ) } ).xyz;
+			const c111 = samplePackedProbe( { coord: vec3( x1, y1, z1 ) } ).xyz;
 
 			const x00 = mix( c000, c100, blend.x );
 			const x10 = mix( c010, c110, blend.x );
@@ -537,6 +647,9 @@ class LightProbeGridGPU extends Object3D {
 		const currentRenderTarget = renderer.getRenderTarget();
 		const currentScissorTest = renderer.getScissorTest();
 		const currentAutoClear = renderer.autoClear;
+		const currentMatrixWorldAutoUpdate = scene.matrixWorldAutoUpdate;
+		const hasShadowMap = renderer.shadowMap !== undefined;
+		const currentShadowAutoUpdate = hasShadowMap ? renderer.shadowMap.autoUpdate : undefined;
 		const currentProbeIntensity = this.probeIntensity.value;
 		const currentHelperVisible = this.helper?.visible ?? false;
 		const totalStart = performance.now();
@@ -550,6 +663,16 @@ class LightProbeGridGPU extends Object3D {
 		renderer.getScissor( _currentScissor );
 
 		try {
+
+			scene.updateMatrixWorld( true );
+			scene.matrixWorldAutoUpdate = false;
+
+			if ( hasShadowMap ) {
+
+				renderer.shadowMap.autoUpdate = false;
+				renderer.shadowMap.needsUpdate = true;
+
+			}
 
 			this.probeIntensity.value = 0;
 			if ( this.helper !== null ) this.helper.visible = false;
@@ -608,6 +731,9 @@ class LightProbeGridGPU extends Object3D {
 			renderer.setScissor( _currentScissor );
 			renderer.setScissorTest( currentScissorTest );
 			renderer.autoClear = currentAutoClear;
+			scene.matrixWorldAutoUpdate = currentMatrixWorldAutoUpdate;
+
+			if ( hasShadowMap ) renderer.shadowMap.autoUpdate = currentShadowAutoUpdate;
 
 			this.probeIntensity.value = currentProbeIntensity;
 			if ( this.helper !== null ) this.helper.visible = currentHelperVisible;
@@ -933,7 +1059,7 @@ class LightProbeGridGPU extends Object3D {
 
 			} ).Else( () => {
 
-				packed.assign( vec4( c8.x, c8.y, c8.z, 0.0 ) );
+				packed.assign( vec4( c8.x, c8.y, c8.z, 1.0 ) );
 
 			} );
 

@@ -744,6 +744,54 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	);
 
 	requireSource(
+		source.includes( 'scene.updateMatrixWorld( true )' ) &&
+			source.includes( 'scene.matrixWorldAutoUpdate = false' ) &&
+			source.includes( 'renderer.shadowMap.autoUpdate = false' ) &&
+			source.includes( 'renderer.shadowMap.needsUpdate = true' ),
+		'WebGPU probe baking must freeze scene transforms and shadow updates like the WebGL baseline.'
+	);
+
+	requireSource(
+		source.includes( 'this.normalBias = uniform' ) &&
+			source.includes( 'this.viewBias = uniform' ) &&
+			source.includes( '_safeNormalize' ) &&
+			source.includes( 'cameraPosition.sub( positionWorld )' ) &&
+			source.includes( 'probePosition.sub( positionWorld )' ) &&
+			source.includes( '.length().max( 0.0001 )' ) &&
+			example.includes( 'normalBias: 0.5' ) &&
+			example.includes( 'viewBias: 0' ),
+		'Probe sampling must expose normal/view bias controls translated from DDGI/APV practice.'
+	);
+
+	requireSource(
+		source.includes( 'this.leakReductionMode = this._validateLeakReductionMode' ) &&
+			source.includes( 'getSamplingInfo()' ) &&
+			source.includes( '_usesWeightedProbeSampling()' ) &&
+			source.includes( 'probeValidityMode: \'constant\'' ) &&
+			source.includes( 'wrapShading' ) &&
+			source.includes( 'validityWeight' ) &&
+			source.includes( 'packed.assign( vec4( c8.x, c8.y, c8.z, 1.0 ) )' ) &&
+			source.includes( 'c0Luminance' ) === false &&
+			example.includes( 'leakReductionMode: \'off\'' ),
+		'Probe sampling must expose scoped normal-weighted leak reduction without deriving probe validity from brightness.'
+	);
+
+	requireSource(
+		source.includes( 'const nextLeakReductionMode = this._validateLeakReductionMode' ) &&
+			source.includes( 'nextLeakReductionMode !== this.leakReductionMode' ),
+		'Leak reduction mode must be treated as graph-shape state that recreates probe resources.'
+	);
+
+	requireSource(
+		example.includes( 'const advancedFolder = gui.addFolder( \'Advanced\' )' ) &&
+			example.includes( 'advancedFolder.close()' ) &&
+			/advancedFolder\.add\( params, 'projectionPrecision', \[ 'auto', 'half float', 'float' \] \)/.test( example ) &&
+			example.includes( '.name( \'helper exposure\' )' ) &&
+			/gui\.add\( params, 'projectionPrecision', \[ 'half float', 'float', 'auto', 'float manual' \] \)/.test( example ) === false,
+		'Cornell UI must keep debug precision and leak controls out of the primary probe workflow.'
+	);
+
+	requireSource(
 		source.includes( 'requested === \'float manual\'' ) &&
 			source.includes( 'this.activeProjectionPrecision = hasFloatFiltering ? \'float-linear\' : \'half-linear (fallback)\'' ),
 		'PR01 float precision must avoid implicit float-manual fallback.'
@@ -770,7 +818,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'compareLeakReductionModes', 'runArtifactMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -939,6 +987,96 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( probePositions.invalidSetOptionsResolutionRejected === true, 'probe positions: expected setOptions resolution below 2 to be rejected.' );
 	assert( /resolution/.test( probePositions.invalidSetOptionsResolutionMessage ), 'probe positions: expected setOptions resolution validation error message.' );
 	results.push( { step: 'probe positions', probePositions } );
+
+	const samplingControls = await call( 'inspectSamplingControls' );
+	assert( samplingControls.defaultSampling.leakReductionMode === 'off',
+		'sampling controls: expected class default to preserve unweighted sampling.' );
+	assert( samplingControls.configuredSampling.normalBias === 0.75 &&
+		samplingControls.configuredSampling.viewBias === 0.25 &&
+		samplingControls.configuredSampling.leakReductionMode === 'normal' &&
+		samplingControls.configuredSampling.probeValidityMode === 'constant' &&
+		samplingControls.configuredSampling.weightedProbeSampling === true,
+	'sampling controls: expected configured bias and leak reduction metadata.' );
+	assert( samplingControls.invalidLeakReductionModeRejected === true,
+		'sampling controls: expected invalid leak reduction mode to be rejected.' );
+	assert( /leakReductionMode/.test( samplingControls.invalidLeakReductionModeMessage ),
+		'sampling controls: expected leak reduction validation error message.' );
+	results.push( { step: 'sampling controls', samplingControls } );
+
+	const leakReductionComparison = await call( 'compareLeakReductionModes' );
+	assert( leakReductionComparison.off.sampling.weightedProbeSampling === false,
+		'leak comparison: expected off mode to use unweighted sampling.' );
+	assert( leakReductionComparison.normal.sampling.weightedProbeSampling === true,
+		'leak comparison: expected normal mode to use weighted sampling.' );
+	assert( leakReductionComparison.off.colorSanity.center.r +
+		leakReductionComparison.off.colorSanity.center.g +
+		leakReductionComparison.off.colorSanity.center.b > 18,
+	'leak comparison: expected off mode to remain visible.' );
+	assert( leakReductionComparison.normal.colorSanity.center.r +
+		leakReductionComparison.normal.colorSanity.center.g +
+		leakReductionComparison.normal.colorSanity.center.b > 18,
+	'leak comparison: expected normal mode to remain visible.' );
+	results.push( { step: 'leak reduction comparison', leakReductionComparison } );
+
+	const artifactMatrix = await call( 'runArtifactMatrix' );
+	assert( Array.isArray( artifactMatrix.rows ) && artifactMatrix.rows.length === 5,
+		'artifact matrix: expected five bounded diagnostic rows.' );
+
+	const artifactRows = new Map( artifactMatrix.rows.map( row => [ row.label, row ] ) );
+	const baselineArtifact = artifactRows.get( 'baseline' );
+	const noBand2Artifact = artifactRows.get( 'no-band2' );
+	const floatArtifact = artifactRows.get( 'float' );
+	const leakNormalArtifact = artifactRows.get( 'leak-normal' );
+	const cubemap16Artifact = artifactRows.get( 'cubemap-16' );
+
+	assert( baselineArtifact !== undefined &&
+		noBand2Artifact !== undefined &&
+		floatArtifact !== undefined &&
+		leakNormalArtifact !== undefined &&
+		cubemap16Artifact !== undefined,
+	'artifact matrix: expected baseline, no-band2, float, leak-normal, and cubemap-16 labels.' );
+	assert( baselineArtifact.band2Intensity === 0.55 && baselineArtifact.sampling.weightedProbeSampling === false,
+		'artifact matrix: expected baseline to capture unweighted band-2 probe lighting.' );
+	assert( noBand2Artifact.band2Intensity === 0,
+		'artifact matrix: expected no-band2 row to disable second-band SH.' );
+	assert( floatArtifact.precision.requestedPrecision === 'float',
+		'artifact matrix: expected float precision row.' );
+	assert( leakNormalArtifact.sampling.weightedProbeSampling === true,
+		'artifact matrix: expected normal leak reduction row to use weighted sampling.' );
+	assert( cubemap16Artifact.cubemapSize === 16,
+		'artifact matrix: expected cubemap sampling row.' );
+
+	for ( const row of artifactMatrix.rows ) {
+
+		assert( row.lightingMode === 'probes only', `artifact matrix ${ row.label }: expected probes-only capture.` );
+		assert( Number.isFinite( row.totalBakeMs ), `artifact matrix ${ row.label }: expected finite bake timing.` );
+		assert( Number.isFinite( row.artifactSignature.center.luminance ), `artifact matrix ${ row.label }: expected finite center luminance.` );
+		assert( row.colorSanity.center.r + row.colorSanity.center.g + row.colorSanity.center.b > 18,
+			`artifact matrix ${ row.label }: expected visible probe-lit center geometry.` );
+
+	}
+
+	assert( artifactMatrix.restored.lightingMode === 'direct + probes',
+		'artifact matrix: expected lighting mode restoration.' );
+	assert( artifactMatrix.restored.sampling.leakReductionMode === 'off',
+		'artifact matrix: expected leak reduction restoration.' );
+	results.push( { step: 'artifact matrix', artifactMatrix } );
+
+	await startOperation( 'setLeakReductionMode', 'off' );
+	await waitUntilReady( 'leak reduction off' );
+	const leakOffMetrics = await capture( 'leak reduction off' );
+	assert( leakOffMetrics.sampling.leakReductionMode === 'off',
+		'leak setter: expected off sampling mode.' );
+	assert( leakOffMetrics.sampling.weightedProbeSampling === false,
+		'leak setter: expected off mode to disable weighted sampling.' );
+
+	await startOperation( 'setLeakReductionMode', 'normal' );
+	await waitUntilReady( 'leak reduction normal' );
+	const leakNormalMetrics = await capture( 'leak reduction normal' );
+	assert( leakNormalMetrics.sampling.leakReductionMode === 'normal',
+		'leak setter: expected normal sampling mode.' );
+	assert( leakNormalMetrics.sampling.weightedProbeSampling === true,
+		'leak setter: expected normal mode to enable weighted sampling.' );
 
 	const bakeCoalescing = await call( 'testBakeCoalescing' );
 	assert( bakeCoalescing.samePromise === true, 'bake contract: expected overlapping bake calls to share the same promise.' );

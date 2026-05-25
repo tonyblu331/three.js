@@ -68,6 +68,9 @@
 				probeIntensity: 1,
 				probeHelperIntensity: 1,
 				band2Intensity: 0.55,
+				normalBias: 0.5,
+				viewBias: 0,
+				leakReductionMode: 'off',
 				lightingMode: 'direct + probes',
 				neutralMaterials: false,
 				probeHelper: false,
@@ -282,6 +285,9 @@
 					probeIntensity: params.probeIntensity,
 					helperIntensity: params.probeHelperIntensity,
 					band2Intensity: params.band2Intensity,
+					normalBias: params.normalBias,
+					viewBias: params.viewBias,
+					leakReductionMode: params.leakReductionMode,
 					renderer
 				} );
 
@@ -482,15 +488,6 @@
 
 					} );
 
-				gui.add( params, 'projectionPrecision', [ 'half float', 'float', 'auto', 'float manual' ] )
-					.name( 'projection precision' )
-					.onChange( async () => {
-
-						await recreateAndBake();
-
-					} );
-
-				gui.add( params, 'activeProjectionPrecision' ).name( 'active precision' ).listen();
 				gui.add( params, 'materialType', [ 'standard', 'physical', 'lambert', 'phong' ] )
 					.name( 'material' )
 					.onChange( () => {
@@ -509,18 +506,55 @@
 					} );
 
 				gui.add( params, 'probeHelperIntensity', 0, 8, 0.05 )
-					.name( 'probe exposure' )
+					.name( 'helper exposure' )
 					.onChange( ( value ) => {
 
 						if ( probeGrid !== null ) probeGrid.helperIntensity.value = value;
 
 					} );
 
-				gui.add( params, 'band2Intensity', 0, 1, 0.05 )
+				const advancedFolder = gui.addFolder( 'Advanced' );
+				advancedFolder.close();
+
+				advancedFolder.add( params, 'projectionPrecision', [ 'auto', 'half float', 'float' ] )
+					.name( 'projection precision' )
+					.onChange( async () => {
+
+						await recreateAndBake();
+
+					} );
+
+				advancedFolder.add( params, 'activeProjectionPrecision' ).name( 'active precision' ).listen();
+
+				advancedFolder.add( params, 'band2Intensity', 0, 1, 0.05 )
 					.name( 'band 2 intensity' )
 					.onChange( ( value ) => {
 
 						if ( probeGrid !== null ) probeGrid.band2Intensity.value = value;
+
+					} );
+
+				advancedFolder.add( params, 'normalBias', 0, 1, 0.05 )
+					.name( 'normal bias' )
+					.onChange( ( value ) => {
+
+						if ( probeGrid !== null ) probeGrid.normalBias.value = value;
+
+					} );
+
+				advancedFolder.add( params, 'viewBias', 0, 1, 0.05 )
+					.name( 'view bias' )
+					.onChange( ( value ) => {
+
+						if ( probeGrid !== null ) probeGrid.viewBias.value = value;
+
+					} );
+
+				advancedFolder.add( params, 'leakReductionMode', [ 'off', 'normal' ] )
+					.name( 'leak reduction' )
+					.onChange( async () => {
+
+						await recreateAndBake();
 
 					} );
 
@@ -650,6 +684,36 @@
 
 				};
 
+				const createArtifactColor = ( color ) => ( {
+					r: color.r,
+					g: color.g,
+					b: color.b,
+					luminance: color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722,
+					chromaSpread: Math.max( color.r, color.g, color.b ) - Math.min( color.r, color.g, color.b )
+				} );
+
+				const captureArtifactSignature = () => {
+
+					renderer.render( scene, camera );
+
+					const [ leftWall, rightWall, center, upperCenter, floorCenter ] = sampleCanvas( [
+						{ x0: 0.08, x1: 0.24, y0: 0.32, y1: 0.68 },
+						{ x0: 0.76, x1: 0.92, y0: 0.32, y1: 0.68 },
+						{ x0: 0.42, x1: 0.58, y0: 0.38, y1: 0.62 },
+						{ x0: 0.36, x1: 0.64, y0: 0.18, y1: 0.34 },
+						{ x0: 0.34, x1: 0.66, y0: 0.68, y1: 0.88 }
+					] );
+
+					return {
+						leftWall: createArtifactColor( leftWall ),
+						rightWall: createArtifactColor( rightWall ),
+						center: createArtifactColor( center ),
+						upperCenter: createArtifactColor( upperCenter ),
+						floorCenter: createArtifactColor( floorCenter )
+					};
+
+				};
+
 				const createBenchmarkResult = ( nextTimings ) => ( {
 					resolution: params.resolution,
 					probes: probeGrid.totalProbes,
@@ -669,6 +733,7 @@
 						resolution: params.resolution,
 						cubemapSize: params.cubemapSize,
 						precision: probeGrid.getPrecisionInfo( renderer ),
+						sampling: probeGrid.getSamplingInfo(),
 						memory: probeGrid.getMemoryInfo(),
 						isLightProbeGrid: probeGrid.isLightProbeGrid,
 						hasTexture: probeGrid.texture !== null,
@@ -706,6 +771,12 @@
 
 						params.materialType = value;
 						updateMaterialType();
+
+					},
+					setLeakReductionMode: async ( value ) => {
+
+						params.leakReductionMode = value;
+						await recreateAndBake();
 
 					},
 					inspectAddonContract: () => {
@@ -820,6 +891,236 @@
 							invalidConstructorResolutionMessage,
 							invalidSetOptionsResolutionRejected,
 							invalidSetOptionsResolutionMessage
+						};
+
+					},
+					inspectSamplingControls: () => {
+
+						const defaultGrid = new LightProbeGridGPU(
+							new THREE.Vector3( - 1, - 1, - 1 ),
+							new THREE.Vector3( 1, 1, 1 ),
+							{
+								resolution: 2,
+								cubemapSize: 4,
+								projectionPrecision: 'half float',
+								renderer
+							}
+						);
+						const configuredGrid = new LightProbeGridGPU(
+							new THREE.Vector3( - 1, - 1, - 1 ),
+							new THREE.Vector3( 1, 1, 1 ),
+							{
+								resolution: 2,
+								cubemapSize: 4,
+								projectionPrecision: 'half float',
+								normalBias: 0.75,
+								viewBias: 0.25,
+								leakReductionMode: 'normal',
+								renderer
+							}
+						);
+						let invalidLeakReductionModeRejected = false;
+						let invalidLeakReductionModeMessage = '';
+
+						try {
+
+							configuredGrid.setOptions( { leakReductionMode: 'distance' }, renderer );
+
+						} catch ( error ) {
+
+							invalidLeakReductionModeRejected = true;
+							invalidLeakReductionModeMessage = error instanceof Error ? error.message : String( error );
+
+						}
+
+						const result = {
+							defaultSampling: defaultGrid.getSamplingInfo(),
+							configuredSampling: configuredGrid.getSamplingInfo(),
+							invalidLeakReductionModeRejected,
+							invalidLeakReductionModeMessage
+						};
+
+						defaultGrid.dispose();
+						configuredGrid.dispose();
+
+						return result;
+
+					},
+					compareLeakReductionModes: async () => {
+
+						const previousLeakReductionMode = params.leakReductionMode;
+						let offResult = null;
+						let normalResult = null;
+
+						try {
+
+							params.leakReductionMode = 'off';
+							await recreateAndBakeRequired( 'leak reduction off' );
+							renderer.render( scene, camera );
+
+							offResult = {
+								sampling: probeGrid.getSamplingInfo(),
+								colorSanity: await captureColorSanity()
+							};
+
+							params.leakReductionMode = 'normal';
+							await recreateAndBakeRequired( 'leak reduction normal' );
+							renderer.render( scene, camera );
+
+							normalResult = {
+								sampling: probeGrid.getSamplingInfo(),
+								colorSanity: await captureColorSanity()
+							};
+
+						} finally {
+
+							params.leakReductionMode = previousLeakReductionMode;
+							await recreateAndBakeRequired( 'leak reduction restore' );
+
+						}
+
+						return {
+							off: offResult,
+							normal: normalResult
+						};
+
+					},
+					runArtifactMatrix: async () => {
+
+						const previousResolution = params.resolution;
+						const previousCubemapSize = params.cubemapSize;
+						const previousPrecision = params.projectionPrecision;
+						const previousBand2Intensity = params.band2Intensity;
+						const previousNormalBias = params.normalBias;
+						const previousViewBias = params.viewBias;
+						const previousLeakReductionMode = params.leakReductionMode;
+						const previousLightingMode = params.lightingMode;
+						const previousMaterialType = params.materialType;
+						const previousProbeHelper = params.probeHelper;
+						const rows = [];
+						const cases = [
+							{
+								label: 'baseline',
+								projectionPrecision: 'half float',
+								cubemapSize: 8,
+								band2Intensity: 0.55,
+								leakReductionMode: 'off'
+							},
+							{
+								label: 'no-band2',
+								projectionPrecision: 'half float',
+								cubemapSize: 8,
+								band2Intensity: 0,
+								leakReductionMode: 'off'
+							},
+							{
+								label: 'float',
+								projectionPrecision: 'float',
+								cubemapSize: 8,
+								band2Intensity: 0.55,
+								leakReductionMode: 'off'
+							},
+							{
+								label: 'leak-normal',
+								projectionPrecision: 'half float',
+								cubemapSize: 8,
+								band2Intensity: 0.55,
+								leakReductionMode: 'normal'
+							},
+							{
+								label: 'cubemap-16',
+								projectionPrecision: 'half float',
+								cubemapSize: 16,
+								band2Intensity: 0.55,
+								leakReductionMode: 'off'
+							}
+						];
+
+						const restoreState = async () => {
+
+							params.resolution = previousResolution;
+							params.cubemapSize = previousCubemapSize;
+							params.projectionPrecision = previousPrecision;
+							params.band2Intensity = previousBand2Intensity;
+							params.normalBias = previousNormalBias;
+							params.viewBias = previousViewBias;
+							params.leakReductionMode = previousLeakReductionMode;
+							params.lightingMode = previousLightingMode;
+							params.probeHelper = previousProbeHelper;
+							probeHelper.visible = previousProbeHelper;
+
+							if ( params.materialType !== previousMaterialType ) {
+
+								params.materialType = previousMaterialType;
+								updateMaterialType();
+
+							}
+
+							await recreateAndBakeRequired( 'artifact matrix restore' );
+
+						};
+
+						try {
+
+							for ( const artifactCase of cases ) {
+
+								params.resolution = 4;
+								params.cubemapSize = artifactCase.cubemapSize;
+								params.projectionPrecision = artifactCase.projectionPrecision;
+								params.band2Intensity = artifactCase.band2Intensity;
+								params.normalBias = 0.5;
+								params.viewBias = 0;
+								params.leakReductionMode = artifactCase.leakReductionMode;
+								params.lightingMode = 'probes only';
+								params.probeHelper = false;
+								probeHelper.visible = false;
+
+								if ( params.materialType !== 'standard' ) {
+
+									params.materialType = 'standard';
+									updateMaterialType();
+
+								}
+
+								await recreateAndBakeRequired( `artifact matrix ${ artifactCase.label }` );
+
+								const colorSanity = await captureColorSanity();
+								const artifactSignature = captureArtifactSignature();
+
+								rows.push( {
+									label: artifactCase.label,
+									resolution: params.resolution,
+									probes: probeGrid.totalProbes,
+									cubemapSize: params.cubemapSize,
+									projectionPrecision: params.projectionPrecision,
+									band2Intensity: params.band2Intensity,
+									normalBias: params.normalBias,
+									viewBias: params.viewBias,
+									leakReductionMode: params.leakReductionMode,
+									lightingMode: params.lightingMode,
+									materialType: params.materialType,
+									precision: probeGrid.getPrecisionInfo( renderer ),
+									sampling: probeGrid.getSamplingInfo(),
+									colorSanity,
+									artifactSignature,
+									cubemapMs: timings.cubemapMs,
+									projectionMs: timings.projectionMs,
+									copyMs: timings.copyMs,
+									totalBakeMs: timings.totalBakeMs,
+									frameMs: timings.frameMs
+								} );
+
+							}
+
+						} finally {
+
+							await restoreState();
+
+						}
+
+						return {
+							rows,
+							restored: window.__webgpuLightProbeGridCornell.getMetrics()
 						};
 
 					},
