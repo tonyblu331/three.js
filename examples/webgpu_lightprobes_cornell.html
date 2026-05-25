@@ -365,7 +365,7 @@
 
 			}
 
-			async function bakeProbeGrid() {
+			async function runProbeGridBake( runBake, throwOnError = false ) {
 
 				if ( probeGrid === null ) return;
 
@@ -389,9 +389,7 @@
 					directLight.shadow.needsUpdate = true;
 					ambientLight.intensity = ambientLightIntensity;
 
-					const nextTimings = await probeGrid.bake( renderer, scene, {
-						onResourcesChanged: syncProbeGridBindings
-					} );
+					const nextTimings = await runBake();
 
 					params.bakeStatus = 'ready';
 					params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
@@ -403,6 +401,7 @@
 				} catch ( error ) {
 
 					params.bakeStatus = 'failed';
+					if ( throwOnError ) throw error;
 					console.error( error );
 
 				} finally {
@@ -424,6 +423,38 @@
 
 					pendingBake = false;
 					await bakeProbeGrid();
+
+				}
+
+			}
+
+			async function bakeProbeGrid() {
+
+				await runProbeGridBake( () => probeGrid.bake( renderer, scene, {
+					onResourcesChanged: syncProbeGridBindings
+				} ) );
+
+			}
+
+			async function recreateAndBakeRequired( label, simulateFailure = false ) {
+
+				if ( simulateFailure ) {
+
+					await runProbeGridBake( async () => {
+
+						throw new Error( `LightProbeGridGPU ${ label } bake failed.` );
+
+					}, true );
+
+				} else {
+
+					await recreateAndBake();
+
+				}
+
+				if ( params.bakeStatus !== 'ready' ) {
+
+					throw new Error( `LightProbeGridGPU ${ label } bake did not reach ready status.` );
 
 				}
 
@@ -609,11 +640,26 @@
 
 				};
 
+				const createBenchmarkResult = ( nextTimings ) => ( {
+					resolution: params.resolution,
+					probes: probeGrid.totalProbes,
+					cubemapSize: params.cubemapSize,
+					precision: probeGrid.getPrecisionInfo( renderer ),
+					backend: probeGrid.getMemoryInfo().backend,
+					estimatedGpuBytes: probeGrid.getMemoryInfo(),
+					cubemapMs: nextTimings.cubemapMs,
+					projectionMs: nextTimings.projectionMs,
+					copyMs: nextTimings.copyMs,
+					totalBakeMs: nextTimings.totalBakeMs,
+					frameMs: timings.frameMs
+				} );
+
 				window.__webgpuLightProbeGridCornell = {
 					getMetrics: () => ( {
 						resolution: params.resolution,
 						cubemapSize: params.cubemapSize,
 						precision: probeGrid.getPrecisionInfo( renderer ),
+						memory: probeGrid.getMemoryInfo(),
 						isLightProbeGrid: probeGrid.isLightProbeGrid,
 						hasTexture: probeGrid.texture !== null,
 						hasBoundingBox: probeGrid.boundingBox !== undefined,
@@ -650,6 +696,204 @@
 
 						params.materialType = value;
 						updateMaterialType();
+
+					},
+					inspectAddonContract: () => {
+
+						const contractGrid = new LightProbeGridGPU(
+							new THREE.Vector3( - 1, - 2, - 3 ),
+							new THREE.Vector3( 4, 5, 6 ),
+							{
+								resolution: 2,
+								cubemapSize: 4,
+								projectionPrecision: 'half float',
+								renderer
+							}
+						);
+						const contractHelper = contractGrid.createHelper();
+						const boundingBoxMin = contractGrid.boundingBox.min.toArray();
+						const boundingBoxMax = contractGrid.boundingBox.max.toArray();
+						const result = {
+							isObject3D: contractGrid.isObject3D === true || contractGrid instanceof THREE.Object3D,
+							isLightProbeGrid: contractGrid.isLightProbeGrid === true,
+							type: contractGrid.type,
+							hasTextureBeforeDispose: contractGrid.texture !== null,
+							hasHelperBeforeDispose: contractHelper !== null,
+							boundingBoxMin: {
+								x: boundingBoxMin[ 0 ],
+								y: boundingBoxMin[ 1 ],
+								z: boundingBoxMin[ 2 ]
+							},
+							boundingBoxMax: {
+								x: boundingBoxMax[ 0 ],
+								y: boundingBoxMax[ 1 ],
+								z: boundingBoxMax[ 2 ]
+							}
+						};
+
+						contractGrid.dispose();
+
+						result.hasTextureAfterDispose = contractGrid.texture !== null;
+						result.hasHelperAfterDispose = contractGrid.helper !== null;
+						result.hasAtlasTargetAfterDispose = contractGrid.atlasTarget !== null;
+
+						return result;
+
+					},
+					inspectProbePositions: () => {
+
+						const contractGrid = new LightProbeGridGPU(
+							new THREE.Vector3( - 1, - 2, - 3 ),
+							new THREE.Vector3( 4, 5, 6 ),
+							{
+								resolution: 2,
+								cubemapSize: 4,
+								projectionPrecision: 'half float',
+								renderer
+							}
+						);
+						const first = new THREE.Vector3();
+						const last = new THREE.Vector3();
+						let invalidConstructorResolutionRejected = false;
+						let invalidConstructorResolutionMessage = '';
+						let invalidSetOptionsResolutionRejected = false;
+						let invalidSetOptionsResolutionMessage = '';
+
+						contractGrid.getProbePosition( 0, first );
+						contractGrid.getProbePosition( contractGrid.totalProbes - 1, last );
+
+						try {
+
+							new LightProbeGridGPU(
+								new THREE.Vector3( - 1, - 2, - 3 ),
+								new THREE.Vector3( 4, 5, 6 ),
+								{
+									resolution: 1,
+									cubemapSize: 4,
+									projectionPrecision: 'half float',
+									renderer
+								}
+							);
+
+						} catch ( error ) {
+
+							invalidConstructorResolutionRejected = true;
+							invalidConstructorResolutionMessage = error instanceof Error ? error.message : String( error );
+
+						}
+
+						try {
+
+							contractGrid.setOptions( { resolution: 1 }, renderer );
+
+						} catch ( error ) {
+
+							invalidSetOptionsResolutionRejected = true;
+							invalidSetOptionsResolutionMessage = error instanceof Error ? error.message : String( error );
+
+						}
+
+						contractGrid.dispose();
+
+						return {
+							first: {
+								x: first.x,
+								y: first.y,
+								z: first.z
+							},
+							last: {
+								x: last.x,
+								y: last.y,
+								z: last.z
+							},
+							invalidConstructorResolutionRejected,
+							invalidConstructorResolutionMessage,
+							invalidSetOptionsResolutionRejected,
+							invalidSetOptionsResolutionMessage
+						};
+
+					},
+					testBakeCoalescing: async () => {
+
+						let result = null;
+
+						await runProbeGridBake( async () => {
+
+							const firstBake = probeGrid.bake( renderer, scene, { onResourcesChanged: syncProbeGridBindings } );
+							const secondBake = probeGrid.bake( renderer, scene, { onResourcesChanged: syncProbeGridBindings } );
+							const samePromise = firstBake === secondBake;
+							const nextTimings = await firstBake;
+
+							result = {
+								samePromise,
+								timings: nextTimings,
+								precision: probeGrid.getPrecisionInfo( renderer )
+							};
+
+							return nextTimings;
+
+						}, true );
+
+						return result;
+
+					},
+					runBenchmarkCase: async ( options = {} ) => {
+
+						const previousResolution = params.resolution;
+						const previousCubemapSize = params.cubemapSize;
+						const previousPrecision = params.projectionPrecision;
+						let result = null;
+
+						try {
+
+							params.resolution = options.resolution ?? params.resolution;
+							params.cubemapSize = options.cubemapSize ?? params.cubemapSize;
+							params.projectionPrecision = options.projectionPrecision ?? params.projectionPrecision;
+
+							await recreateAndBakeRequired( 'benchmark', options.simulateBenchmarkBakeFailure === true );
+							renderer.render( scene, camera );
+
+							result = createBenchmarkResult( timings );
+
+						} finally {
+
+							params.resolution = previousResolution;
+							params.cubemapSize = previousCubemapSize;
+							params.projectionPrecision = previousPrecision;
+
+							await recreateAndBakeRequired( 'restore', options.simulateBenchmarkRestoreFailure === true );
+
+						}
+
+						return result;
+
+					},
+					runBenchmarkMatrix: async () => {
+
+						const results = [];
+						const resolutions = [ 2, 4, 6 ];
+						const cubemapSizes = [ 8, 16, 32 ];
+						const projectionPrecisions = [ 'half float', 'float', 'float manual' ];
+
+						for ( const resolution of resolutions ) {
+
+							for ( const cubemapSize of cubemapSizes ) {
+
+								for ( const projectionPrecision of projectionPrecisions ) {
+
+									results.push( await window.__webgpuLightProbeGridCornell.runBenchmarkCase( {
+										resolution,
+										cubemapSize,
+										projectionPrecision
+									} ) );
+
+								}
+
+							}
+
+						}
+
+						return results;
 
 					},
 					waitUntilReady,

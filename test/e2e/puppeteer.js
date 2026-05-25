@@ -663,8 +663,10 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	requireSource(
 		source.includes( 'this._bakePromise' ) &&
 			source.includes( 'if ( this._bakePromise !== null ) return this._bakePromise' ) &&
+			/(^|\n)\s*bake\s*\(\s*renderer\s*,\s*scene\s*,\s*options\s*=\s*\{\s*\}\s*\)\s*\{/.test( source ) &&
+			/(^|\n)\s*async\s+bake\s*\(/.test( source ) === false &&
 			source.includes( 'async _bake' ),
-		'LightProbeGridGPU bake() must coalesce overlapping bakes through an instance-owned promise.'
+		'LightProbeGridGPU bake() must coalesce overlapping bakes through an instance-owned promise identity.'
 	);
 
 	requireSource(
@@ -675,11 +677,40 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	);
 
 	requireSource(
+		source.includes( 'getMemoryInfo()' ) &&
+			source.includes( 'projection: \'fragment\'' ) &&
+			source.includes( 'atlas: \'render-pass\'' ) &&
+			source.includes( 'update: \'full\'' ),
+		'LightProbeGridGPU must expose benchmark memory metadata and current backend labels.'
+	);
+
+	requireSource(
+		source.includes( 'new RenderTarget3D( this.resolution, this.resolution, this.atlasDepth' ) &&
+			source.includes( 'this.texture = this.atlasTarget.texture' ) &&
+			source.includes( 'Data3DTexture' ) === false &&
+			source.includes( 'readRenderTargetPixels' ) === false &&
+			source.includes( 'readPixels' ) === false,
+		'LightProbeGridGPU bake atlas must stay GPU-resident with no CPU readback or Data3DTexture upload path.'
+	);
+
+	requireSource(
+		source.includes( 'this.min = min.clone()' ) &&
+			source.includes( 'this.max = max.clone()' ) &&
+			source.includes( 'this.boundingBox = new Box3( this.min, this.max )' ) &&
+			source.includes( 'this.resolution = this._validateResolution' ) &&
+			source.includes( 'this.totalProbes = this.resolution * this.resolution * this.resolution' ),
+		'LightProbeGridGPU must keep its explicit min/max box and cubic probe resolution contract documented against the WebGL baseline.'
+	);
+
+	requireSource(
 		source.includes( 'L2 spherical harmonics' ) &&
+			source.includes( 'const SH_COEFFICIENTS = 9' ) &&
+			source.includes( 'const PACKED_SH_TEXTURES = 7' ) &&
 			source.includes( 'ceil( 27 / 4 ) = 7' ) &&
 			source.includes( 'solid angle' ) &&
-			source.includes( 'trilinear' ),
-		'LightProbeGridGPU must document the SH projection, packing, padding, and filtering math.'
+			source.includes( 'trilinear' ) &&
+			source.includes( 'The WebGL LightProbeGrid baseline uses width/height/depth' ),
+		'LightProbeGridGPU must document the SH projection, packing, padding, filtering math, and WebGL parity boundary.'
 	);
 
 	requireSource(
@@ -717,7 +748,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'rebake', 'captureColorSanity' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -731,6 +762,33 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 	const call = async ( method, ...args ) => await page.evaluate(
 		async ( globalName, method, args ) => await window[ globalName ][ method ]( ...args ),
+		smokeHarness.global,
+		method,
+		args
+	);
+
+	const callRejects = async ( method, ...args ) => await page.evaluate(
+		async ( globalName, method, args ) => {
+
+			try {
+
+				await window[ globalName ][ method ]( ...args );
+
+				return {
+					rejected: false,
+					message: ''
+				};
+
+			} catch ( error ) {
+
+				return {
+					rejected: true,
+					message: error instanceof Error ? error.message : String( error )
+				};
+
+			}
+
+		},
 		smokeHarness.global,
 		method,
 		args
@@ -826,6 +884,85 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 	await waitUntilReady( 'initial' );
 	await capture( 'initial' );
+
+	const contract = await call( 'inspectAddonContract' );
+	assert( contract.isObject3D === true, 'contract: expected Object3D instance flag.' );
+	assert( contract.isLightProbeGrid === true, 'contract: expected light probe grid flag.' );
+	assert( contract.type === 'LightProbeGridGPU', 'contract: expected LightProbeGridGPU type.' );
+	assert( contract.hasTextureBeforeDispose === true, 'contract: expected texture before dispose.' );
+	assert( contract.hasHelperBeforeDispose === true, 'contract: expected helper before dispose.' );
+	assert( contract.hasTextureAfterDispose === false, 'contract: expected texture to clear after dispose.' );
+	assert( contract.hasHelperAfterDispose === false, 'contract: expected helper to clear after dispose.' );
+	assert( contract.hasAtlasTargetAfterDispose === false, 'contract: expected atlas target to clear after dispose.' );
+	assert( contract.boundingBoxMin.x === - 1 &&
+		contract.boundingBoxMin.y === - 2 &&
+		contract.boundingBoxMin.z === - 3 &&
+		contract.boundingBoxMax.x === 4 &&
+		contract.boundingBoxMax.y === 5 &&
+		contract.boundingBoxMax.z === 6,
+	'contract: expected constructor min/max to define bounding box.' );
+	results.push( { step: 'addon contract', contract } );
+
+	const probePositions = await call( 'inspectProbePositions' );
+	assert( probePositions.first.x === - 1 &&
+		probePositions.first.y === - 2 &&
+		probePositions.first.z === - 3,
+	'probe positions: expected first probe to map to min.' );
+	assert( probePositions.last.x === 4 &&
+		probePositions.last.y === 5 &&
+		probePositions.last.z === 6,
+	'probe positions: expected final probe to map to max.' );
+	assert( probePositions.invalidConstructorResolutionRejected === true, 'probe positions: expected constructor resolution below 2 to be rejected.' );
+	assert( /resolution/.test( probePositions.invalidConstructorResolutionMessage ), 'probe positions: expected constructor resolution validation error message.' );
+	assert( probePositions.invalidSetOptionsResolutionRejected === true, 'probe positions: expected setOptions resolution below 2 to be rejected.' );
+	assert( /resolution/.test( probePositions.invalidSetOptionsResolutionMessage ), 'probe positions: expected setOptions resolution validation error message.' );
+	results.push( { step: 'probe positions', probePositions } );
+
+	const bakeCoalescing = await call( 'testBakeCoalescing' );
+	assert( bakeCoalescing.samePromise === true, 'bake contract: expected overlapping bake calls to share the same promise.' );
+	assert( Number.isFinite( bakeCoalescing.timings.totalBakeMs ), 'bake contract: expected finite coalesced bake timing.' );
+	results.push( { step: 'bake coalescing', bakeCoalescing } );
+
+	const benchmark = await call( 'runBenchmarkCase', {
+		resolution: 2,
+		cubemapSize: 8,
+		projectionPrecision: 'half float'
+	} );
+	assert( benchmark.probes === 8, 'benchmark: expected probe count metadata.' );
+	assert( benchmark.backend.projection === 'fragment', 'benchmark: expected fragment projection backend label.' );
+	assert( benchmark.backend.atlas === 'render-pass', 'benchmark: expected render-pass atlas backend label.' );
+	assert( benchmark.backend.update === 'full', 'benchmark: expected full update backend label.' );
+	assert( benchmark.estimatedGpuBytes.total > 0, 'benchmark: expected positive GPU memory estimate.' );
+	assert( benchmark.estimatedGpuBytes.cubemapBytes > 0, 'benchmark: expected cubemap memory estimate.' );
+	assert( benchmark.estimatedGpuBytes.coefficientBytes > 0, 'benchmark: expected coefficient memory estimate.' );
+	assert( benchmark.estimatedGpuBytes.atlasBytes > 0, 'benchmark: expected atlas memory estimate.' );
+	assert( benchmark.precision.requestedPrecision === 'half float', 'benchmark: expected requested precision metadata.' );
+	assert( Number.isFinite( benchmark.totalBakeMs ), 'benchmark: expected finite total bake timing.' );
+	assert( Number.isFinite( benchmark.cubemapMs ), 'benchmark: expected finite cubemap timing.' );
+	assert( Number.isFinite( benchmark.projectionMs ), 'benchmark: expected finite projection timing.' );
+	assert( Number.isFinite( benchmark.copyMs ), 'benchmark: expected finite copy timing.' );
+	assert( Number.isFinite( benchmark.frameMs ), 'benchmark: expected finite frame timing.' );
+	results.push( { step: 'benchmark case', benchmark } );
+
+	const failedBenchmarkBake = await callRejects( 'runBenchmarkCase', {
+		resolution: 2,
+		cubemapSize: 8,
+		projectionPrecision: 'half float',
+		simulateBenchmarkBakeFailure: true
+	} );
+	assert( failedBenchmarkBake.rejected === true, 'benchmark: expected failed benchmark bake to reject.' );
+	assert( /benchmark bake/.test( failedBenchmarkBake.message ), 'benchmark: expected failed benchmark bake error message.' );
+	results.push( { step: 'benchmark bake failure contract', failedBenchmarkBake } );
+
+	const failedRestoreBake = await callRejects( 'runBenchmarkCase', {
+		resolution: 2,
+		cubemapSize: 8,
+		projectionPrecision: 'half float',
+		simulateBenchmarkRestoreFailure: true
+	} );
+	assert( failedRestoreBake.rejected === true, 'benchmark: expected failed restore bake to reject.' );
+	assert( /restore bake/.test( failedRestoreBake.message ), 'benchmark: expected failed restore bake error message.' );
+	results.push( { step: 'benchmark restore failure contract', failedRestoreBake } );
 
 	await startOperation( 'setPrecision', 'float' );
 	await waitUntilReady( 'float' );

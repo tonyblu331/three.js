@@ -52,6 +52,11 @@ import {
 const SH_COEFFICIENTS = 9;
 const PACKED_SH_TEXTURES = 7;
 const ATLAS_PADDING = 1;
+const BACKEND_LABELS = {
+	projection: 'fragment',
+	atlas: 'render-pass',
+	update: 'full'
+};
 
 const _probePosition = /*@__PURE__*/ new Vector3();
 const _gridSize = /*@__PURE__*/ new Vector3();
@@ -71,23 +76,66 @@ const _matrix = /*@__PURE__*/ new Matrix4();
  *
  * Every packed sub-volume has one copied padding slice on both Z boundaries so
  * trilinear filtering cannot bleed into the next SH sub-volume in the atlas.
+ * The WebGL LightProbeGrid baseline uses width/height/depth centered on the
+ * object position. This WebGPU version uses explicit min/max corners for the
+ * same axis-aligned volume model so the example can keep its probe bounds
+ * independent from the grid object's transform.
  *
  * @augments Object3D
  */
 class LightProbeGridGPU extends Object3D {
 
+	/**
+	 * Constructs a WebGPU irradiance probe grid.
+	 *
+	 * The grid owns its bake render targets and helper resources. Applications
+	 * should treat the runtime fields (`texture`, `boundingBox`,
+	 * `activeProjectionPrecision`, and `manualFloatSampling`) as read-only
+	 * inspection data.
+	 *
+	 * @param {Vector3} min - Minimum world-space grid corner.
+	 * @param {Vector3} max - Maximum world-space grid corner.
+	 * @param {Object} [options] - Probe grid options.
+	 * @param {number} [options.resolution=4] - Probe count per axis, must be at least 2.
+	 * @param {number} [options.cubemapSize=8] - Cubemap face size used during bake.
+	 * @param {'auto'|'half float'|'float'|'float manual'} [options.projectionPrecision='auto'] - Projection texture precision policy.
+	 * @param {number} [options.probeIntensity=1] - Runtime irradiance intensity.
+	 * @param {number} [options.helperIntensity=1] - Helper display intensity.
+	 * @param {?Renderer} [options.renderer=null] - Optional renderer for feature detection during construction.
+	 */
 	constructor( min, max, options = {} ) {
 
 		super();
 
+		/**
+		 * This flag can be used for type testing.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 * @default true
+		 */
 		this.isLightProbeGrid = true;
 		this.type = 'LightProbeGridGPU';
 		this.min = min.clone();
 		this.max = max.clone();
+
+		/**
+		 * The world-space bounding box for the grid.
+		 *
+		 * @type {Box3}
+		 * @readonly
+		 */
 		this.boundingBox = new Box3( this.min, this.max );
-		this.resolution = options.resolution ?? 4;
+		this.resolution = this._validateResolution( options.resolution ?? 4 );
 		this.cubemapSize = options.cubemapSize ?? 8;
 		this.projectionPrecision = options.projectionPrecision ?? 'auto';
+
+		/**
+		 * The precision mode selected after WebGPU feature detection.
+		 *
+		 * @type {string}
+		 * @readonly
+		 */
 		this.activeProjectionPrecision = 'half-linear';
 		this.projectionFallbackType = null;
 
@@ -98,6 +146,13 @@ class LightProbeGridGPU extends Object3D {
 		this.cubeCamera = null;
 		this.coefficientTarget = null;
 		this.atlasTarget = null;
+
+		/**
+		 * The atlas texture containing the packed SH coefficients.
+		 *
+		 * @type {?Texture}
+		 * @readonly
+		 */
 		this.texture = null;
 		this.projectionScene = null;
 		this.projectionCamera = null;
@@ -112,6 +167,13 @@ class LightProbeGridGPU extends Object3D {
 		this.totalProbes = 0;
 		this.paddedSlices = 0;
 		this.atlasDepth = 0;
+
+		/**
+		 * Whether runtime irradiance sampling uses explicit nearest-load trilinear interpolation.
+		 *
+		 * @type {boolean}
+		 * @readonly
+		 */
 		this.manualFloatSampling = false;
 		this.repackTextureIndex = uniform( 0 );
 		this.repackSliceZ = uniform( 0 );
@@ -124,7 +186,7 @@ class LightProbeGridGPU extends Object3D {
 
 	setOptions( options = {}, renderer = null ) {
 
-		const nextResolution = options.resolution ?? this.resolution;
+		const nextResolution = this._validateResolution( options.resolution ?? this.resolution );
 		const nextCubemapSize = options.cubemapSize ?? this.cubemapSize;
 		const nextProjectionPrecision = options.projectionPrecision ?? this.projectionPrecision;
 
@@ -140,6 +202,18 @@ class LightProbeGridGPU extends Object3D {
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
 
 		if ( recreate ) this._createResources( renderer );
+
+	}
+
+	_validateResolution( resolution ) {
+
+		if ( Number.isInteger( resolution ) === false || resolution < 2 ) {
+
+			throw new Error( 'LightProbeGridGPU: resolution must be an integer greater than or equal to 2.' );
+
+		}
+
+		return resolution;
 
 	}
 
@@ -216,6 +290,25 @@ class LightProbeGridGPU extends Object3D {
 			textureType: this._getTextureType() === FloatType ? 'float' : 'half float',
 			manualFloatSampling: this.manualFloatSampling,
 			float32Filterable: renderer !== null ? renderer.hasFeature( 'float32-filterable' ) : null
+		};
+
+	}
+
+	getMemoryInfo() {
+
+		const bytesPerChannel = this._getTextureType() === FloatType ? 4 : 2;
+		const rgbaBytes = 4 * bytesPerChannel;
+		const cubemapBytes = 6 * this.cubemapSize * this.cubemapSize * rgbaBytes;
+		const coefficientBytes = SH_COEFFICIENTS * this.totalProbes * rgbaBytes;
+		const atlasBytes = this.resolution * this.resolution * this.atlasDepth * rgbaBytes;
+
+		return {
+			cubemapBytes,
+			coefficientBytes,
+			atlasBytes,
+			total: cubemapBytes + coefficientBytes + atlasBytes,
+			bytesPerChannel,
+			backend: { ...BACKEND_LABELS }
 		};
 
 	}
@@ -404,15 +497,29 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	async bake( renderer, scene, options = {} ) {
+	/**
+	 * Bakes the probe grid and returns the in-flight bake promise.
+	 *
+	 * Calling this method again while a bake is running returns the same promise
+	 * so overlapping bake requests cannot allocate or render concurrently.
+	 *
+	 * @param {Renderer} renderer - The renderer.
+	 * @param {Scene} scene - The scene to bake.
+	 * @param {Object} [options] - Bake options.
+	 * @param {Function} [options.onResourcesChanged] - Callback fired when fallback resources are recreated.
+	 * @return {Promise<Object>} Resolves with bake timing and precision metadata.
+	 */
+	bake( renderer, scene, options = {} ) {
 
 		if ( this._bakePromise !== null ) return this._bakePromise;
 
-		this._bakePromise = this._bake( renderer, scene, options ).finally( () => {
+		this._bakePromise = Promise.resolve()
+			.then( () => this._bake( renderer, scene, options ) )
+			.finally( () => {
 
-			this._bakePromise = null;
+				this._bakePromise = null;
 
-		} );
+			} );
 
 		return this._bakePromise;
 
