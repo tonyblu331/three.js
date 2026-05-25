@@ -759,6 +759,11 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 
 	requireSource(
 		example.includes( 'createLocalArtifactMetric' ) &&
+			example.includes( 'captureRegionArtifactMetrics' ) &&
+			example.includes( 'runProbeArtifactRegionMatrix' ) &&
+			example.includes( 'darkPixelRatio' ) &&
+			example.includes( 'shadows-off' ) &&
+			example.includes( 'ceilingEmitter' ) &&
 			example.includes( 'cellEdgeContrast' ) &&
 			example.includes( 'runProbeDiagnosticMatrix' ) &&
 			example.includes( 'float-manual' ) &&
@@ -844,7 +849,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -1129,6 +1134,63 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( artifactMatrix.restored.sampling.leakReductionMode === 'off',
 		'artifact matrix: expected leak reduction restoration.' );
 	results.push( { step: 'artifact matrix', artifactMatrix } );
+
+	const regionMatrix = await call( 'runProbeArtifactRegionMatrix' );
+	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 6,
+		'region matrix: expected bounded cubemap and shadow diagnostic rows.' );
+
+	const regionRows = new Map( regionMatrix.rows.map( row => [ row.label, row ] ) );
+	const regionBaseline = regionRows.get( 'cubemap-8-shadows-on' );
+	const regionCubemap16 = regionRows.get( 'cubemap-16-shadows-on' );
+	const regionCubemap32 = regionRows.get( 'cubemap-32-shadows-on' );
+	const regionShadowless8 = regionRows.get( 'cubemap-8-shadows-off' );
+	const regionShadowless16 = regionRows.get( 'cubemap-16-shadows-off' );
+	const regionShadowless32 = regionRows.get( 'cubemap-32-shadows-off' );
+
+	assert( regionBaseline !== undefined &&
+		regionCubemap16 !== undefined &&
+		regionCubemap32 !== undefined &&
+		regionShadowless8 !== undefined &&
+		regionShadowless16 !== undefined &&
+		regionShadowless32 !== undefined,
+	'region matrix: expected cubemap 8/16/32 rows with shadows on and off.' );
+
+	for ( const row of regionMatrix.rows ) {
+
+		assert( row.lightingMode === 'probes only', `region matrix ${ row.label }: expected probes-only capture.` );
+		assert( Number.isFinite( row.totalBakeMs ), `region matrix ${ row.label }: expected finite bake timing.` );
+		assert( row.regions.leftWall !== undefined &&
+			row.regions.rightWall !== undefined &&
+			row.regions.backWall !== undefined &&
+			row.regions.ceilingEmitter !== undefined &&
+			row.regions.floorCenter !== undefined &&
+			row.regions.sphere !== undefined &&
+			row.regions.tallBox !== undefined,
+		`region matrix ${ row.label }: expected named artifact regions.` );
+
+		for ( const region of Object.values( row.regions ) ) {
+
+			assert( Number.isFinite( region.luminance.p01 ), `region matrix ${ row.label }: expected finite p01.` );
+			assert( Number.isFinite( region.luminance.p05 ), `region matrix ${ row.label }: expected finite p05.` );
+			assert( Number.isFinite( region.darkPixelRatio ), `region matrix ${ row.label }: expected finite dark-pixel ratio.` );
+			assert( Number.isFinite( region.cellEdgeContrast ), `region matrix ${ row.label }: expected finite regional edge contrast.` );
+
+		}
+
+	}
+
+	assert( regionShadowless8.shadowsDisabledDuringBake === true &&
+		regionShadowless16.shadowsDisabledDuringBake === true &&
+		regionShadowless32.shadowsDisabledDuringBake === true,
+	'region matrix: expected shadowless rows to mark bake-time shadow suppression.' );
+	assert( regionMatrix.restored.lightingMode === 'direct + probes',
+		'region matrix: expected lighting mode restoration.' );
+	assert( regionMatrix.restored.sampling.leakReductionMode === 'off',
+		'region matrix: expected leak reduction restoration.' );
+	assert( Number.isFinite( regionMatrix.comparisons.cubemap.darkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.shadow.darkPixelRatioDelta16 ),
+	'region matrix: expected finite cubemap and shadow deltas.' );
+	results.push( { step: 'region artifact matrix', regionMatrix } );
 
 	await startOperation( 'setLeakReductionMode', 'off' );
 	await waitUntilReady( 'leak reduction off' );

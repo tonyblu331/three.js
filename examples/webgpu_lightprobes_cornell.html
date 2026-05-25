@@ -359,7 +359,7 @@
 
 			}
 
-			async function recreateAndBake() {
+			async function recreateAndBake( bakeOptions = {} ) {
 
 				if ( baking ) {
 
@@ -371,11 +371,11 @@
 				}
 
 				createProbeResources();
-				await bakeProbeGrid();
+				await bakeProbeGrid( bakeOptions );
 
 			}
 
-			async function runProbeGridBake( runBake, throwOnError = false ) {
+			async function runProbeGridBake( runBake, throwOnError = false, bakeOptions = {} ) {
 
 				if ( probeGrid === null ) return;
 
@@ -391,10 +391,12 @@
 				params.bakeStatus = 'baking';
 
 				const currentDirectShadowAutoUpdate = directLight.shadow.autoUpdate;
+				const currentDirectCastShadow = directLight.castShadow;
 
 				try {
 
 					directLight.intensity = directLightIntensity;
+					if ( bakeOptions.disableShadowsDuringBake === true ) directLight.castShadow = false;
 					directLight.shadow.autoUpdate = false;
 					directLight.shadow.needsUpdate = true;
 					ambientLight.intensity = ambientLightIntensity;
@@ -416,6 +418,7 @@
 
 				} finally {
 
+					directLight.castShadow = currentDirectCastShadow;
 					directLight.shadow.autoUpdate = currentDirectShadowAutoUpdate;
 					applyLightingMode();
 					probeHelper.visible = params.probeHelper;
@@ -438,15 +441,15 @@
 
 			}
 
-			async function bakeProbeGrid() {
+			async function bakeProbeGrid( bakeOptions = {} ) {
 
 				await runProbeGridBake( () => probeGrid.bake( renderer, scene, {
 					onResourcesChanged: syncProbeGridBindings
-				} ) );
+				} ), false, bakeOptions );
 
 			}
 
-			async function recreateAndBakeRequired( label, simulateFailure = false ) {
+			async function recreateAndBakeRequired( label, simulateFailure = false, bakeOptions = {} ) {
 
 				if ( simulateFailure ) {
 
@@ -454,11 +457,11 @@
 
 						throw new Error( `LightProbeGridGPU ${ label } bake failed.` );
 
-					}, true );
+					}, true, bakeOptions );
 
 				} else {
 
-					await recreateAndBake();
+					await recreateAndBake( bakeOptions );
 
 				}
 
@@ -696,6 +699,32 @@
 
 				const roundMetric = ( value ) => Number( value.toFixed( 4 ) );
 
+				const artifactRegions = {
+					leftWall: { x0: 0.10, x1: 0.20, y0: 0.42, y1: 0.62 },
+					rightWall: { x0: 0.72, x1: 0.88, y0: 0.36, y1: 0.72 },
+					backWall: { x0: 0.30, x1: 0.64, y0: 0.30, y1: 0.58 },
+					ceilingEmitter: { x0: 0.34, x1: 0.66, y0: 0.12, y1: 0.34 },
+					floorCenter: { x0: 0.30, x1: 0.66, y0: 0.68, y1: 0.9 },
+					sphere: { x0: 0.54, x1: 0.74, y0: 0.42, y1: 0.64 },
+					tallBox: { x0: 0.28, x1: 0.50, y0: 0.46, y1: 0.84 }
+				};
+
+				const captureCanvasSample = () => {
+
+					renderer.render( scene, camera );
+
+					const source = renderer.domElement;
+					const canvas = document.createElement( 'canvas' );
+					canvas.width = source.width;
+					canvas.height = source.height;
+
+					const context = canvas.getContext( '2d', { willReadFrequently: true } );
+					context.drawImage( source, 0, 0 );
+
+					return { context, width: canvas.width, height: canvas.height };
+
+				};
+
 				const sphericalHarmonics3Basis = ( dir ) => {
 
 					const x = dir.x;
@@ -894,25 +923,15 @@
 
 				};
 
-				const createLocalArtifactMetric = ( region = { x0: 0.24, x1: 0.82, y0: 0.2, y1: 0.9 } ) => {
+				const createLocalArtifactMetric = ( region = { x0: 0.24, x1: 0.82, y0: 0.2, y1: 0.9 }, canvasSample = captureCanvasSample() ) => {
 
-					renderer.render( scene, camera );
-
-					const source = renderer.domElement;
-					const canvas = document.createElement( 'canvas' );
-					canvas.width = source.width;
-					canvas.height = source.height;
-
-					const context = canvas.getContext( '2d', { willReadFrequently: true } );
-					context.drawImage( source, 0, 0 );
-
-					const x0 = Math.floor( canvas.width * region.x0 );
-					const x1 = Math.floor( canvas.width * region.x1 );
-					const y0 = Math.floor( canvas.height * region.y0 );
-					const y1 = Math.floor( canvas.height * region.y1 );
+					const x0 = Math.floor( canvasSample.width * region.x0 );
+					const x1 = Math.floor( canvasSample.width * region.x1 );
+					const y0 = Math.floor( canvasSample.height * region.y0 );
+					const y1 = Math.floor( canvasSample.height * region.y1 );
 					const width = Math.max( x1 - x0, 1 );
 					const height = Math.max( y1 - y0, 1 );
-					const image = context.getImageData( x0, y0, width, height );
+					const image = canvasSample.context.getImageData( x0, y0, width, height );
 					const luminance = [];
 					let sum = 0;
 
@@ -926,6 +945,8 @@
 
 					const sorted = [ ...luminance ].sort( ( a, b ) => a - b );
 					const percentile = ( value ) => sorted[ Math.min( sorted.length - 1, Math.max( 0, Math.floor( ( sorted.length - 1 ) * value ) ) ) ];
+					const darkThreshold = Math.max( 16, percentile( 0.5 ) * 0.35 );
+					const darkSamples = luminance.filter( value => value <= darkThreshold ).length;
 					const cellCount = Math.max( 2, Math.min( 8, params.resolution ) );
 					const cellMeans = [];
 
@@ -995,15 +1016,33 @@
 						gridCells: cellCount,
 						luminance: {
 							min: roundMetric( sorted[ 0 ] ),
+							p01: roundMetric( percentile( 0.01 ) ),
 							p05: roundMetric( percentile( 0.05 ) ),
 							median: roundMetric( percentile( 0.5 ) ),
 							p95: roundMetric( percentile( 0.95 ) ),
 							max: roundMetric( sorted[ sorted.length - 1 ] ),
 							mean: roundMetric( sum / Math.max( luminance.length, 1 ) )
 						},
+						darkThreshold: roundMetric( darkThreshold ),
+						darkPixelRatio: roundMetric( darkSamples / Math.max( luminance.length, 1 ) ),
 						cellEdgeContrast: roundMetric( maxCellEdgeContrast ),
 						averageCellEdgeContrast: roundMetric( totalCellEdgeContrast / Math.max( cellEdgeSamples, 1 ) )
 					};
+
+				};
+
+				const captureRegionArtifactMetrics = () => {
+
+					const canvasSample = captureCanvasSample();
+					const regions = {};
+
+					for ( const [ name, region ] of Object.entries( artifactRegions ) ) {
+
+						regions[ name ] = createLocalArtifactMetric( region, canvasSample );
+
+					}
+
+					return regions;
 
 				};
 
@@ -1275,6 +1314,147 @@
 
 				};
 
+				const runProbeArtifactRegionMatrix = async () => {
+
+					const previousResolution = params.resolution;
+					const previousCubemapSize = params.cubemapSize;
+					const previousPrecision = params.projectionPrecision;
+					const previousBand1Intensity = params.band1Intensity;
+					const previousBand2Intensity = params.band2Intensity;
+					const previousNormalBias = params.normalBias;
+					const previousViewBias = params.viewBias;
+					const previousLeakReductionMode = params.leakReductionMode;
+					const previousLightingMode = params.lightingMode;
+					const previousMaterialType = params.materialType;
+					const previousProbeHelper = params.probeHelper;
+					const rows = [];
+					const cases = [
+						{ label: 'cubemap-8-shadows-on', cubemapSize: 8, shadowsDisabledDuringBake: false },
+						{ label: 'cubemap-16-shadows-on', cubemapSize: 16, shadowsDisabledDuringBake: false },
+						{ label: 'cubemap-32-shadows-on', cubemapSize: 32, shadowsDisabledDuringBake: false },
+						{ label: 'cubemap-8-shadows-off', cubemapSize: 8, shadowsDisabledDuringBake: true },
+						{ label: 'cubemap-16-shadows-off', cubemapSize: 16, shadowsDisabledDuringBake: true },
+						{ label: 'cubemap-32-shadows-off', cubemapSize: 32, shadowsDisabledDuringBake: true }
+					];
+
+					const restoreState = async () => {
+
+						params.resolution = previousResolution;
+						params.cubemapSize = previousCubemapSize;
+						params.projectionPrecision = previousPrecision;
+						params.band1Intensity = previousBand1Intensity;
+						params.band2Intensity = previousBand2Intensity;
+						params.normalBias = previousNormalBias;
+						params.viewBias = previousViewBias;
+						params.leakReductionMode = previousLeakReductionMode;
+						params.lightingMode = previousLightingMode;
+						params.probeHelper = previousProbeHelper;
+						probeHelper.visible = previousProbeHelper;
+
+						if ( params.materialType !== previousMaterialType ) {
+
+							params.materialType = previousMaterialType;
+							updateMaterialType();
+
+						}
+
+						await recreateAndBakeRequired( 'region matrix restore' );
+
+					};
+
+					try {
+
+						for ( const regionCase of cases ) {
+
+							params.resolution = 4;
+							params.cubemapSize = regionCase.cubemapSize;
+							params.projectionPrecision = 'half float';
+							params.band1Intensity = 1;
+							params.band2Intensity = 0.55;
+							params.normalBias = 0.5;
+							params.viewBias = 0;
+							params.leakReductionMode = 'off';
+							params.lightingMode = 'probes only';
+							params.probeHelper = false;
+							probeHelper.visible = false;
+
+							if ( params.materialType !== 'standard' ) {
+
+								params.materialType = 'standard';
+								updateMaterialType();
+
+							}
+
+							await recreateAndBakeRequired(
+								`region matrix ${ regionCase.label }`,
+								false,
+								{ disableShadowsDuringBake: regionCase.shadowsDisabledDuringBake }
+							);
+
+							const colorSanity = await captureColorSanity();
+							const artifactSignature = captureArtifactSignature();
+							const regions = captureRegionArtifactMetrics();
+
+							rows.push( {
+								label: regionCase.label,
+								resolution: params.resolution,
+								probes: probeGrid.totalProbes,
+								cubemapSize: params.cubemapSize,
+								projectionPrecision: params.projectionPrecision,
+								band1Intensity: params.band1Intensity,
+								band2Intensity: params.band2Intensity,
+								normalBias: params.normalBias,
+								viewBias: params.viewBias,
+								leakReductionMode: params.leakReductionMode,
+								shadowsDisabledDuringBake: regionCase.shadowsDisabledDuringBake,
+								lightingMode: params.lightingMode,
+								materialType: params.materialType,
+								precision: probeGrid.getPrecisionInfo( renderer ),
+								sampling: probeGrid.getSamplingInfo(),
+								colorSanity,
+								artifactSignature,
+								regions,
+								cubemapMs: timings.cubemapMs,
+								projectionMs: timings.projectionMs,
+								copyMs: timings.copyMs,
+								totalBakeMs: timings.totalBakeMs,
+								frameMs: timings.frameMs
+							} );
+
+						}
+
+					} finally {
+
+						await restoreState();
+
+					}
+
+					const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
+					const maxDarkPixelRatio = row => Math.max( ...Object.values( row.regions ).map( region => region.darkPixelRatio ) );
+					const minP05 = row => Math.min( ...Object.values( row.regions ).map( region => region.luminance.p05 ) );
+					const delta = ( a, b, read ) => roundMetric( Math.abs( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) );
+
+					return {
+						rows,
+						comparisons: {
+							cubemap: {
+								darkPixelRatioDelta16: delta( 'cubemap-8-shadows-on', 'cubemap-16-shadows-on', maxDarkPixelRatio ),
+								darkPixelRatioDelta32: delta( 'cubemap-8-shadows-on', 'cubemap-32-shadows-on', maxDarkPixelRatio ),
+								minP05Delta16: delta( 'cubemap-8-shadows-on', 'cubemap-16-shadows-on', minP05 ),
+								minP05Delta32: delta( 'cubemap-8-shadows-on', 'cubemap-32-shadows-on', minP05 )
+							},
+							shadow: {
+								darkPixelRatioDelta8: delta( 'cubemap-8-shadows-on', 'cubemap-8-shadows-off', maxDarkPixelRatio ),
+								darkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-shadows-off', maxDarkPixelRatio ),
+								darkPixelRatioDelta32: delta( 'cubemap-32-shadows-on', 'cubemap-32-shadows-off', maxDarkPixelRatio ),
+								minP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-shadows-off', minP05 )
+							}
+						},
+						restored: window.__webgpuLightProbeGridCornell.getMetrics()
+					};
+
+				};
+
 				window.__webgpuLightProbeGridCornell = {
 					getMetrics: () => ( {
 						resolution: params.resolution,
@@ -1535,6 +1715,7 @@
 					},
 					runArtifactMatrix: runProbeDiagnosticMatrix,
 					runProbeDiagnosticMatrix,
+					runProbeArtifactRegionMatrix,
 					testBakeCoalescing: async () => {
 
 						let result = null;
