@@ -759,6 +759,14 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	);
 
 	requireSource(
+		example.includes( 'inspectProbeOccupancy' ) &&
+			example.includes( 'solidProbeMeshes' ) &&
+			example.includes( 'containsPoint' ) &&
+			example.includes( 'probeIndex' ),
+		'Cornell harness must diagnose probe centers that land inside solid scene geometry before adding DDGI-style validity.'
+	);
+
+	requireSource(
 		example.includes( 'createLocalArtifactMetric' ) &&
 			example.includes( 'captureRegionArtifactMetrics' ) &&
 			example.includes( 'runProbeArtifactRegionMatrix' ) &&
@@ -766,10 +774,12 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'shadows-off' ) &&
 			example.includes( 'direct-off' ) &&
 			example.includes( 'panel-hidden' ) &&
+			example.includes( 'solids-hidden' ) &&
 			example.includes( 'cubemap-16-l0-only' ) &&
 			example.includes( 'cubemap-16-l0-l1' ) &&
 			example.includes( 'cubemap-16-band1-0.6' ) &&
 			example.includes( 'disableDirectLightDuringBake' ) &&
+			example.includes( 'hideSolidGeometryDuringBake' ) &&
 			example.includes( 'hideLightPanelDuringBake' ) &&
 			example.includes( 'ceilingEmitter' ) &&
 			example.includes( 'cellEdgeContrast' ) &&
@@ -857,7 +867,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -1070,6 +1080,18 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		'projection parity: expected asymmetric fixture to prove WebGPU and WebGL render-target conventions are not directly interchangeable.' );
 	results.push( { step: 'projection parity', projectionParity } );
 
+	const probeOccupancy = await call( 'inspectProbeOccupancy' );
+	assert( probeOccupancy.totalProbes === 64,
+		'probe occupancy: expected default resolution 4 probe count.' );
+	assert( probeOccupancy.solidMeshCount >= 3,
+		'probe occupancy: expected solid Cornell meshes to be inspected.' );
+	assert( probeOccupancy.occupiedProbeCount > 0,
+		'probe occupancy: expected current Cornell layout to expose probes inside solid geometry.' );
+	assert( Array.isArray( probeOccupancy.occupiedProbes ) &&
+		probeOccupancy.occupiedProbes.every( probe => Number.isInteger( probe.probeIndex ) && probe.meshes.length > 0 ),
+	'probe occupancy: expected occupied probe metadata.' );
+	results.push( { step: 'probe occupancy', probeOccupancy } );
+
 	const artifactMatrix = await call( 'runProbeDiagnosticMatrix' );
 	assert( Array.isArray( artifactMatrix.rows ) && artifactMatrix.rows.length === 9,
 		'artifact matrix: expected nine bounded diagnostic rows.' );
@@ -1144,7 +1166,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	results.push( { step: 'artifact matrix', artifactMatrix } );
 
 	const regionMatrix = await call( 'runProbeArtifactRegionMatrix' );
-	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 14,
+	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 15,
 		'region matrix: expected bounded cubemap, shadow, direct-light, and panel diagnostic rows.' );
 
 	const regionRows = new Map( regionMatrix.rows.map( row => [ row.label, row ] ) );
@@ -1156,6 +1178,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	const regionShadowless32 = regionRows.get( 'cubemap-32-shadows-off' );
 	const regionDirectOff16 = regionRows.get( 'cubemap-16-direct-off' );
 	const regionPanelHidden16 = regionRows.get( 'cubemap-16-panel-hidden' );
+	const regionSolidsHidden16 = regionRows.get( 'cubemap-16-solids-hidden' );
 	const regionL016 = regionRows.get( 'cubemap-16-l0-only' );
 	const regionL0L116 = regionRows.get( 'cubemap-16-l0-l1' );
 	const regionL032 = regionRows.get( 'cubemap-32-l0-only' );
@@ -1171,6 +1194,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		regionShadowless32 !== undefined &&
 		regionDirectOff16 !== undefined &&
 		regionPanelHidden16 !== undefined &&
+		regionSolidsHidden16 !== undefined &&
 		regionL016 !== undefined &&
 		regionL0L116 !== undefined &&
 		regionL032 !== undefined &&
@@ -1211,6 +1235,8 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		'region matrix: expected direct-light suppression row.' );
 	assert( regionPanelHidden16.lightPanelHiddenDuringBake === true,
 		'region matrix: expected visible panel suppression row.' );
+	assert( regionSolidsHidden16.solidGeometryHiddenDuringBake === true,
+		'region matrix: expected solid geometry suppression row.' );
 	assert( regionL016.band1Intensity === 0 && regionL016.band2Intensity === 0,
 		'region matrix: expected cubemap-16 L0-only row.' );
 	assert( regionL0L116.band1Intensity === 1 && regionL0L116.band2Intensity === 0,
@@ -1225,12 +1251,22 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		Number.isFinite( regionMatrix.comparisons.shadow.darkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.energy.directOffDarkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.energy.panelHiddenDarkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.geometry.solidsHiddenDarkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.band.l0ToL1DarkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.band.l1ToL2DarkPixelRatioDelta16 ),
 	'region matrix: expected finite cubemap, shadow, energy-source, and regional SH-band deltas.' );
 	assert( Number.isFinite( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta32 ),
 	'region matrix: expected finite damped-band1 deltas.' );
+	assert( regionMatrix.comparisons.band.l0ToL1DarkPixelRatioDelta16 >
+		regionMatrix.comparisons.band.l1ToL2DarkPixelRatioDelta16 * 4,
+	'region matrix: expected first-band SH to dominate the cubemap-16 dark-tail regression.' );
+	assert( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta16 > 0.05,
+		'region matrix: expected damped band-1 row to materially reduce cubemap-16 dark-tail artifacts.' );
+	assert( regionMatrix.comparisons.energy.directOffDarkPixelRatioDelta16 < 0.02 &&
+		regionMatrix.comparisons.energy.panelHiddenDarkPixelRatioDelta16 < 0.02 &&
+		regionMatrix.comparisons.geometry.solidsHiddenDarkPixelRatioDelta16 < 0.02,
+	'region matrix: expected energy-source and solid-visibility toggles not to dominate the current dark-tail artifact.' );
 	results.push( { step: 'region artifact matrix', regionMatrix } );
 
 	await startOperation( 'setLeakReductionMode', 'off' );

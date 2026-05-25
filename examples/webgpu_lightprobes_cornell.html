@@ -395,12 +395,20 @@
 				const currentDirectLightIntensity = directLight.intensity;
 				const currentAmbientLightIntensity = ambientLight.intensity;
 				const currentLightPanelVisible = lightPanel.visible;
+				const solidProbeMeshes = probeMeshes.filter( mesh => mesh.geometry.type !== 'PlaneGeometry' );
+				const currentSolidProbeMeshVisibility = solidProbeMeshes.map( mesh => mesh.visible );
 
 				try {
 
 					directLight.intensity = bakeOptions.disableDirectLightDuringBake === true ? 0 : directLightIntensity;
 					if ( bakeOptions.disableShadowsDuringBake === true ) directLight.castShadow = false;
 					if ( bakeOptions.hideLightPanelDuringBake === true ) lightPanel.visible = false;
+					if ( bakeOptions.hideSolidGeometryDuringBake === true ) {
+
+						for ( const mesh of solidProbeMeshes ) mesh.visible = false;
+
+					}
+
 					directLight.shadow.autoUpdate = false;
 					directLight.shadow.needsUpdate = true;
 					ambientLight.intensity = ambientLightIntensity;
@@ -427,6 +435,12 @@
 					directLight.intensity = currentDirectLightIntensity;
 					ambientLight.intensity = currentAmbientLightIntensity;
 					lightPanel.visible = currentLightPanelVisible;
+					for ( let i = 0; i < solidProbeMeshes.length; i ++ ) {
+
+						solidProbeMeshes[ i ].visible = currentSolidProbeMeshVisibility[ i ];
+
+					}
+
 					applyLightingMode();
 					probeHelper.visible = params.probeHelper;
 					baking = false;
@@ -930,6 +944,62 @@
 
 				};
 
+				const inspectProbeOccupancy = () => {
+
+					scene.updateMatrixWorld( true );
+
+					const solidProbeMeshes = probeMeshes.filter( mesh => mesh.geometry.type !== 'PlaneGeometry' );
+					const probePosition = new THREE.Vector3();
+					const localProbePosition = new THREE.Vector3();
+					const inverseMatrix = new THREE.Matrix4();
+					const occupiedProbes = [];
+
+					for ( let probeIndex = 0; probeIndex < probeGrid.totalProbes; probeIndex ++ ) {
+
+						const meshes = [];
+
+						probeGrid.getProbePosition( probeIndex, probePosition );
+
+						for ( const mesh of solidProbeMeshes ) {
+
+							if ( mesh.geometry.boundingBox === null ) mesh.geometry.computeBoundingBox();
+
+							inverseMatrix.copy( mesh.matrixWorld ).invert();
+							localProbePosition.copy( probePosition ).applyMatrix4( inverseMatrix );
+
+							if ( mesh.geometry.boundingBox.containsPoint( localProbePosition ) ) {
+
+								meshes.push( mesh.geometry.type );
+
+							}
+
+						}
+
+						if ( meshes.length > 0 ) {
+
+							occupiedProbes.push( {
+								probeIndex,
+								position: {
+									x: roundMetric( probePosition.x ),
+									y: roundMetric( probePosition.y ),
+									z: roundMetric( probePosition.z )
+								},
+								meshes
+							} );
+
+						}
+
+					}
+
+					return {
+						totalProbes: probeGrid.totalProbes,
+						solidMeshCount: solidProbeMeshes.length,
+						occupiedProbeCount: occupiedProbes.length,
+						occupiedProbes
+					};
+
+				};
+
 				const createLocalArtifactMetric = ( region = { x0: 0.24, x1: 0.82, y0: 0.2, y1: 0.9 }, canvasSample = captureCanvasSample() ) => {
 
 					const x0 = Math.floor( canvasSample.width * region.x0 );
@@ -1344,6 +1414,7 @@
 						{ label: 'cubemap-32-shadows-off', cubemapSize: 32, shadowsDisabledDuringBake: true },
 						{ label: 'cubemap-16-direct-off', cubemapSize: 16, directLightDisabledDuringBake: true },
 						{ label: 'cubemap-16-panel-hidden', cubemapSize: 16, lightPanelHiddenDuringBake: true },
+						{ label: 'cubemap-16-solids-hidden', cubemapSize: 16, solidGeometryHiddenDuringBake: true },
 						{ label: 'cubemap-16-l0-only', cubemapSize: 16, band1Intensity: 0, band2Intensity: 0 },
 						{ label: 'cubemap-16-l0-l1', cubemapSize: 16, band1Intensity: 1, band2Intensity: 0 },
 						{ label: 'cubemap-32-l0-only', cubemapSize: 32, band1Intensity: 0, band2Intensity: 0 },
@@ -1406,7 +1477,8 @@
 								{
 									disableShadowsDuringBake: regionCase.shadowsDisabledDuringBake,
 									disableDirectLightDuringBake: regionCase.directLightDisabledDuringBake,
-									hideLightPanelDuringBake: regionCase.lightPanelHiddenDuringBake
+									hideLightPanelDuringBake: regionCase.lightPanelHiddenDuringBake,
+									hideSolidGeometryDuringBake: regionCase.solidGeometryHiddenDuringBake
 								}
 							);
 
@@ -1428,6 +1500,7 @@
 								shadowsDisabledDuringBake: regionCase.shadowsDisabledDuringBake === true,
 								directLightDisabledDuringBake: regionCase.directLightDisabledDuringBake === true,
 								lightPanelHiddenDuringBake: regionCase.lightPanelHiddenDuringBake === true,
+								solidGeometryHiddenDuringBake: regionCase.solidGeometryHiddenDuringBake === true,
 								lightingMode: params.lightingMode,
 								materialType: params.materialType,
 								precision: probeGrid.getPrecisionInfo( renderer ),
@@ -1475,6 +1548,10 @@
 								panelHiddenDarkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-panel-hidden', maxDarkPixelRatio ),
 								directOffMinP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-direct-off', minP05 ),
 								panelHiddenMinP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-panel-hidden', minP05 )
+							},
+							geometry: {
+								solidsHiddenDarkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-solids-hidden', maxDarkPixelRatio ),
+								solidsHiddenMinP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-solids-hidden', minP05 )
 							},
 							band: {
 								l0ToL1DarkPixelRatioDelta16: delta( 'cubemap-16-l0-only', 'cubemap-16-l0-l1', maxDarkPixelRatio ),
@@ -1715,6 +1792,7 @@
 
 					},
 					inspectProjectionParity,
+					inspectProbeOccupancy,
 					compareLeakReductionModes: async () => {
 
 						const previousLeakReductionMode = params.leakReductionMode;
