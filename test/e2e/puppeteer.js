@@ -814,15 +814,23 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 
 	requireSource(
 		source.includes( 'this.leakReductionMode = this._validateLeakReductionMode' ) &&
+			source.includes( 'this.probeValiditySource = this._validateProbeValidity' ) &&
+			source.includes( 'this.probeValidityTexture' ) &&
+			source.includes( '_createProbeValidityTexture()' ) &&
+			source.includes( 'const recreateTexture = this.probeValidityTexture === null' ) &&
+			source.includes( 'this.probeValidityTexture.image.data' ) &&
 			source.includes( 'getSamplingInfo()' ) &&
 			source.includes( '_usesWeightedProbeSampling()' ) &&
-			source.includes( 'probeValidityMode: \'constant\'' ) &&
+			source.includes( 'invalidProbeCount: this.invalidProbeCount' ) &&
+			source.includes( 'probeValidityMode: this.probeValiditySource === null ? \'constant\' : \'custom\'' ) &&
 			source.includes( 'wrapShading' ) &&
 			source.includes( 'validityWeight' ) &&
-			source.includes( 'packed.assign( vec4( c8.x, c8.y, c8.z, 1.0 ) )' ) &&
+			source.includes( 'textureLoad( this.probeValidityTexture' ) &&
+			source.includes( 'packed.assign( vec4( c8.x, c8.y, c8.z, validity.x ) )' ) &&
 			source.includes( 'c0Luminance' ) === false &&
+			example.includes( 'createProbeValidityData' ) &&
 			example.includes( 'leakReductionMode: \'off\'' ),
-		'Probe sampling must expose scoped normal-weighted leak reduction without deriving probe validity from brightness.'
+		'Probe sampling must expose scoped normal-weighted leak reduction with explicit validity metadata, without deriving validity from brightness.'
 	);
 
 	requireSource(
@@ -1043,7 +1051,8 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( samplingControls.configuredSampling.normalBias === 0.75 &&
 		samplingControls.configuredSampling.viewBias === 0.25 &&
 		samplingControls.configuredSampling.leakReductionMode === 'normal' &&
-		samplingControls.configuredSampling.probeValidityMode === 'constant' &&
+		samplingControls.configuredSampling.probeValidityMode === 'custom' &&
+		samplingControls.configuredSampling.invalidProbeCount === 1 &&
 		samplingControls.configuredSampling.weightedProbeSampling === true,
 	'sampling controls: expected configured bias and leak reduction metadata.' );
 	assert( samplingControls.invalidLeakReductionModeRejected === true,
@@ -1087,6 +1096,9 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		'probe occupancy: expected solid Cornell meshes to be inspected.' );
 	assert( probeOccupancy.occupiedProbeCount > 0,
 		'probe occupancy: expected current Cornell layout to expose probes inside solid geometry.' );
+	assert( probeOccupancy.sampling.probeValidityMode === 'custom' &&
+		probeOccupancy.sampling.invalidProbeCount === probeOccupancy.occupiedProbeCount,
+	'probe occupancy: expected occupied probes to be uploaded as custom validity metadata.' );
 	assert( Array.isArray( probeOccupancy.occupiedProbes ) &&
 		probeOccupancy.occupiedProbes.every( probe => Number.isInteger( probe.probeIndex ) && probe.meshes.length > 0 ),
 	'probe occupancy: expected occupied probe metadata.' );
@@ -1303,6 +1315,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( benchmark.estimatedGpuBytes.cubemapBytes > 0, 'benchmark: expected cubemap memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.coefficientBytes > 0, 'benchmark: expected coefficient memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.atlasBytes > 0, 'benchmark: expected atlas memory estimate.' );
+	assert( benchmark.estimatedGpuBytes.probeValidityBytes > 0, 'benchmark: expected probe validity memory estimate.' );
 	assert( benchmark.precision.requestedPrecision === 'half float', 'benchmark: expected requested precision metadata.' );
 	assert( Number.isFinite( benchmark.totalBakeMs ), 'benchmark: expected finite total bake timing.' );
 	assert( Number.isFinite( benchmark.cubemapMs ), 'benchmark: expected finite cubemap timing.' );

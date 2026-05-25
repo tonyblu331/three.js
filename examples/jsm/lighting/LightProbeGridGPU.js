@@ -2,6 +2,7 @@ import {
 	CubeCamera,
 	CubeRenderTarget,
 	Box3,
+	DataTexture,
 	FloatType,
 	HalfFloatType,
 	InstancedMesh,
@@ -78,7 +79,8 @@ const _matrix = /*@__PURE__*/ new Matrix4();
  * Optional leak reduction translates DDGI-style wrap weighting and APV-style
  * surface bias into a small manual neighbor blend. It is not a full DDGI
  * visibility system: the atlas keeps a constant validity channel for future
- * geometry classification and weights probes behind the receiver normal less
+ * geometry classification unless explicit validity data is provided, and
+ * weights probes behind the receiver normal less
  * aggressively.
  *
  * Every packed sub-volume has one copied padding slice on both Z boundaries so
@@ -113,6 +115,7 @@ class LightProbeGridGPU extends Object3D {
 	 * @param {number} [options.normalBias=0.5] - Sample offset along the receiver normal, in probe-spacing units.
 	 * @param {number} [options.viewBias=0] - Sample offset toward the active camera, in probe-spacing units.
 	 * @param {'off'|'normal'} [options.leakReductionMode='off'] - Optional scoped probe leak reduction.
+	 * @param {?ArrayLike<number>} [options.probeValidity=null] - Optional per-probe validity weights packed during bake. Length must equal resolution^3.
 	 * @param {?Renderer} [options.renderer=null] - Optional renderer for feature detection during construction.
 	 */
 	constructor( min, max, options = {} ) {
@@ -158,11 +161,19 @@ class LightProbeGridGPU extends Object3D {
 		this.normalBias = uniform( options.normalBias ?? 0.5 );
 		this.viewBias = uniform( options.viewBias ?? 0 );
 		this.leakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? 'off' );
+		this.probeValiditySource = this._validateProbeValidity(
+			options.probeValidity ?? null,
+			this.resolution * this.resolution * this.resolution
+		);
 
 		this.cubeRenderTarget = null;
 		this.cubeCamera = null;
 		this.coefficientTarget = null;
 		this.atlasTarget = null;
+		this.probeValidityTexture = null;
+		this.probeValidityTextureWidth = 0;
+		this.probeValidityTextureHeight = 0;
+		this.invalidProbeCount = 0;
 
 		/**
 		 * The atlas texture containing the packed SH coefficients.
@@ -207,6 +218,11 @@ class LightProbeGridGPU extends Object3D {
 		const nextCubemapSize = options.cubemapSize ?? this.cubemapSize;
 		const nextProjectionPrecision = options.projectionPrecision ?? this.projectionPrecision;
 		const nextLeakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? this.leakReductionMode );
+		const hasProbeValidityOption = Object.prototype.hasOwnProperty.call( options, 'probeValidity' );
+		const nextProbeValiditySource = this._validateProbeValidity(
+			hasProbeValidityOption ? options.probeValidity : this.probeValiditySource,
+			nextResolution * nextResolution * nextResolution
+		);
 
 		const recreate = nextResolution !== this.resolution ||
 			nextCubemapSize !== this.cubemapSize ||
@@ -217,6 +233,7 @@ class LightProbeGridGPU extends Object3D {
 		this.cubemapSize = nextCubemapSize;
 		this.projectionPrecision = nextProjectionPrecision;
 		this.leakReductionMode = nextLeakReductionMode;
+		this.probeValiditySource = nextProbeValiditySource;
 
 		if ( options.probeIntensity !== undefined ) this.probeIntensity.value = options.probeIntensity;
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
@@ -226,6 +243,7 @@ class LightProbeGridGPU extends Object3D {
 		if ( options.viewBias !== undefined ) this.viewBias.value = options.viewBias;
 
 		if ( recreate ) this._createResources( renderer );
+		else if ( hasProbeValidityOption ) this._createProbeValidityTexture();
 
 	}
 
@@ -253,6 +271,38 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
+	_validateProbeValidity( probeValidity, totalProbes ) {
+
+		if ( probeValidity === null || probeValidity === undefined ) return null;
+
+		if ( typeof probeValidity.length !== 'number' ) {
+
+			throw new Error( 'LightProbeGridGPU: probeValidity must be an array-like object.' );
+
+		}
+
+		if ( probeValidity.length !== totalProbes ) {
+
+			throw new Error( `LightProbeGridGPU: probeValidity length must equal resolution^3 (${ totalProbes }).` );
+
+		}
+
+		for ( let i = 0; i < probeValidity.length; i ++ ) {
+
+			const value = probeValidity[ i ];
+
+			if ( Number.isFinite( value ) === false || value < 0 || value > 1 ) {
+
+				throw new Error( 'LightProbeGridGPU: probeValidity values must be finite numbers between 0 and 1.' );
+
+			}
+
+		}
+
+		return probeValidity;
+
+	}
+
 	dispose() {
 
 		if ( this.projectionMaterial !== null ) this.projectionMaterial.dispose();
@@ -269,6 +319,7 @@ class LightProbeGridGPU extends Object3D {
 		if ( this.cubeRenderTarget !== null ) this.cubeRenderTarget.dispose();
 		if ( this.coefficientTarget !== null ) this.coefficientTarget.dispose();
 		if ( this.atlasTarget !== null ) this.atlasTarget.dispose();
+		if ( this.probeValidityTexture !== null ) this.probeValidityTexture.dispose();
 
 		this.projectionMaterial = null;
 		this.repackMaterial = null;
@@ -283,6 +334,9 @@ class LightProbeGridGPU extends Object3D {
 		this.cubeCamera = null;
 		this.coefficientTarget = null;
 		this.atlasTarget = null;
+		this.probeValidityTexture = null;
+		this.probeValidityTextureWidth = 0;
+		this.probeValidityTextureHeight = 0;
 		this.texture = null;
 
 	}
@@ -337,12 +391,14 @@ class LightProbeGridGPU extends Object3D {
 		const cubemapBytes = 6 * this.cubemapSize * this.cubemapSize * rgbaBytes;
 		const coefficientBytes = SH_COEFFICIENTS * this.totalProbes * rgbaBytes;
 		const atlasBytes = this.resolution * this.resolution * this.atlasDepth * rgbaBytes;
+		const probeValidityBytes = this.probeValidityTextureWidth * this.probeValidityTextureHeight * 4 * 4;
 
 		return {
 			cubemapBytes,
 			coefficientBytes,
 			atlasBytes,
-			total: cubemapBytes + coefficientBytes + atlasBytes,
+			probeValidityBytes,
+			total: cubemapBytes + coefficientBytes + atlasBytes + probeValidityBytes,
 			bytesPerChannel,
 			backend: { ...BACKEND_LABELS }
 		};
@@ -355,7 +411,8 @@ class LightProbeGridGPU extends Object3D {
 			normalBias: this.normalBias.value,
 			viewBias: this.viewBias.value,
 			leakReductionMode: this.leakReductionMode,
-			probeValidityMode: 'constant',
+			probeValidityMode: this.probeValiditySource === null ? 'constant' : 'custom',
+			invalidProbeCount: this.invalidProbeCount,
 			manualIrradianceSampling: this._usesManualIrradianceSampling(),
 			weightedProbeSampling: this._usesWeightedProbeSampling()
 		};
@@ -825,6 +882,7 @@ class LightProbeGridGPU extends Object3D {
 		} );
 		this.texture = this.atlasTarget.texture;
 
+		this._createProbeValidityTexture();
 		this.projectionMaterial = this._createProjectionMaterial();
 		this.repackMaterial = this._createRepackMaterial();
 
@@ -850,6 +908,57 @@ class LightProbeGridGPU extends Object3D {
 		this.repackMesh.material = this.repackMaterial;
 		this._createHelper();
 		this.helper.visible = oldHelperVisible;
+
+	}
+
+	_createProbeValidityTexture() {
+
+		const textureWidth = Math.ceil( Math.sqrt( this.totalProbes ) );
+		const textureHeight = Math.ceil( this.totalProbes / textureWidth );
+		const recreateTexture = this.probeValidityTexture === null ||
+			this.probeValidityTextureWidth !== textureWidth ||
+			this.probeValidityTextureHeight !== textureHeight;
+
+		if ( recreateTexture && this.probeValidityTexture !== null ) this.probeValidityTexture.dispose();
+
+		this.probeValidityTextureWidth = textureWidth;
+		this.probeValidityTextureHeight = textureHeight;
+		this.invalidProbeCount = 0;
+
+		const data = recreateTexture ?
+			new Float32Array( this.probeValidityTextureWidth * this.probeValidityTextureHeight * 4 ) :
+			this.probeValidityTexture.image.data;
+
+		data.fill( 0 );
+
+		for ( let i = 0; i < this.totalProbes; i ++ ) {
+
+			const validity = this.probeValiditySource === null ? 1 : this.probeValiditySource[ i ];
+			const offset = i * 4;
+
+			data[ offset ] = validity;
+			data[ offset + 3 ] = 1;
+
+			if ( validity < 1 ) this.invalidProbeCount ++;
+
+		}
+
+		if ( recreateTexture ) {
+
+			this.probeValidityTexture = new DataTexture(
+				data,
+				this.probeValidityTextureWidth,
+				this.probeValidityTextureHeight,
+				RGBAFormat,
+				FloatType
+			);
+			this.probeValidityTexture.minFilter = NearestFilter;
+			this.probeValidityTexture.magFilter = NearestFilter;
+			this.probeValidityTexture.generateMipmaps = false;
+
+		}
+
+		this.probeValidityTexture.needsUpdate = true;
 
 	}
 
@@ -1015,8 +1124,13 @@ class LightProbeGridGPU extends Object3D {
 		const resolution = this.repackResolution;
 		const textureIndex = this.repackTextureIndex;
 		const sliceZ = this.repackSliceZ;
+		const validityTextureWidth = this.probeValidityTextureWidth;
 
 		const loadCoefficient = ( coefficient, probeIndex ) => textureLoad( batch, ivec2( coefficient, probeIndex ) );
+		const loadValidity = ( probeIndex ) => textureLoad( this.probeValidityTexture, ivec2(
+			probeIndex.mod( validityTextureWidth ),
+			probeIndex.div( validityTextureWidth )
+		) );
 
 		const repack = Fn( () => {
 
@@ -1063,7 +1177,9 @@ class LightProbeGridGPU extends Object3D {
 
 			} ).Else( () => {
 
-				packed.assign( vec4( c8.x, c8.y, c8.z, 1.0 ) );
+				const validity = loadValidity( probeIndex );
+
+				packed.assign( vec4( c8.x, c8.y, c8.z, validity.x ) );
 
 			} );
 
