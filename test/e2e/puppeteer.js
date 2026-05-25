@@ -70,6 +70,15 @@ const exceptionList = [
 
 ];
 
+const smokeHarnesses = {
+	webgpu_lightprobes_cornell: {
+		query: 'testHarness',
+		global: '__webgpuLightProbeGridCornell',
+		example: 'examples/webgpu_lightprobes_cornell.html',
+		source: 'examples/jsm/lighting/LightProbeGridGPU.js'
+	}
+};
+
 /* Configuration */
 
 const port = 1234;
@@ -431,7 +440,12 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 
 		try {
 
-			await page.goto( `http://localhost:${ port }/examples/${ file }.html`, {
+			const smokeHarness = isMakeScreenshot === false ? smokeHarnesses[ file ] : undefined;
+			const query = smokeHarness !== undefined ? `?${ smokeHarness.query }` : '';
+
+			if ( smokeHarness !== undefined ) await checkSmokeSourceInvariants( file, smokeHarness );
+
+			await page.goto( `http://localhost:${ port }/examples/${ file }.html${ query }`, {
 				waitUntil: 'networkidle0',
 				timeout: networkTimeout * 60000
 			} );
@@ -501,11 +515,30 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 
 		}
 
+		const smokeResults = isMakeScreenshot === false && smokeHarnesses[ file ] !== undefined ?
+			await runSmokeHarness( page, file, smokeHarnesses[ file ] ) :
+			null;
+
 		const screenshot = ( await Image.read( await page.screenshot() ) ).scale( 1 / viewScale );
 
 		if ( page.error !== undefined ) throw new Error( page.error );
 
-		if ( isMakeScreenshot ) {
+		if ( smokeResults !== null && isMakeScreenshot === false ) {
+
+			try {
+
+				checkSmokeScreenshot( file, screenshot );
+
+			} catch ( e ) {
+
+				await screenshot.write( `test/e2e/output-screenshots/${ file }-actual.jpg`, jpgQuality );
+				throw e;
+
+			}
+
+			console.green( `Smoke ${ smokeResults.length } checks in file: ${ file }` );
+
+		} else if ( isMakeScreenshot ) {
 
 			/* Make screenshots */
 
@@ -584,6 +617,350 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 	} finally {
 
 		page.file = undefined; // release lock
+
+	}
+
+}
+
+async function checkSmokeSourceInvariants( file, smokeHarness ) {
+
+	if ( file !== 'webgpu_lightprobes_cornell' ) return;
+
+	const [ example, source ] = await Promise.all( [
+		fs.readFile( smokeHarness.example, 'utf8' ),
+		fs.readFile( smokeHarness.source, 'utf8' )
+	] );
+
+	const requireSource = ( condition, message ) => {
+
+		if ( condition === false ) throw new Error( `${ file }: ${ message }` );
+
+	};
+
+	requireSource(
+		example.includes( 'searchParams.has( \'testHarness\' ) === false' ) &&
+			example.includes( `window.${ smokeHarness.global }` ),
+		'Smoke harness must stay gated behind ?testHarness.'
+	);
+
+	requireSource(
+		example.includes( 'MeshPhysicalNodeMaterial' ) &&
+			example.includes( 'MeshLambertNodeMaterial' ) &&
+			example.includes( 'MeshPhongNodeMaterial' ) &&
+			example.includes( 'setMaterialType' ),
+		'Smoke example must cover standard, physical, lambert, and phong node material families.'
+	);
+
+	requireSource(
+		/import[\s\S]*Object3D[\s\S]*from 'three\/webgpu'/.test( source ) &&
+			/class LightProbeGridGPU extends Object3D/.test( source ) &&
+			source.includes( 'this.isLightProbeGrid = true' ) &&
+			source.includes( 'this.boundingBox' ) &&
+			source.includes( 'this.texture' ),
+		'LightProbeGridGPU must stay packaged as an Object3D-style probe grid.'
+	);
+
+	requireSource(
+		source.includes( 'this._bakePromise' ) &&
+			source.includes( 'if ( this._bakePromise !== null ) return this._bakePromise' ) &&
+			source.includes( 'async _bake' ),
+		'LightProbeGridGPU bake() must coalesce overlapping bakes through an instance-owned promise.'
+	);
+
+	requireSource(
+		source.includes( 'this.projectionMesh.geometry.dispose()' ) &&
+			source.includes( 'this.repackMesh.geometry.dispose()' ) &&
+			source.includes( 'this.texture = null' ),
+		'LightProbeGridGPU dispose() must release instance-owned GPU resources and clear the public texture reference.'
+	);
+
+	requireSource(
+		source.includes( 'L2 spherical harmonics' ) &&
+			source.includes( 'ceil( 27 / 4 ) = 7' ) &&
+			source.includes( 'solid angle' ) &&
+			source.includes( 'trilinear' ),
+		'LightProbeGridGPU must document the SH projection, packing, padding, and filtering math.'
+	);
+
+	requireSource(
+		/probesSH\.sample[\s\S]*_getPackedAtlasSampleZ/.test( source ) &&
+			/packedLoad\.load[\s\S]*_getPackedAtlasLoadCoord/.test( source ) &&
+			/setRenderTarget\( this\.atlasTarget, this\._getPackedAtlasLayer/.test( source ) &&
+			/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ),
+		'Atlas sample/load/repack/helper paths must use centralized atlas address helpers.'
+	);
+
+	requireSource(
+		source.includes( 'requested === \'float manual\'' ) &&
+			source.includes( 'this.activeProjectionPrecision = hasFloatFiltering ? \'float-linear\' : \'half-linear (fallback)\'' ),
+		'PR01 float precision must avoid implicit float-manual fallback.'
+	);
+
+	const addons = await fs.readFile( 'examples/jsm/Addons.js', 'utf8' );
+
+	requireSource(
+		addons.includes( 'lighting/LightProbeGridGPU.js' ),
+		'LightProbeGridGPU must be exported from examples/jsm/Addons.js after the direct addon smoke path is stable.'
+	);
+
+}
+
+async function runSmokeHarness( page, file, smokeHarness ) {
+
+	await page.evaluate( ( file, smokeHarness ) => {
+
+		const harness = window[ smokeHarness.global ];
+
+		if ( harness === undefined ) {
+
+			throw new Error( `${ file }: Smoke harness ${ smokeHarness.global } was not installed.` );
+
+		}
+
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'rebake', 'captureColorSanity' ] ) {
+
+			if ( typeof harness[ method ] !== 'function' ) {
+
+				throw new Error( `${ file }: Smoke harness does not expose ${ method }().` );
+
+			}
+
+		}
+
+	}, file, smokeHarness );
+
+	const call = async ( method, ...args ) => await page.evaluate(
+		async ( globalName, method, args ) => await window[ globalName ][ method ]( ...args ),
+		smokeHarness.global,
+		method,
+		args
+	);
+
+	const getMetrics = async () => await page.evaluate(
+		globalName => window[ globalName ].getMetrics(),
+		smokeHarness.global
+	);
+
+	const startOperation = async ( method, ...args ) => await page.evaluate(
+		( globalName, method, args ) => {
+
+			const harness = window[ globalName ];
+			harness.__pendingState = { status: 'pending' };
+			harness.__pendingOperation = Promise.resolve( harness[ method ]( ...args ) )
+				.then( () => {
+
+					harness.__pendingState = { status: 'resolved' };
+
+				} )
+				.catch( error => {
+
+					harness.__pendingState = {
+						status: 'rejected',
+						message: error instanceof Error ? error.message : String( error )
+					};
+
+				} );
+
+		},
+		smokeHarness.global,
+		method,
+		args
+	);
+
+	const getPendingState = async () => await page.evaluate(
+		globalName => window[ globalName ].__pendingState ?? { status: 'resolved' },
+		smokeHarness.global
+	);
+
+	const assert = ( condition, message ) => {
+
+		if ( condition === false ) throw new Error( `${ file }: ${ message }` );
+
+	};
+
+	const waitUntilReady = async ( step ) => {
+
+		for ( let i = 0; i < 240; i ++ ) {
+
+			const pendingState = await getPendingState();
+			const metrics = await getMetrics();
+
+			if ( pendingState.status === 'rejected' ) {
+
+				throw new Error( `${ file }: ${ step }: ${ pendingState.message }` );
+
+			}
+
+			if ( metrics.status === 'failed' ) {
+
+				throw new Error( `${ file }: ${ step }: LightProbeGridGPU bake failed.` );
+
+			}
+
+			if ( metrics.status === 'ready' && pendingState.status !== 'pending' ) return;
+
+			await new Promise( resolve => setTimeout( resolve, 250 ) );
+
+		}
+
+		throw new Error( `${ file }: ${ step }: LightProbeGridGPU bake timed out.` );
+
+	};
+
+	const results = [];
+	const capture = async ( step ) => {
+
+		const metrics = await getMetrics();
+
+		assert( metrics.status === 'ready', `${ step }: expected ready status.` );
+		assert( Number.isFinite( metrics.timings.totalBakeMs ), `${ step }: expected finite bake timing.` );
+		assert( metrics.isLightProbeGrid === true, `${ step }: expected Object3D light probe grid flag.` );
+		assert( metrics.hasTexture === true, `${ step }: expected public atlas texture reference.` );
+		assert( metrics.hasBoundingBox === true, `${ step }: expected public bounding box.` );
+
+		results.push( { step, metrics } );
+
+		return metrics;
+
+	};
+
+	await waitUntilReady( 'initial' );
+	await capture( 'initial' );
+
+	await startOperation( 'setPrecision', 'float' );
+	await waitUntilReady( 'float' );
+
+	const floatMetrics = await capture( 'float' );
+	assert( floatMetrics.precision.textureType === 'float' ||
+		floatMetrics.precision.activePrecision === 'half-linear (fallback)',
+	'float: expected float texture or explicit half fallback.' );
+
+	if ( floatMetrics.precision.float32Filterable === true ) {
+
+		assert( floatMetrics.precision.activePrecision === 'float-linear',
+			'float: expected float-linear when float32-filterable is available.' );
+		assert( floatMetrics.precision.manualFloatSampling === false,
+			'float: expected hardware filtering when float32-filterable is available.' );
+
+	} else {
+
+		assert( floatMetrics.precision.activePrecision === 'half-linear (fallback)',
+			'float: expected half-linear fallback when float32-filterable is unavailable.' );
+		assert( floatMetrics.precision.manualFloatSampling === false,
+			'float: expected PR01 to avoid manual sampling fallback.' );
+
+	}
+
+	await startOperation( 'setPrecision', 'auto' );
+	await waitUntilReady( 'auto' );
+
+	const autoMetrics = await capture( 'auto' );
+
+	if ( autoMetrics.precision.float32Filterable === true ) {
+
+		assert( autoMetrics.precision.activePrecision === 'float-linear',
+			'auto: expected float-linear when float32-filterable is available.' );
+
+	} else {
+
+		assert( autoMetrics.precision.activePrecision === 'half-linear',
+			'auto: expected half-linear when float32-filterable is unavailable.' );
+
+	}
+
+	await startOperation( 'setPrecision', 'half float' );
+	await waitUntilReady( 'half float' );
+
+	const halfMetrics = await capture( 'half float' );
+	assert( halfMetrics.precision.activePrecision === 'half-linear',
+		'half float: expected half-linear.' );
+	assert( halfMetrics.precision.textureType === 'half float',
+		'half float: expected half float texture.' );
+
+	await call( 'setLightingMode', 'probes only' );
+
+	const probesOnlyMetrics = await capture( 'probes only' );
+	assert( probesOnlyMetrics.lightingMode === 'probes only',
+		'probes only: expected lighting mode to update.' );
+
+	for ( const materialType of [ 'standard', 'physical', 'lambert', 'phong' ] ) {
+
+		await call( 'setMaterialType', materialType );
+		const materialMetrics = await capture( `material ${ materialType }` );
+		assert( materialMetrics.materialType === materialType,
+			`material ${ materialType }: expected material mode to update.` );
+
+	}
+
+	await startOperation( 'rebake' );
+	await waitUntilReady( 'rebake probes only' );
+	const rebakeMetrics = await capture( 'rebake probes only' );
+	const colorSanity = await call( 'captureColorSanity' );
+
+	results.push( {
+		step: 'probes only color sanity',
+		metrics: rebakeMetrics,
+		colorSanity
+	} );
+
+	return results;
+
+}
+
+function getAverageColor( image, region ) {
+
+	const x0 = Math.floor( image.width * region.x0 );
+	const x1 = Math.floor( image.width * region.x1 );
+	const y0 = Math.floor( image.height * region.y0 );
+	const y1 = Math.floor( image.height * region.y1 );
+	const color = { r: 0, g: 0, b: 0 };
+	let count = 0;
+
+	for ( let y = y0; y < y1; y ++ ) {
+
+		for ( let x = x0; x < x1; x ++ ) {
+
+			const i = ( y * image.width + x ) * 4;
+			color.r += image.data[ i ];
+			color.g += image.data[ i + 1 ];
+			color.b += image.data[ i + 2 ];
+			count ++;
+
+		}
+
+	}
+
+	color.r /= count;
+	color.g /= count;
+	color.b /= count;
+
+	return color;
+
+}
+
+function checkSmokeScreenshot( file, screenshot ) {
+
+	if ( file !== 'webgpu_lightprobes_cornell' ) return;
+
+	const left = getAverageColor( screenshot, { x0: 0.08, x1: 0.24, y0: 0.32, y1: 0.68 } );
+	const right = getAverageColor( screenshot, { x0: 0.76, x1: 0.92, y0: 0.32, y1: 0.68 } );
+	const center = getAverageColor( screenshot, { x0: 0.42, x1: 0.58, y0: 0.38, y1: 0.62 } );
+
+	if ( left.r <= left.g * 1.25 ) {
+
+		throw new Error( `${ file }: Smoke screenshot expected red wall on the left side.` );
+
+	}
+
+	if ( right.g <= right.r * 1.25 ) {
+
+		throw new Error( `${ file }: Smoke screenshot expected green wall on the right side.` );
+
+	}
+
+	if ( center.r + center.g + center.b <= 18 ) {
+
+		throw new Error( `${ file }: Smoke screenshot expected visible probes-only lighting.` );
 
 	}
 

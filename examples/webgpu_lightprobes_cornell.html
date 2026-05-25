@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - light probes cornell</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgpu - light probes cornell">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgpu_lightprobes_cornell.html">
+		<link type="text/css" rel="stylesheet" href="example.css">
+	</head>
+
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
+
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>WebGPU Light Probe Grid</span>
+			</div>
+
+			<small>
+				GPU-resident SH probe grid in a Cornell box. Zero CPU readback.
+			</small>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPU.js';
+			import WebGPU from 'three/addons/capabilities/WebGPU.js';
+
+			let renderer, scene, camera, controls;
+			let directLight, ambientLight, lightPanel, probeHelper;
+			let probeGrid = null;
+			let baking = false;
+			let pendingRecreate = false;
+			let pendingBake = false;
+
+			const probeMaterials = [];
+			const probeMeshes = [];
+			const gridMin = new THREE.Vector3( - 2.8, 0.1, - 2.8 );
+			const gridMax = new THREE.Vector3( 2.8, 4.8, 2.8 );
+
+			const directLightIntensity = 40;
+			const ambientLightIntensity = 0.05;
+
+			const params = {
+				resolution: 4,
+				cubemapSize: 8,
+				projectionPrecision: 'half float',
+				activeProjectionPrecision: 'half-linear',
+				materialType: 'standard',
+				probeIntensity: 1,
+				probeHelperIntensity: 1,
+				lightingMode: 'direct + probes',
+				neutralMaterials: false,
+				probeHelper: false,
+				bakeStatus: 'idle',
+				rebake: bakeProbeGrid
+			};
+
+			const timings = {
+				cubemapMs: 0,
+				projectionMs: 0,
+				copyMs: 0,
+				totalBakeMs: 0,
+				frameMs: 0
+			};
+
+			if ( WebGPU.isAvailable() === false ) {
+
+				document.body.appendChild( WebGPU.getErrorMessage() );
+
+				throw new Error( 'No WebGPU support' );
+
+			}
+
+			init();
+
+			async function init() {
+
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				renderer.setPixelRatio( Math.min( window.devicePixelRatio, 1.5 ) );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.toneMapping = THREE.ACESFilmicToneMapping;
+				renderer.toneMappingExposure = 1.0;
+				renderer.shadowMap.enabled = true;
+				renderer.inspector = new Inspector();
+				document.body.appendChild( renderer.domElement );
+
+				await renderer.init();
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x111111 );
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 100 );
+				camera.position.set( 0, 2.5, 8 );
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 2.5, 0 );
+				controls.minDistance = 3;
+				controls.maxDistance = 12;
+				controls.enableDamping = true;
+				controls.update();
+
+				createCornellBox();
+				createProbeResources();
+				createGUI();
+				createTestHarness();
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				renderer.setAnimationLoop( animate );
+
+				await bakeProbeGrid();
+
+			}
+
+			function createCornellBox() {
+
+				const floorGeometry = new THREE.PlaneGeometry( 6, 6 );
+				const wallGeometry = new THREE.PlaneGeometry( 6, 5 );
+
+				const floor = createProbeMesh( floorGeometry, 0xcccccc );
+				floor.rotation.x = - Math.PI / 2;
+				floor.receiveShadow = true;
+				scene.add( floor );
+
+				const ceiling = createProbeMesh( floorGeometry, 0xcccccc );
+				ceiling.position.y = 5;
+				ceiling.rotation.x = Math.PI / 2;
+				ceiling.receiveShadow = true;
+				scene.add( ceiling );
+
+				const back = createProbeMesh( wallGeometry, 0xcccccc );
+				back.position.set( 0, 2.5, - 3 );
+				back.receiveShadow = true;
+				scene.add( back );
+
+				const front = createProbeMesh( wallGeometry, 0xcccccc );
+				front.position.set( 0, 2.5, 3 );
+				front.rotation.y = Math.PI;
+				front.receiveShadow = true;
+				scene.add( front );
+
+				const left = createProbeMesh( wallGeometry, 0xff0000 );
+				left.position.set( - 3, 2.5, 0 );
+				left.rotation.y = Math.PI / 2;
+				left.receiveShadow = true;
+				scene.add( left );
+
+				const right = createProbeMesh( wallGeometry, 0x00ff00 );
+				right.position.set( 3, 2.5, 0 );
+				right.rotation.y = - Math.PI / 2;
+				right.receiveShadow = true;
+				scene.add( right );
+
+				const tallBox = createProbeMesh( new THREE.BoxGeometry( 1.2, 2.5, 1.2 ), 0xeeeeee );
+				tallBox.position.set( - 0.8, 1.25, - 0.8 );
+				tallBox.rotation.y = Math.PI / 8;
+				tallBox.castShadow = true;
+				tallBox.receiveShadow = true;
+				scene.add( tallBox );
+
+				const shortBox = createProbeMesh( new THREE.BoxGeometry( 1.2, 1.2, 1.2 ), 0xeeeeee );
+				shortBox.position.set( 1, 0.6, 0.5 );
+				shortBox.rotation.y = - Math.PI / 6;
+				shortBox.castShadow = true;
+				shortBox.receiveShadow = true;
+				scene.add( shortBox );
+
+				const sphere = createProbeMesh( new THREE.SphereGeometry( 0.5, 32, 32 ), 0xeeeeee );
+				sphere.position.set( 1, 1.9, 0.5 );
+				sphere.castShadow = true;
+				sphere.receiveShadow = true;
+				scene.add( sphere );
+
+				const lightPanelMaterial = new THREE.MeshBasicMaterial( {
+					color: 0xfff3d1,
+					side: THREE.DoubleSide,
+					toneMapped: false
+				} );
+
+				lightPanel = new THREE.Mesh( new THREE.PlaneGeometry( 0.7, 0.7 ), lightPanelMaterial );
+				lightPanel.position.set( 0, 4.86, 0 );
+				lightPanel.rotation.x = Math.PI / 2;
+				lightPanel.userData.skipProbeLighting = true;
+				scene.add( lightPanel );
+
+				directLight = new THREE.PointLight( 0xffffff, directLightIntensity );
+				directLight.position.set( 0, 4.5, 0 );
+				directLight.castShadow = true;
+				directLight.shadow.mapSize.setScalar( 256 );
+				directLight.shadow.radius = 10;
+				directLight.shadow.normalBias = - 0.02;
+				scene.add( directLight );
+
+				ambientLight = new THREE.AmbientLight( 0xffffff, ambientLightIntensity );
+				scene.add( ambientLight );
+
+			}
+
+			function createProbeMesh( geometry, color ) {
+
+				const material = createProbeMaterial( color );
+				const mesh = new THREE.Mesh( geometry, material );
+
+				mesh.userData.probeColor = color;
+				probeMeshes.push( mesh );
+
+				return mesh;
+
+			}
+
+			function createProbeMaterial( color ) {
+
+				let material;
+
+				if ( params.materialType === 'physical' ) {
+
+					material = new THREE.MeshPhysicalNodeMaterial( {
+						color,
+						roughness: 0.82,
+						metalness: 0,
+						clearcoat: 0.15,
+						clearcoatRoughness: 0.8
+					} );
+
+				} else if ( params.materialType === 'lambert' ) {
+
+					material = new THREE.MeshLambertNodeMaterial( { color } );
+
+				} else if ( params.materialType === 'phong' ) {
+
+					material = new THREE.MeshPhongNodeMaterial( {
+						color,
+						shininess: 12
+					} );
+
+				} else {
+
+					material = new THREE.MeshStandardNodeMaterial( {
+						color,
+						roughness: 0.82,
+						metalness: 0
+					} );
+
+				}
+
+				material.envMapIntensity = 0;
+				material.userData.originalColor = new THREE.Color( color );
+				probeMaterials.push( material );
+
+				return material;
+
+			}
+
+			function createProbeResources() {
+
+				disposeProbeResources();
+
+				probeGrid = new LightProbeGridGPU( gridMin, gridMax, {
+					resolution: params.resolution,
+					cubemapSize: params.cubemapSize,
+					projectionPrecision: params.projectionPrecision,
+					probeIntensity: params.probeIntensity,
+					helperIntensity: params.probeHelperIntensity,
+					renderer
+				} );
+
+				scene.add( probeGrid );
+				params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
+
+				probeHelper = probeGrid.createHelper();
+				probeHelper.visible = params.probeHelper;
+				scene.add( probeHelper );
+
+				syncProbeGridBindings();
+
+			}
+
+			function disposeProbeResources() {
+
+				if ( probeHelper !== undefined ) {
+
+					scene.remove( probeHelper );
+					probeHelper = undefined;
+
+				}
+
+				if ( probeGrid !== null ) {
+
+					scene.remove( probeGrid );
+					probeGrid.dispose();
+					probeGrid = null;
+
+				}
+
+			}
+
+			function updateProbeMaterialLighting() {
+
+				if ( probeGrid === null ) return;
+
+				const gridLightsNode = probeGrid.createLightsNode( [ directLight, ambientLight ] );
+
+				for ( const material of probeMaterials ) {
+
+					material.lightsNode = gridLightsNode;
+					material.needsUpdate = true;
+
+				}
+
+			}
+
+			function syncProbeGridBindings() {
+
+				if ( probeGrid === null ) return;
+
+				const nextHelper = probeGrid.createHelper();
+
+				if ( probeHelper !== nextHelper ) {
+
+					if ( probeHelper !== undefined ) scene.remove( probeHelper );
+
+					probeHelper = nextHelper;
+					scene.add( probeHelper );
+
+				}
+
+				probeHelper.visible = params.probeHelper;
+				updateProbeMaterialLighting();
+				applyLightingMode();
+
+			}
+
+			async function recreateAndBake() {
+
+				if ( baking ) {
+
+					pendingRecreate = true;
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				createProbeResources();
+				await bakeProbeGrid();
+
+			}
+
+			async function bakeProbeGrid() {
+
+				if ( probeGrid === null ) return;
+
+				if ( baking ) {
+
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				baking = true;
+				params.bakeStatus = 'baking';
+
+				const currentDirectShadowAutoUpdate = directLight.shadow.autoUpdate;
+
+				try {
+
+					directLight.intensity = directLightIntensity;
+					directLight.shadow.autoUpdate = false;
+					directLight.shadow.needsUpdate = true;
+					ambientLight.intensity = ambientLightIntensity;
+
+					const nextTimings = await probeGrid.bake( renderer, scene, {
+						onResourcesChanged: syncProbeGridBindings
+					} );
+
+					params.bakeStatus = 'ready';
+					params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
+					timings.cubemapMs = nextTimings.cubemapMs;
+					timings.projectionMs = nextTimings.projectionMs;
+					timings.copyMs = nextTimings.copyMs;
+					timings.totalBakeMs = nextTimings.totalBakeMs;
+
+				} catch ( error ) {
+
+					params.bakeStatus = 'failed';
+					console.error( error );
+
+				} finally {
+
+					directLight.shadow.autoUpdate = currentDirectShadowAutoUpdate;
+					applyLightingMode();
+					probeHelper.visible = params.probeHelper;
+					baking = false;
+
+				}
+
+				if ( pendingRecreate ) {
+
+					pendingRecreate = false;
+					pendingBake = false;
+					await recreateAndBake();
+
+				} else if ( pendingBake ) {
+
+					pendingBake = false;
+					await bakeProbeGrid();
+
+				}
+
+			}
+
+			function createGUI() {
+
+				const gui = renderer.inspector.createParameters( 'Probe Grid' );
+
+				gui.add( params, 'resolution', 2, 6, 1 )
+					.name( 'resolution' )
+					.onChange( async () => {
+
+						await recreateAndBake();
+
+					} );
+
+				gui.add( params, 'cubemapSize', [ 8, 16, 32 ] )
+					.name( 'cubemap size' )
+					.onChange( async () => {
+
+						await recreateAndBake();
+
+					} );
+
+				gui.add( params, 'projectionPrecision', [ 'half float', 'float', 'auto', 'float manual' ] )
+					.name( 'projection precision' )
+					.onChange( async () => {
+
+						await recreateAndBake();
+
+					} );
+
+				gui.add( params, 'activeProjectionPrecision' ).name( 'active precision' ).listen();
+				gui.add( params, 'materialType', [ 'standard', 'physical', 'lambert', 'phong' ] )
+					.name( 'material' )
+					.onChange( () => {
+
+						updateMaterialType();
+
+					} );
+
+				gui.add( params, 'probeIntensity', 0, 4, 0.05 )
+					.name( 'probe intensity' )
+					.onChange( () => {
+
+						if ( probeGrid !== null ) probeGrid.probeIntensity.value = params.probeIntensity;
+						applyLightingMode();
+
+					} );
+
+				gui.add( params, 'probeHelperIntensity', 0, 8, 0.05 )
+					.name( 'probe exposure' )
+					.onChange( ( value ) => {
+
+						if ( probeGrid !== null ) probeGrid.helperIntensity.value = value;
+
+					} );
+
+				gui.add( params, 'lightingMode', [ 'direct + probes', 'probes only', 'direct only', 'off' ] )
+					.name( 'lighting' )
+					.onChange( () => {
+
+						updateLightingMode();
+
+					} );
+
+				gui.add( params, 'neutralMaterials' )
+					.name( 'neutral material' )
+					.onChange( () => {
+
+						updateMaterialMode();
+
+					} );
+
+				gui.add( params, 'probeHelper' )
+					.name( 'probe helper' )
+					.onChange( ( value ) => {
+
+						if ( baking ) {
+
+							params.probeHelper = value;
+							return;
+
+						}
+
+						probeHelper.visible = value;
+
+					} );
+
+				gui.add( params, 'rebake' ).name( 'rebake' );
+				gui.add( params, 'bakeStatus' ).name( 'status' ).listen();
+
+				const timingFolder = gui.addFolder( 'Timing' );
+				timingFolder.add( timings, 'cubemapMs' ).name( 'cubemap ms' ).listen();
+				timingFolder.add( timings, 'projectionMs' ).name( 'project ms' ).listen();
+				timingFolder.add( timings, 'copyMs' ).name( 'copy ms' ).listen();
+				timingFolder.add( timings, 'totalBakeMs' ).name( 'bake ms' ).listen();
+				timingFolder.add( timings, 'frameMs' ).name( 'frame ms' ).listen();
+
+			}
+
+			function createTestHarness() {
+
+				const searchParams = new URLSearchParams( window.location.search );
+
+				if ( searchParams.has( 'testHarness' ) === false ) return;
+
+				const waitUntilReady = async () => {
+
+					for ( let i = 0; i < 240; i ++ ) {
+
+						if ( params.bakeStatus === 'ready' ) return;
+						if ( params.bakeStatus === 'failed' ) throw new Error( 'LightProbeGridGPU bake failed.' );
+
+						await new Promise( resolve => setTimeout( resolve, 250 ) );
+
+					}
+
+					throw new Error( 'LightProbeGridGPU bake timed out.' );
+
+				};
+
+				const assert = ( condition, message ) => {
+
+					if ( condition === false ) throw new Error( message );
+
+				};
+
+				const sampleCanvas = ( regions ) => {
+
+					const source = renderer.domElement;
+					const canvas = document.createElement( 'canvas' );
+					canvas.width = source.width;
+					canvas.height = source.height;
+
+					const context = canvas.getContext( '2d', { willReadFrequently: true } );
+					context.drawImage( source, 0, 0 );
+
+					return regions.map( ( region ) => {
+
+						const x0 = Math.floor( canvas.width * region.x0 );
+						const x1 = Math.floor( canvas.width * region.x1 );
+						const y0 = Math.floor( canvas.height * region.y0 );
+						const y1 = Math.floor( canvas.height * region.y1 );
+						const image = context.getImageData( x0, y0, x1 - x0, y1 - y0 );
+						const color = { r: 0, g: 0, b: 0 };
+						const count = image.data.length / 4;
+
+						for ( let i = 0; i < image.data.length; i += 4 ) {
+
+							color.r += image.data[ i ];
+							color.g += image.data[ i + 1 ];
+							color.b += image.data[ i + 2 ];
+
+						}
+
+						color.r /= count;
+						color.g /= count;
+						color.b /= count;
+
+						return color;
+
+					} );
+
+				};
+
+				const captureColorSanity = async () => {
+
+					renderer.render( scene, camera );
+
+					const [ left, right, center ] = sampleCanvas( [
+						{ x0: 0.08, x1: 0.24, y0: 0.32, y1: 0.68 },
+						{ x0: 0.76, x1: 0.92, y0: 0.32, y1: 0.68 },
+						{ x0: 0.42, x1: 0.58, y0: 0.38, y1: 0.62 }
+					] );
+
+					assert( left.r > left.g * 1.25, 'probes only: expected red wall on the left side.' );
+					assert( right.g > right.r * 1.25, 'probes only: expected green wall on the right side.' );
+					assert( center.r + center.g + center.b > 18, 'probes only: expected visible probe-lit geometry.' );
+
+					return { left, right, center };
+
+				};
+
+				window.__webgpuLightProbeGridCornell = {
+					getMetrics: () => ( {
+						resolution: params.resolution,
+						cubemapSize: params.cubemapSize,
+						precision: probeGrid.getPrecisionInfo( renderer ),
+						isLightProbeGrid: probeGrid.isLightProbeGrid,
+						hasTexture: probeGrid.texture !== null,
+						hasBoundingBox: probeGrid.boundingBox !== undefined,
+						materialType: params.materialType,
+						lightingMode: params.lightingMode,
+						status: params.bakeStatus,
+						timings: { ...timings }
+					} ),
+					setResolution: async ( value ) => {
+
+						params.resolution = value;
+						await recreateAndBake();
+
+					},
+					setCubemapSize: async ( value ) => {
+
+						params.cubemapSize = value;
+						await recreateAndBake();
+
+					},
+					setPrecision: async ( value ) => {
+
+						params.projectionPrecision = value;
+						await recreateAndBake();
+
+					},
+					setLightingMode: ( value ) => {
+
+						params.lightingMode = value;
+						updateLightingMode();
+
+					},
+					setMaterialType: ( value ) => {
+
+						params.materialType = value;
+						updateMaterialType();
+
+					},
+					waitUntilReady,
+					captureColorSanity,
+					rebake: bakeProbeGrid,
+					runSelfTest: async () => {
+
+						const results = [];
+						const capture = ( step ) => {
+
+							const metrics = window.__webgpuLightProbeGridCornell.getMetrics();
+
+							assert( metrics.status === 'ready', `${step}: expected ready status.` );
+							assert( Number.isFinite( metrics.timings.totalBakeMs ), `${step}: expected finite bake timing.` );
+
+							results.push( { step, metrics } );
+
+							return metrics;
+
+						};
+
+						await waitUntilReady();
+						capture( 'initial' );
+
+						await window.__webgpuLightProbeGridCornell.setPrecision( 'float' );
+
+						const floatMetrics = capture( 'float' );
+						assert( floatMetrics.precision.textureType === 'float' ||
+							floatMetrics.precision.activePrecision === 'half-linear (fallback)',
+						'float: expected float texture or explicit half fallback.' );
+
+						if ( floatMetrics.precision.float32Filterable === true ) {
+
+							assert( floatMetrics.precision.activePrecision === 'float-linear',
+								'float: expected float-linear when float32-filterable is available.' );
+							assert( floatMetrics.precision.manualFloatSampling === false,
+								'float: expected hardware filtering when float32-filterable is available.' );
+
+						} else {
+
+							assert( floatMetrics.precision.activePrecision === 'half-linear (fallback)',
+								'float: expected half-linear fallback when float32-filterable is unavailable.' );
+							assert( floatMetrics.precision.manualFloatSampling === false,
+								'float: expected PR01 to avoid manual sampling fallback.' );
+
+						}
+
+						await window.__webgpuLightProbeGridCornell.setPrecision( 'auto' );
+
+						const autoMetrics = capture( 'auto' );
+
+						if ( autoMetrics.precision.float32Filterable === true ) {
+
+							assert( autoMetrics.precision.activePrecision === 'float-linear',
+								'auto: expected float-linear when float32-filterable is available.' );
+
+						} else {
+
+							assert( autoMetrics.precision.activePrecision === 'half-linear',
+								'auto: expected half-linear when float32-filterable is unavailable.' );
+
+						}
+
+						await window.__webgpuLightProbeGridCornell.setPrecision( 'half float' );
+
+						const halfMetrics = capture( 'half float' );
+						assert( halfMetrics.precision.activePrecision === 'half-linear',
+							'half float: expected half-linear.' );
+						assert( halfMetrics.precision.textureType === 'half float',
+							'half float: expected half float texture.' );
+
+						window.__webgpuLightProbeGridCornell.setLightingMode( 'probes only' );
+
+						const probesOnlyMetrics = capture( 'probes only' );
+						assert( probesOnlyMetrics.lightingMode === 'probes only',
+							'probes only: expected lighting mode to update.' );
+
+						await window.__webgpuLightProbeGridCornell.rebake();
+						const rebakeMetrics = capture( 'rebake probes only' );
+						const colorSanity = await captureColorSanity();
+
+						results.push( {
+							step: 'probes only color sanity',
+							metrics: rebakeMetrics,
+							colorSanity
+						} );
+
+						return results;
+
+					}
+				};
+
+			}
+
+			function updateLightingMode() {
+
+				if ( baking ) {
+
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				applyLightingMode();
+
+			}
+
+			function applyLightingMode() {
+
+				const mode = params.lightingMode;
+				const directEnabled = mode === 'direct only' || mode === 'direct + probes';
+				const probeEnabled = mode === 'probes only' || mode === 'direct + probes';
+
+				directLight.intensity = directEnabled ? directLightIntensity : 0;
+				ambientLight.intensity = directEnabled ? ambientLightIntensity : 0;
+				if ( probeGrid !== null ) probeGrid.probeIntensity.value = probeEnabled ? params.probeIntensity : 0;
+
+			}
+
+			function updateMaterialMode() {
+
+				if ( baking ) {
+
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				for ( const material of probeMaterials ) {
+
+					if ( params.neutralMaterials ) {
+
+						material.color.set( 0xd8d2c5 );
+
+					} else {
+
+						material.color.copy( material.userData.originalColor );
+
+					}
+
+				}
+
+			}
+
+			function updateMaterialType() {
+
+				probeMaterials.length = 0;
+
+				for ( const mesh of probeMeshes ) {
+
+					const previousMaterial = mesh.material;
+					const material = createProbeMaterial( mesh.userData.probeColor );
+
+					if ( params.neutralMaterials ) {
+
+						material.color.set( 0xd8d2c5 );
+
+					}
+
+					mesh.material = material;
+					previousMaterial.dispose();
+
+				}
+
+				syncProbeGridBindings();
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				const frameStart = performance.now();
+
+				controls.update();
+				renderer.render( scene, camera );
+
+				timings.frameMs = Number( ( performance.now() - frameStart ).toFixed( 2 ) );
+
+			}
+
+		</script>
+
+	</body>
+</html>
