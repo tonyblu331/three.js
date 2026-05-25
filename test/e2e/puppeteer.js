@@ -652,6 +652,12 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	);
 
 	requireSource(
+		example.includes( 'const gridMin = new THREE.Vector3( - 2.6, 0.35, - 2.6 )' ) &&
+			example.includes( 'const gridMax = new THREE.Vector3( 2.6, 4.35, 2.6 )' ),
+		'Cornell probes must stay inset from the walls, floor, ceiling, and visible emitter to avoid near-field SH ringing.'
+	);
+
+	requireSource(
 		/import[\s\S]*Object3D[\s\S]*from 'three\/webgpu'/.test( source ) &&
 			/class LightProbeGridGPU extends Object3D/.test( source ) &&
 			source.includes( 'this.isLightProbeGrid = true' ) &&
@@ -719,6 +725,22 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			/setRenderTarget\( this\.atlasTarget, this\._getPackedAtlasLayer/.test( source ) &&
 			/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ),
 		'Atlas sample/load/repack/helper paths must use centralized atlas address helpers.'
+	);
+
+	requireSource(
+		/probeCoord\.x\.mul\( resolutionMinusOne \)\.add\( 0\.5 \)\.div\( resolution \)/.test( source ) &&
+			/probeCoord\.y\.mul\( resolutionMinusOne \)\.add\( 0\.5 \)\.div\( resolution \)/.test( source ) &&
+			/probeCoord\.z\.mul\( resolutionMinusOne \)\.add\( 0\.5 \)\.div\( resolution \)/.test( source ),
+		'Hardware-filtered atlas sampling must center X/Y/Z coordinates on probe texels before blending.'
+	);
+
+	requireSource(
+		source.includes( 'this.band2Intensity = uniform' ) &&
+			/const band2Intensity = this\.band2Intensity/.test( source ) &&
+			/c4\.mul[\s\S]*band2Intensity/.test( source ) &&
+			/c8\.mul[\s\S]*band2Intensity/.test( source ) &&
+			example.includes( 'band2Intensity: 0.55' ),
+		'Probe irradiance must expose band-2 damping so high-contrast L2 SH does not clamp into black patches.'
 	);
 
 	requireSource(

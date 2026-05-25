@@ -17990,13 +17990,22 @@ class InstanceNode extends Node {
 		this.instanceColorNode = null;
 
 		/**
+		 * The update type is set to `frame` for updating
+		 * velocity-related data.
+		 *
+		 * @type {string}
+		 * @default 'frame'
+		 */
+		this.updateType = NodeUpdateType.FRAME;
+
+		/**
 		 * The update type is set to `frame` since an update
 		 * of instanced buffer data must be checked per frame.
 		 *
 		 * @type {string}
 		 * @default 'frame'
 		 */
-		this.updateType = NodeUpdateType.FRAME;
+		this.updateBeforeType = NodeUpdateType.FRAME;
 
 		/**
 		 * A reference to a buffer that is used by `instanceMatrixNode`.
@@ -18133,7 +18142,7 @@ class InstanceNode extends Node {
 	 *
 	 * @param {NodeFrame} frame - The current node frame.
 	 */
-	update( frame ) {
+	updateBefore( /*frame*/ ) {
 
 		if ( this.buffer !== null && this.isStorageMatrix !== true ) {
 
@@ -18162,6 +18171,15 @@ class InstanceNode extends Node {
 			}
 
 		}
+
+	}
+
+	/**
+	 * Updates velocity-related data if necessary.
+	 *
+	 * @param {NodeFrame} frame - The current node frame.
+	 */
+	update( frame ) {
 
 		if ( this.previousInstanceMatrixNode !== null ) {
 
@@ -22270,7 +22288,7 @@ class Line2NodeMaterial extends NodeMaterial {
 		const useDash = this._useDash;
 		const useWorldUnits = this._useWorldUnits;
 
-		const trimSegment = Fn( ( { start, end } ) => {
+		const trimSegmentAlpha = Fn( ( { start, end } ) => {
 
 			const a = cameraProjectionMatrix.element( 2 ).element( 2 ); // 3nd entry in 3th column
 			const b = cameraProjectionMatrix.element( 3 ).element( 2 ); // 3nd entry in 4th column
@@ -22280,13 +22298,11 @@ class Line2NodeMaterial extends NodeMaterial {
 
 			const nearEstimate = a.greaterThan( 0 ).select( b.negate().div( a.add( 1 ) ), b.mul( -0.5 ).div( a ) );
 
-			const alpha = nearEstimate.sub( start.z ).div( end.z.sub( start.z ) );
-
-			return vec4( mix( start.xyz, end.xyz, alpha ), end.w );
+			return nearEstimate.sub( start.z ).div( end.z.sub( start.z ) );
 
 		} ).setLayout( {
-			name: 'trimSegment',
-			type: 'vec4',
+			name: 'trimSegmentAlpha',
+			type: 'float',
 			inputs: [
 				{ name: 'start', type: 'vec4' },
 				{ name: 'end', type: 'vec4' }
@@ -22303,18 +22319,12 @@ class Line2NodeMaterial extends NodeMaterial {
 			const start = vec4( modelViewMatrix.mul( vec4( instanceStart, 1.0 ) ) ).toVar( 'start' );
 			const end = vec4( modelViewMatrix.mul( vec4( instanceEnd, 1.0 ) ) ).toVar( 'end' );
 
+			let distanceStart, distanceEnd;
+
 			if ( useDash ) {
 
-				const dashScaleNode = this.dashScaleNode ? float( this.dashScaleNode ) : materialLineScale;
-				const offsetNode = this.offsetNode ? float( this.offsetNode ) : materialLineDashOffset;
-
-				const instanceDistanceStart = attribute( 'instanceDistanceStart' );
-				const instanceDistanceEnd = attribute( 'instanceDistanceEnd' );
-
-				let lineDistance = positionGeometry.y.lessThan( 0.5 ).select( dashScaleNode.mul( instanceDistanceStart ), dashScaleNode.mul( instanceDistanceEnd ) );
-				lineDistance = lineDistance.add( offsetNode );
-
-				varyingProperty( 'float', 'lineDistance' ).assign( lineDistance );
+				distanceStart = float( attribute( 'instanceDistanceStart' ) ).toVar( 'distanceStart' );
+				distanceEnd = float( attribute( 'instanceDistanceEnd' ) ).toVar( 'distanceEnd' );
 
 			}
 
@@ -22338,15 +22348,41 @@ class Line2NodeMaterial extends NodeMaterial {
 
 				If( start.z.lessThan( 0.0 ).and( end.z.greaterThan( 0.0 ) ), () => {
 
-					end.assign( trimSegment( { start: start, end: end } ) );
+					const alpha = trimSegmentAlpha( { start: start, end: end } );
+					end.assign( vec4( mix( start.xyz, end.xyz, alpha ), end.w ) );
+
+					if ( useDash ) {
+
+						distanceEnd.assign( mix( distanceStart, distanceEnd, alpha ) );
+
+					}
 
 				} ).ElseIf( end.z.lessThan( 0.0 ).and( start.z.greaterThanEqual( 0.0 ) ), () => {
 
-					start.assign( trimSegment( { start: end, end: start } ) );
+					const alpha = trimSegmentAlpha( { start: end, end: start } );
+					start.assign( vec4( mix( end.xyz, start.xyz, alpha ), start.w ) );
+
+					if ( useDash ) {
+
+						distanceStart.assign( mix( distanceEnd, distanceStart, alpha ) );
+
+					}
 
 			 	} );
 
 			} );
+
+			if ( useDash ) {
+
+				const dashScaleNode = this.dashScaleNode ? float( this.dashScaleNode ) : materialLineScale;
+				const offsetNode = this.offsetNode ? float( this.offsetNode ) : materialLineDashOffset;
+
+				let lineDistance = positionGeometry.y.lessThan( 0.5 ).select( dashScaleNode.mul( distanceStart ), dashScaleNode.mul( distanceEnd ) );
+				lineDistance = lineDistance.add( offsetNode );
+
+				varyingProperty( 'float', 'lineDistance' ).assign( lineDistance );
+
+			}
 
 			// clip space
 			const clipStart = cameraProjectionMatrix.mul( start );
@@ -22474,6 +22510,15 @@ class Line2NodeMaterial extends NodeMaterial {
 
 			return vec2( mua, mub );
 
+		} ).setLayout( {
+			name: 'closestLineToLine',
+			type: 'vec2',
+			inputs: [
+				{ name: 'p1', type: 'vec3' },
+				{ name: 'p2', type: 'vec3' },
+				{ name: 'p3', type: 'vec3' },
+				{ name: 'p4', type: 'vec3' }
+			]
 		} );
 
 		this.colorNode = Fn( () => {
@@ -25789,15 +25834,7 @@ class PMREMGenerator {
 
 		if ( this._hasInitialized === false ) {
 
-			warn( 'PMREMGenerator: ".fromScene()" called before the backend is initialized. Try using "await renderer.init()" instead.' );
-
-			const cubeUVRenderTarget = renderTarget || this._allocateTarget();
-
-			options.renderTarget = cubeUVRenderTarget;
-
-			this.fromSceneAsync( scene, sigma, near, far, options );
-
-			return cubeUVRenderTarget;
+			throw new Error( 'THREE.PMREMGenerator: .fromScene() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -25805,8 +25842,7 @@ class PMREMGenerator {
 		_oldActiveCubeFace = this._renderer.getActiveCubeFace();
 		_oldActiveMipmapLevel = this._renderer.getActiveMipmapLevel();
 
-		const cubeUVRenderTarget = renderTarget || this._allocateTarget();
-		cubeUVRenderTarget.depthBuffer = true;
+		const cubeUVRenderTarget = renderTarget || this._allocateTarget( true );
 
 		this._init( cubeUVRenderTarget );
 
@@ -25870,15 +25906,7 @@ class PMREMGenerator {
 
 		if ( this._hasInitialized === false ) {
 
-			warn( 'PMREMGenerator: .fromEquirectangular() called before the backend is initialized. Try using "await renderer.init()" instead.' );
-
-			this._setSizeFromTexture( equirectangular );
-
-			const cubeUVRenderTarget = renderTarget || this._allocateTarget();
-
-			this.fromEquirectangularAsync( equirectangular, cubeUVRenderTarget );
-
-			return cubeUVRenderTarget;
+			throw new Error( 'THREE.PMREMGenerator: .fromEquirectangular() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -25922,15 +25950,7 @@ class PMREMGenerator {
 
 		if ( this._hasInitialized === false ) {
 
-			warn( 'PMREMGenerator: .fromCubemap() called before the backend is initialized. Try using .fromCubemapAsync() instead.' );
-
-			this._setSizeFromTexture( cubemap );
-
-			const cubeUVRenderTarget = renderTarget || this._allocateTarget();
-
-			this.fromCubemapAsync( cubemap, renderTarget );
-
-			return cubeUVRenderTarget;
+			throw new Error( 'THREE.PMREMGenerator: .fromCubemap() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -26067,7 +26087,7 @@ class PMREMGenerator {
 		_oldActiveCubeFace = this._renderer.getActiveCubeFace();
 		_oldActiveMipmapLevel = this._renderer.getActiveMipmapLevel();
 
-		const cubeUVRenderTarget = renderTarget || this._allocateTarget();
+		const cubeUVRenderTarget = renderTarget || this._allocateTarget( false );
 		this._init( cubeUVRenderTarget );
 		this._textureToCubeUV( texture, cubeUVRenderTarget );
 		this._applyPMREM( cubeUVRenderTarget );
@@ -26077,12 +26097,12 @@ class PMREMGenerator {
 
 	}
 
-	_allocateTarget() {
+	_allocateTarget( depthBuffer ) {
 
 		const width = 3 * Math.max( this._cubeSize, 16 * 7 );
 		const height = 4 * this._cubeSize;
 
-		const cubeUVRenderTarget = _createRenderTarget( width, height );
+		const cubeUVRenderTarget = _createRenderTarget( width, height, depthBuffer );
 
 		return cubeUVRenderTarget;
 
@@ -26564,7 +26584,7 @@ function _createPlanes( lodMax ) {
 
 }
 
-function _createRenderTarget( width, height ) {
+function _createRenderTarget( width, height, depthBuffer ) {
 
 	const params = {
 		magFilter: LinearFilter,
@@ -26573,7 +26593,7 @@ function _createRenderTarget( width, height ) {
 		type: HalfFloatType,
 		format: RGBAFormat,
 		colorSpace: LinearSRGBColorSpace,
-		//depthBuffer: false
+		depthBuffer
 	};
 
 	const cubeUVRenderTarget = new RenderTarget( width, height, params );
@@ -36640,7 +36660,7 @@ class FunctionOverloadingNode extends Node {
 
 				if ( layout === null ) {
 
-					throw new Error( 'FunctionOverloadingNode: FunctionNode must be a layout.' );
+					throw new Error( 'THREE.FunctionOverloadingNode: FunctionNode must be a layout.' );
 
 				}
 
@@ -37796,14 +37816,6 @@ class RTTNode extends TextureNode {
 		this.height = height;
 
 		/**
-		 * The pixel ratio
-		 *
-		 * @type {number}
-		 * @default 1
-		 */
-		this.pixelRatio = 1;
-
-		/**
 		 * The render target
 		 *
 		 * @type {RenderTarget}
@@ -37825,6 +37837,15 @@ class RTTNode extends TextureNode {
 		 * @default true
 		 */
 		this.autoUpdate = true;
+
+		/**
+		 * The resolution scale
+		 *
+		 * @private
+		 * @type {number}
+		 * @default 1
+		 */
+		this._resolutionScale = 1;
 
 		/**
 		 * The node which is used with the quad mesh for RTT.
@@ -37885,11 +37906,8 @@ class RTTNode extends TextureNode {
 	 */
 	setSize( width, height ) {
 
-		this.width = width;
-		this.height = height;
-
-		const effectiveWidth = width * this.pixelRatio;
-		const effectiveHeight = height * this.pixelRatio;
+		const effectiveWidth = Math.floor( width * this._resolutionScale );
+		const effectiveHeight = Math.floor( height * this._resolutionScale );
 
 		this.renderTarget.setSize( effectiveWidth, effectiveHeight );
 
@@ -37898,15 +37916,34 @@ class RTTNode extends TextureNode {
 	}
 
 	/**
-	 * Sets the pixel ratio. This will also resize the render target.
+	 * Sets the resolution scale.
+	 * The resolution scale is a factor that is multiplied with the renderer's width and height.
 	 *
-	 * @param {number} pixelRatio - The pixel ratio to set.
+	 * @param {number} resolutionScale - The resolution scale to set. A value of `1` means full resolution.
+	 * @returns {RTTNode} A reference to this node.
 	 */
-	setPixelRatio( pixelRatio ) {
+	setResolutionScale( resolutionScale ) {
 
-		this.pixelRatio = pixelRatio;
+		this._resolutionScale = resolutionScale;
 
-		this.setSize( this.width, this.height );
+		if ( this.autoResize === false ) {
+
+			this.setSize( this.width, this.height );
+
+		}
+
+		return this;
+
+	}
+
+	/**
+	 * Gets the resolution scale.
+	 *
+	 * @returns {number} The resolution scale.
+	 */
+	getResolutionScale() {
+
+		return this._resolutionScale;
 
 	}
 
@@ -37918,13 +37955,14 @@ class RTTNode extends TextureNode {
 
 		//
 
+		const currentRenderTarget = renderer.getRenderTarget();
+
 		if ( this.autoResize === true ) {
 
-			const pixelRatio = renderer.getPixelRatio();
-			const size = renderer.getSize( _size$1 );
+			const size = renderer.getDrawingBufferSize( _size$1 );
 
-			const effectiveWidth = Math.floor( size.width * pixelRatio );
-			const effectiveHeight = Math.floor( size.height * pixelRatio );
+			const effectiveWidth = Math.floor( size.width * this._resolutionScale );
+			const effectiveHeight = Math.floor( size.height * this._resolutionScale );
 
 			if ( effectiveWidth !== this.renderTarget.width || effectiveHeight !== this.renderTarget.height ) {
 
@@ -37951,8 +37989,6 @@ class RTTNode extends TextureNode {
 		this._quadMesh.name = name;
 
 		//
-
-		const currentRenderTarget = renderer.getRenderTarget();
 
 		renderer.setRenderTarget( this.renderTarget );
 
@@ -39991,15 +40027,6 @@ class PassNode extends TempNode {
 		this.options = options;
 
 		/**
-		 * The pass's pixel ratio. Will be kept automatically kept in sync with the renderer's pixel ratio.
-		 *
-		 * @private
-		 * @type {number}
-		 * @default 1
-		 */
-		this._pixelRatio = 1;
-
-		/**
 		 * The pass's pixel width. Will be kept automatically kept in sync with the renderer's width.
 		 * @private
 		 * @type {number}
@@ -40015,7 +40042,7 @@ class PassNode extends TempNode {
 		 */
 		this._height = 1;
 
-		const renderTarget = new RenderTarget( this._width * this._pixelRatio, this._height * this._pixelRatio, { type: HalfFloatType, ...options, } );
+		const renderTarget = new RenderTarget( this._width, this._height, { type: HalfFloatType, ...options, } );
 		renderTarget.texture.name = 'output';
 
 		let depthTexture = null;
@@ -40555,13 +40582,11 @@ class PassNode extends TempNode {
 		const { scene } = this;
 
 		let camera;
-		let pixelRatio;
 
 		const outputRenderTarget = renderer.getOutputRenderTarget();
 
 		if ( outputRenderTarget && outputRenderTarget.isXRRenderTarget === true ) {
 
-			pixelRatio = 1;
 			camera = renderer.xr.getCamera();
 
 			renderer.xr.updateCamera( camera );
@@ -40571,13 +40596,10 @@ class PassNode extends TempNode {
 		} else {
 
 			camera = this.camera;
-			pixelRatio = renderer.getPixelRatio();
 
-			renderer.getSize( _size );
+			renderer.getDrawingBufferSize( _size );
 
 		}
-
-		this._pixelRatio = pixelRatio;
 
 		this.setSize( _size.width, _size.height );
 
@@ -40663,8 +40685,8 @@ class PassNode extends TempNode {
 		this._width = width;
 		this._height = height;
 
-		const effectiveWidth = Math.floor( this._width * this._pixelRatio * this._resolutionScale );
-		const effectiveHeight = Math.floor( this._height * this._pixelRatio * this._resolutionScale );
+		const effectiveWidth = Math.floor( this._width * this._resolutionScale );
+		const effectiveHeight = Math.floor( this._height * this._resolutionScale );
 
 		this.renderTarget.setSize( effectiveWidth, effectiveHeight );
 
@@ -40672,7 +40694,7 @@ class PassNode extends TempNode {
 
 		if ( this._scissor !== null ) {
 
-			this.renderTarget.scissor.copy( this._scissor ).multiplyScalar( this._pixelRatio * this._resolutionScale ).floor();
+			this.renderTarget.scissor.copy( this._scissor ).multiplyScalar( this._resolutionScale ).floor();
 			this.renderTarget.scissorTest = true;
 
 		} else {
@@ -40685,7 +40707,7 @@ class PassNode extends TempNode {
 
 		if ( this._viewport !== null ) {
 
-			this.renderTarget.viewport.copy( this._viewport ).multiplyScalar( this._pixelRatio * this._resolutionScale ).floor();
+			this.renderTarget.viewport.copy( this._viewport ).multiplyScalar( this._resolutionScale ).floor();
 
 		}
 
@@ -40757,19 +40779,6 @@ class PassNode extends TempNode {
 			}
 
 		}
-
-	}
-
-	/**
-	 * Sets the pixel ratio the pass's render target and updates the size.
-	 *
-	 * @param {number} pixelRatio - The pixel ratio to set.
-	 */
-	setPixelRatio( pixelRatio ) {
-
-		this._pixelRatio = pixelRatio;
-
-		this.setSize( this._width, this._height );
 
 	}
 
@@ -50867,7 +50876,7 @@ class NodeBuilder {
 
 		if ( lastChain !== node ) {
 
-			throw new Error( 'NodeBuilder: Invalid node chaining!' );
+			throw new Error( 'THREE.NodeBuilder: Invalid node chaining!' );
 
 		}
 
@@ -51298,7 +51307,7 @@ class NodeBuilder {
 
 		}
 
-		throw new Error( `NodeBuilder: Type '${type}' not found in generate constant attempt.` );
+		throw new Error( `THREE.NodeBuilder: Type '${type}' not found in generate constant attempt.` );
 
 	}
 
@@ -51665,7 +51674,7 @@ class NodeBuilder {
 
 		} else {
 
-			throw new Error( 'NodeBuilder: Invalid active stack removal.' );
+			throw new Error( 'THREE.NodeBuilder: Invalid active stack removal.' );
 
 		}
 
@@ -53157,7 +53166,7 @@ class NodeBuilder {
 			else if ( type === 'mat4' ) node = new Matrix4NodeUniform( uniformNode );
 			else {
 
-				throw new Error( `Uniform "${ type }" not implemented.` );
+				throw new Error( `THREE.NodeBuilder: Uniform "${ type }" not implemented.` );
 
 			}
 
@@ -54496,7 +54505,7 @@ const parse$1 = ( source ) => {
 
 	} else {
 
-		throw new Error( 'FunctionNode: Function is not a GLSL code.' );
+		throw new Error( 'THREE.FunctionNode: Function is not a GLSL code.' );
 
 	}
 
@@ -56106,8 +56115,8 @@ class NodeLibrary {
 
 		}
 
-		if ( typeof nodeClass !== 'function' ) throw new Error( `Node class ${ nodeClass.name } is not a class.` );
-		if ( typeof type === 'function' || typeof type === 'object' ) throw new Error( `Base class ${ type } is not a class.` );
+		if ( typeof nodeClass !== 'function' ) throw new Error( `THREE.NodeLibrary: Node class ${ nodeClass.name } is not a class.` );
+		if ( typeof type === 'function' || typeof type === 'object' ) throw new Error( `THREE.NodeLibrary: Base class ${ type } is not a class.` );
 
 		library.set( type, nodeClass );
 
@@ -56129,8 +56138,8 @@ class NodeLibrary {
 
 		}
 
-		if ( typeof nodeClass !== 'function' ) throw new Error( `Node class ${ nodeClass.name } is not a class.` );
-		if ( typeof baseClass !== 'function' ) throw new Error( `Base class ${ baseClass.name } is not a class.` );
+		if ( typeof nodeClass !== 'function' ) throw new Error( `THREE.NodeLibrary: Node class ${ nodeClass.name } is not a class.` );
+		if ( typeof baseClass !== 'function' ) throw new Error( `THREE.NodeLibrary: Base class ${ baseClass.name } is not a class.` );
 
 		library.set( baseClass, nodeClass );
 
@@ -59882,7 +59891,7 @@ class Renderer {
 
 		if ( this._initialized === false ) {
 
-			throw new Error( 'Renderer: .render() called before the backend is initialized. Use "await renderer.init();" before rendering.' );
+			throw new Error( 'THREE.Renderer: .render() called before the backend is initialized. Use "await renderer.init();" before rendering.' );
 
 		}
 
@@ -60888,7 +60897,7 @@ class Renderer {
 
 		if ( this._initialized === false ) {
 
-			throw new Error( 'Renderer: .clear() called before the backend is initialized. Use "await renderer.init();" before before using this method.' );
+			throw new Error( 'THREE.Renderer: .clear() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -61461,7 +61470,7 @@ class Renderer {
 
 		if ( this._initialized === false ) {
 
-			throw new Error( 'Renderer: .hasFeature() called before the backend is initialized. Use "await renderer.init();" before before using this method.' );
+			throw new Error( 'THREE.Renderer: .hasFeature() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -61511,7 +61520,7 @@ class Renderer {
 
 		if ( this._initialized === false ) {
 
-			throw new Error( 'Renderer: .initTexture() called before the backend is initialized. Use "await renderer.init();" before before using this method.' );
+			throw new Error( 'THREE.Renderer: .initTexture() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -61528,7 +61537,7 @@ class Renderer {
 
 		if ( this._initialized === false ) {
 
-			throw new Error( 'Renderer: .initRenderTarget() called before the backend is initialized. Use "await renderer.init();" before before using this method.' );
+			throw new Error( 'THREE.Renderer: .initRenderTarget() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -62111,7 +62120,7 @@ class Renderer {
 
 		if ( this._initialized === false ) {
 
-			throw new Error( 'Renderer: .hasCompatibility() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
+			throw new Error( 'THREE.Renderer: .hasCompatibility() called before the backend is initialized. Use "await renderer.init();" before using this method.' );
 
 		}
 
@@ -66421,7 +66430,7 @@ class WebGLAttributeUtils {
 
 			if ( target._mapped === true ) {
 
-				throw new Error( 'WebGPURenderer: ReadbackBuffer must be released before being used again.' );
+				throw new Error( 'THREE.WebGPURenderer: ReadbackBuffer must be released before being used again.' );
 
 			}
 
@@ -69404,7 +69413,7 @@ class WebGLTextureUtils {
 		if ( glType === gl.HALF_FLOAT ) return Uint16Array;
 		if ( glType === gl.FLOAT ) return Float32Array;
 
-		throw new Error( `Unsupported WebGL type: ${glType}` );
+		throw new Error( `THREE.WebGLTextureUtils: Unsupported WebGL type: ${glType}` );
 
 	}
 
@@ -73838,7 +73847,7 @@ class WebGPUUtils {
 
 		} else {
 
-			throw new Error( 'Unsupported output buffer type.' );
+			throw new Error( 'THREE.WebGPUUtils: Unsupported output buffer type.' );
 
 		}
 
@@ -75701,7 +75710,7 @@ class WebGPUTextureUtils {
 
 			}
 
-			throw new Error( 'WebGPUTextureUtils: Texture already initialized.' );
+			throw new Error( 'THREE.WebGPUTextureUtils: Texture already initialized.' );
 
 		}
 
@@ -77334,7 +77343,7 @@ const parse = ( source ) => {
 
 	} else {
 
-		throw new Error( 'FunctionNode: Function is not a WGSL code.' );
+		throw new Error( 'THREE.WGSLNodeFunction: Function is not a WGSL code.' );
 
 	}
 
@@ -80321,7 +80330,7 @@ class WebGPUAttributeUtils {
 
 			if ( target._mapped === true ) {
 
-				throw new Error( 'WebGPURenderer: ReadbackBuffer must be released before being used again.' );
+				throw new Error( 'THREE.WebGPUAttributeUtils: ReadbackBuffer must be released before being used again.' );
 
 			}
 
@@ -82915,7 +82924,7 @@ class WebGPUBackend extends Backend {
 
 			if ( adapter === null ) {
 
-				throw new Error( 'WebGPUBackend: Unable to create WebGPU adapter.' );
+				throw new Error( 'THREE.WebGPUBackend: Unable to create WebGPU adapter.' );
 
 			}
 
