@@ -67,7 +67,7 @@
 				materialType: 'standard',
 				probeIntensity: 1,
 				probeHelperIntensity: 1,
-				band1Intensity: 1,
+				band1Intensity: 0.6,
 				band2Intensity: 0.55,
 				normalBias: 0.5,
 				viewBias: 0,
@@ -392,11 +392,15 @@
 
 				const currentDirectShadowAutoUpdate = directLight.shadow.autoUpdate;
 				const currentDirectCastShadow = directLight.castShadow;
+				const currentDirectLightIntensity = directLight.intensity;
+				const currentAmbientLightIntensity = ambientLight.intensity;
+				const currentLightPanelVisible = lightPanel.visible;
 
 				try {
 
-					directLight.intensity = directLightIntensity;
+					directLight.intensity = bakeOptions.disableDirectLightDuringBake === true ? 0 : directLightIntensity;
 					if ( bakeOptions.disableShadowsDuringBake === true ) directLight.castShadow = false;
+					if ( bakeOptions.hideLightPanelDuringBake === true ) lightPanel.visible = false;
 					directLight.shadow.autoUpdate = false;
 					directLight.shadow.needsUpdate = true;
 					ambientLight.intensity = ambientLightIntensity;
@@ -420,6 +424,9 @@
 
 					directLight.castShadow = currentDirectCastShadow;
 					directLight.shadow.autoUpdate = currentDirectShadowAutoUpdate;
+					directLight.intensity = currentDirectLightIntensity;
+					ambientLight.intensity = currentAmbientLightIntensity;
+					lightPanel.visible = currentLightPanelVisible;
 					applyLightingMode();
 					probeHelper.visible = params.probeHelper;
 					baking = false;
@@ -1334,7 +1341,15 @@
 						{ label: 'cubemap-32-shadows-on', cubemapSize: 32, shadowsDisabledDuringBake: false },
 						{ label: 'cubemap-8-shadows-off', cubemapSize: 8, shadowsDisabledDuringBake: true },
 						{ label: 'cubemap-16-shadows-off', cubemapSize: 16, shadowsDisabledDuringBake: true },
-						{ label: 'cubemap-32-shadows-off', cubemapSize: 32, shadowsDisabledDuringBake: true }
+						{ label: 'cubemap-32-shadows-off', cubemapSize: 32, shadowsDisabledDuringBake: true },
+						{ label: 'cubemap-16-direct-off', cubemapSize: 16, directLightDisabledDuringBake: true },
+						{ label: 'cubemap-16-panel-hidden', cubemapSize: 16, lightPanelHiddenDuringBake: true },
+						{ label: 'cubemap-16-l0-only', cubemapSize: 16, band1Intensity: 0, band2Intensity: 0 },
+						{ label: 'cubemap-16-l0-l1', cubemapSize: 16, band1Intensity: 1, band2Intensity: 0 },
+						{ label: 'cubemap-32-l0-only', cubemapSize: 32, band1Intensity: 0, band2Intensity: 0 },
+						{ label: 'cubemap-32-l0-l1', cubemapSize: 32, band1Intensity: 1, band2Intensity: 0 },
+						{ label: 'cubemap-16-band1-0.6', cubemapSize: 16, band1Intensity: 0.6, band2Intensity: 0.55 },
+						{ label: 'cubemap-32-band1-0.6', cubemapSize: 32, band1Intensity: 0.6, band2Intensity: 0.55 }
 					];
 
 					const restoreState = async () => {
@@ -1369,8 +1384,8 @@
 							params.resolution = 4;
 							params.cubemapSize = regionCase.cubemapSize;
 							params.projectionPrecision = 'half float';
-							params.band1Intensity = 1;
-							params.band2Intensity = 0.55;
+							params.band1Intensity = regionCase.band1Intensity ?? 1;
+							params.band2Intensity = regionCase.band2Intensity ?? 0.55;
 							params.normalBias = 0.5;
 							params.viewBias = 0;
 							params.leakReductionMode = 'off';
@@ -1388,7 +1403,11 @@
 							await recreateAndBakeRequired(
 								`region matrix ${ regionCase.label }`,
 								false,
-								{ disableShadowsDuringBake: regionCase.shadowsDisabledDuringBake }
+								{
+									disableShadowsDuringBake: regionCase.shadowsDisabledDuringBake,
+									disableDirectLightDuringBake: regionCase.directLightDisabledDuringBake,
+									hideLightPanelDuringBake: regionCase.lightPanelHiddenDuringBake
+								}
 							);
 
 							const colorSanity = await captureColorSanity();
@@ -1406,7 +1425,9 @@
 								normalBias: params.normalBias,
 								viewBias: params.viewBias,
 								leakReductionMode: params.leakReductionMode,
-								shadowsDisabledDuringBake: regionCase.shadowsDisabledDuringBake,
+								shadowsDisabledDuringBake: regionCase.shadowsDisabledDuringBake === true,
+								directLightDisabledDuringBake: regionCase.directLightDisabledDuringBake === true,
+								lightPanelHiddenDuringBake: regionCase.lightPanelHiddenDuringBake === true,
 								lightingMode: params.lightingMode,
 								materialType: params.materialType,
 								precision: probeGrid.getPrecisionInfo( renderer ),
@@ -1448,6 +1469,26 @@
 								darkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-shadows-off', maxDarkPixelRatio ),
 								darkPixelRatioDelta32: delta( 'cubemap-32-shadows-on', 'cubemap-32-shadows-off', maxDarkPixelRatio ),
 								minP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-shadows-off', minP05 )
+							},
+							energy: {
+								directOffDarkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-direct-off', maxDarkPixelRatio ),
+								panelHiddenDarkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-panel-hidden', maxDarkPixelRatio ),
+								directOffMinP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-direct-off', minP05 ),
+								panelHiddenMinP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-panel-hidden', minP05 )
+							},
+							band: {
+								l0ToL1DarkPixelRatioDelta16: delta( 'cubemap-16-l0-only', 'cubemap-16-l0-l1', maxDarkPixelRatio ),
+								l1ToL2DarkPixelRatioDelta16: delta( 'cubemap-16-l0-l1', 'cubemap-16-shadows-on', maxDarkPixelRatio ),
+								l0ToL1DarkPixelRatioDelta32: delta( 'cubemap-32-l0-only', 'cubemap-32-l0-l1', maxDarkPixelRatio ),
+								l1ToL2DarkPixelRatioDelta32: delta( 'cubemap-32-l0-l1', 'cubemap-32-shadows-on', maxDarkPixelRatio ),
+								l0ToL1MinP05Delta16: delta( 'cubemap-16-l0-only', 'cubemap-16-l0-l1', minP05 ),
+								l1ToL2MinP05Delta16: delta( 'cubemap-16-l0-l1', 'cubemap-16-shadows-on', minP05 )
+							},
+							damping: {
+								band1DampedDarkPixelRatioDelta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-band1-0.6', maxDarkPixelRatio ),
+								band1DampedDarkPixelRatioDelta32: delta( 'cubemap-32-shadows-on', 'cubemap-32-band1-0.6', maxDarkPixelRatio ),
+								band1DampedMinP05Delta16: delta( 'cubemap-16-shadows-on', 'cubemap-16-band1-0.6', minP05 ),
+								band1DampedMinP05Delta32: delta( 'cubemap-32-shadows-on', 'cubemap-32-band1-0.6', minP05 )
 							}
 						},
 						restored: window.__webgpuLightProbeGridCornell.getMetrics()

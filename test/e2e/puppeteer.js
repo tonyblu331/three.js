@@ -743,6 +743,7 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			/const band2Intensity = this\.band2Intensity/.test( source ) &&
 			/c4\.mul[\s\S]*band2Intensity/.test( source ) &&
 			/c8\.mul[\s\S]*band2Intensity/.test( source ) &&
+			/probeHelperIntensity: 1,\s+band1Intensity: 0\.6,\s+band2Intensity: 0\.55/.test( example ) &&
 			example.includes( 'band2Intensity: 0.55' ),
 		'Probe irradiance must expose diagnostic band-1 and band-2 controls so SH ringing can be isolated from probe blending.'
 	);
@@ -763,6 +764,13 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'runProbeArtifactRegionMatrix' ) &&
 			example.includes( 'darkPixelRatio' ) &&
 			example.includes( 'shadows-off' ) &&
+			example.includes( 'direct-off' ) &&
+			example.includes( 'panel-hidden' ) &&
+			example.includes( 'cubemap-16-l0-only' ) &&
+			example.includes( 'cubemap-16-l0-l1' ) &&
+			example.includes( 'cubemap-16-band1-0.6' ) &&
+			example.includes( 'disableDirectLightDuringBake' ) &&
+			example.includes( 'hideLightPanelDuringBake' ) &&
 			example.includes( 'ceilingEmitter' ) &&
 			example.includes( 'cellEdgeContrast' ) &&
 			example.includes( 'runProbeDiagnosticMatrix' ) &&
@@ -1136,8 +1144,8 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	results.push( { step: 'artifact matrix', artifactMatrix } );
 
 	const regionMatrix = await call( 'runProbeArtifactRegionMatrix' );
-	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 6,
-		'region matrix: expected bounded cubemap and shadow diagnostic rows.' );
+	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 14,
+		'region matrix: expected bounded cubemap, shadow, direct-light, and panel diagnostic rows.' );
 
 	const regionRows = new Map( regionMatrix.rows.map( row => [ row.label, row ] ) );
 	const regionBaseline = regionRows.get( 'cubemap-8-shadows-on' );
@@ -1146,14 +1154,30 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	const regionShadowless8 = regionRows.get( 'cubemap-8-shadows-off' );
 	const regionShadowless16 = regionRows.get( 'cubemap-16-shadows-off' );
 	const regionShadowless32 = regionRows.get( 'cubemap-32-shadows-off' );
+	const regionDirectOff16 = regionRows.get( 'cubemap-16-direct-off' );
+	const regionPanelHidden16 = regionRows.get( 'cubemap-16-panel-hidden' );
+	const regionL016 = regionRows.get( 'cubemap-16-l0-only' );
+	const regionL0L116 = regionRows.get( 'cubemap-16-l0-l1' );
+	const regionL032 = regionRows.get( 'cubemap-32-l0-only' );
+	const regionL0L132 = regionRows.get( 'cubemap-32-l0-l1' );
+	const regionBand1Damped16 = regionRows.get( 'cubemap-16-band1-0.6' );
+	const regionBand1Damped32 = regionRows.get( 'cubemap-32-band1-0.6' );
 
 	assert( regionBaseline !== undefined &&
 		regionCubemap16 !== undefined &&
 		regionCubemap32 !== undefined &&
 		regionShadowless8 !== undefined &&
 		regionShadowless16 !== undefined &&
-		regionShadowless32 !== undefined,
-	'region matrix: expected cubemap 8/16/32 rows with shadows on and off.' );
+		regionShadowless32 !== undefined &&
+		regionDirectOff16 !== undefined &&
+		regionPanelHidden16 !== undefined &&
+		regionL016 !== undefined &&
+		regionL0L116 !== undefined &&
+		regionL032 !== undefined &&
+		regionL0L132 !== undefined &&
+		regionBand1Damped16 !== undefined &&
+		regionBand1Damped32 !== undefined,
+	'region matrix: expected cubemap, shadow, direct-light, panel, and regional SH-band diagnostic rows.' );
 
 	for ( const row of regionMatrix.rows ) {
 
@@ -1183,13 +1207,30 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		regionShadowless16.shadowsDisabledDuringBake === true &&
 		regionShadowless32.shadowsDisabledDuringBake === true,
 	'region matrix: expected shadowless rows to mark bake-time shadow suppression.' );
+	assert( regionDirectOff16.directLightDisabledDuringBake === true,
+		'region matrix: expected direct-light suppression row.' );
+	assert( regionPanelHidden16.lightPanelHiddenDuringBake === true,
+		'region matrix: expected visible panel suppression row.' );
+	assert( regionL016.band1Intensity === 0 && regionL016.band2Intensity === 0,
+		'region matrix: expected cubemap-16 L0-only row.' );
+	assert( regionL0L116.band1Intensity === 1 && regionL0L116.band2Intensity === 0,
+		'region matrix: expected cubemap-16 L0+L1 row.' );
+	assert( regionBand1Damped16.band1Intensity === 0.6 && regionBand1Damped16.band2Intensity === 0.55,
+		'region matrix: expected cubemap-16 damped-band1 row.' );
 	assert( regionMatrix.restored.lightingMode === 'direct + probes',
 		'region matrix: expected lighting mode restoration.' );
 	assert( regionMatrix.restored.sampling.leakReductionMode === 'off',
 		'region matrix: expected leak reduction restoration.' );
 	assert( Number.isFinite( regionMatrix.comparisons.cubemap.darkPixelRatioDelta16 ) &&
-		Number.isFinite( regionMatrix.comparisons.shadow.darkPixelRatioDelta16 ),
-	'region matrix: expected finite cubemap and shadow deltas.' );
+		Number.isFinite( regionMatrix.comparisons.shadow.darkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.energy.directOffDarkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.energy.panelHiddenDarkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.band.l0ToL1DarkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.band.l1ToL2DarkPixelRatioDelta16 ),
+	'region matrix: expected finite cubemap, shadow, energy-source, and regional SH-band deltas.' );
+	assert( Number.isFinite( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta32 ),
+	'region matrix: expected finite damped-band1 deltas.' );
 	results.push( { step: 'region artifact matrix', regionMatrix } );
 
 	await startOperation( 'setLeakReductionMode', 'off' );
