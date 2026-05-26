@@ -1231,6 +1231,151 @@
 
 				};
 
+				const evaluateIrradianceContract = ( coefficients, normal, options = {} ) => {
+
+					const band1Intensity = options.band1Intensity ?? 1;
+					const band2Intensity = options.band2Intensity ?? 1;
+					const clampNegative = options.clampNegative === true;
+					const x = normal.x;
+					const y = normal.y;
+					const z = normal.z;
+					const result = { r: 0, g: 0, b: 0 };
+					const add = ( coefficient, scale ) => {
+
+						result.r += coefficient.r * scale;
+						result.g += coefficient.g * scale;
+						result.b += coefficient.b * scale;
+
+					};
+
+					add( coefficients[ 0 ], 0.886227 );
+					add( coefficients[ 1 ], 2.0 * 0.511664 * y * band1Intensity );
+					add( coefficients[ 2 ], 2.0 * 0.511664 * z * band1Intensity );
+					add( coefficients[ 3 ], 2.0 * 0.511664 * x * band1Intensity );
+					add( coefficients[ 4 ], 2.0 * 0.429043 * x * y * band2Intensity );
+					add( coefficients[ 5 ], 2.0 * 0.429043 * y * z * band2Intensity );
+					add( coefficients[ 6 ], ( 0.743125 * z * z - 0.247708 ) * band2Intensity );
+					add( coefficients[ 7 ], 2.0 * 0.429043 * x * z * band2Intensity );
+					add( coefficients[ 8 ], 0.429043 * ( x * x - y * y ) * band2Intensity );
+
+					if ( clampNegative ) {
+
+						result.r = Math.max( result.r, 0 );
+						result.g = Math.max( result.g, 0 );
+						result.b = Math.max( result.b, 0 );
+
+					}
+
+					return result;
+
+				};
+
+				const colorMaxDelta = ( a, b ) => Math.max(
+					Math.abs( a.r - b.r ),
+					Math.abs( a.g - b.g ),
+					Math.abs( a.b - b.b )
+				);
+
+				const roundContractMetric = ( value ) => Number( value.toFixed( 8 ) );
+
+				const inspectSHMathContract = () => {
+
+					const normals = {
+						positiveX: new THREE.Vector3( 1, 0, 0 ),
+						positiveY: new THREE.Vector3( 0, 1, 0 ),
+						positiveZ: new THREE.Vector3( 0, 0, 1 ),
+						negativeX: new THREE.Vector3( - 1, 0, 0 ),
+						negativeY: new THREE.Vector3( 0, - 1, 0 ),
+						negativeZ: new THREE.Vector3( 0, 0, - 1 )
+					};
+					const constantColor = { r: 0.7, g: 0.45, b: 0.25 };
+					const expectedConstantIrradiance = {
+						r: Math.PI * constantColor.r,
+						g: Math.PI * constantColor.g,
+						b: Math.PI * constantColor.b
+					};
+					const constantCoefficients = projectSyntheticCube( 'shader-webgpu', 'constant', 8 );
+					const directionCoefficients = projectSyntheticCube( 'shader-webgpu', 'direction-rgb', 16 );
+					const constantSamples = Object.entries( normals ).map( ( [ name, normal ] ) => {
+
+						const irradiance = evaluateIrradianceContract( constantCoefficients, normal, { clampNegative: true } );
+
+						return {
+							name,
+							irradiance: {
+								r: roundContractMetric( irradiance.r ),
+								g: roundContractMetric( irradiance.g ),
+								b: roundContractMetric( irradiance.b )
+							},
+							delta: roundContractMetric( colorMaxDelta( irradiance, expectedConstantIrradiance ) )
+						};
+
+					} );
+					const axisResponse = Object.fromEntries( Object.entries( normals ).map( ( [ name, normal ] ) => {
+
+						const irradiance = evaluateIrradianceContract( directionCoefficients, normal, { clampNegative: true } );
+
+						return [ name, {
+							r: roundContractMetric( irradiance.r ),
+							g: roundContractMetric( irradiance.g ),
+							b: roundContractMetric( irradiance.b )
+						} ];
+
+					} ) );
+					let threeJsIrradianceParity = { supported: false, maxDelta: null };
+
+					if ( typeof THREE.SphericalHarmonics3 === 'function' ) {
+
+						const sh = new THREE.SphericalHarmonics3();
+						for ( let i = 0; i < 9; i ++ ) {
+
+							sh.coefficients[ i ].set(
+								directionCoefficients[ i ].r,
+								directionCoefficients[ i ].g,
+								directionCoefficients[ i ].b
+							);
+
+						}
+
+						const target = new THREE.Vector3();
+						let maxDelta = 0;
+
+						for ( const normal of Object.values( normals ) ) {
+
+							sh.getIrradianceAt( normal, target );
+							const contract = evaluateIrradianceContract( directionCoefficients, normal, { clampNegative: false } );
+							maxDelta = Math.max( maxDelta, colorMaxDelta( contract, { r: target.x, g: target.y, b: target.z } ) );
+
+						}
+
+						threeJsIrradianceParity = { supported: true, maxDelta: roundContractMetric( maxDelta ) };
+
+					}
+
+					return {
+						basis: [ 'Y00', 'Y1-1:y', 'Y10:z', 'Y11:x', 'Y2-2:xy', 'Y2-1:yz', 'Y20:3z^2-1', 'Y21:xz', 'Y22:x^2-y^2' ],
+						projectionNormalization: 'radianceCoefficients = sum( radiance * Y_lm(direction) * solidAngleWeight ) * ( 4pi / sumWeights )',
+						irradianceConvolution: 'E(n) = L0 * 0.886227 + L1 * 2 * 0.511664 * n + L2 * {0.429043,0.743125,0.247708}; runtime clamps only after all bands are summed.',
+						constantRadiance: {
+							expected: {
+								r: roundContractMetric( expectedConstantIrradiance.r ),
+								g: roundContractMetric( expectedConstantIrradiance.g ),
+								b: roundContractMetric( expectedConstantIrradiance.b )
+							},
+							samples: constantSamples,
+							maxDelta: Math.max( ...constantSamples.map( sample => sample.delta ) )
+						},
+						axisResponse,
+						axisDominance: {
+							positiveXRedBeatsNegativeX: axisResponse.positiveX.r > axisResponse.negativeX.r,
+							positiveYGreenBeatsNegativeY: axisResponse.positiveY.g > axisResponse.negativeY.g,
+							positiveZBlueBeatsNegativeZ: axisResponse.positiveZ.b > axisResponse.negativeZ.b
+						},
+						threeJsIrradianceParity
+					};
+
+				};
+
 				const inspectProjectionParity = () => {
 
 					const fixtures = [ 'constant', 'six-face-colors', 'direction-rgb', 'positive-axis-lobes' ].map( ( fixture ) => {
@@ -2915,6 +3060,7 @@
 
 					},
 					inspectProjectionParity,
+					inspectSHMathContract,
 					inspectAtlasPacking,
 					inspectProbeOccupancy,
 					compareLeakReductionModes: async () => {

@@ -1098,6 +1098,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 	const artifactMatrix = getSmokeStep( smokeResults, 'artifact matrix' ).artifactMatrix;
 	const regionMatrix = getSmokeStep( smokeResults, 'region artifact matrix' ).regionMatrix;
 	const leakMatrix = getSmokeStep( smokeResults, 'leak matrix' ).leakMatrix;
+	const shMathContract = getSmokeStep( smokeResults, 'sh math contract' ).shMathContract;
 	const snapshotRows = new Map( snapshots.map( snapshot => [ snapshot.label, snapshot ] ) );
 	const densityReference = snapshotRows.get( 'webgpu-webgl-density-reference' );
 	const densityShadowless = snapshotRows.get( 'webgpu-webgl-density-shadowless' );
@@ -1196,6 +1197,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			leakComparisons: leakMatrix.comparisons,
 			densityArtifactStudy,
 			mathAndPipelineDecision,
+			shMathContract,
 			bakeTexelBudgets,
 			performanceEvidence,
 			webglReference,
@@ -1225,7 +1227,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			{ gate: 'Bake texel budget must report the 54x cubemap work multiplier for 6^3 / 32px versus 4^3 / 8px.', result: 'passed' },
 			{ gate: 'Weighted thin-wall rows must bound wrong-side color leak without erasing correct bounce.', result: 'passed' },
 			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' },
-			{ gate: 'WebGL same-class reference screenshot must be captured as secondary evidence, not substituted for WebGPU e2e gates.', result: 'passed' }
+			{ gate: 'WebGL same-class reference screenshot must be captured as secondary evidence, not substituted for WebGPU e2e gates.', result: 'passed' },
+			{ gate: 'SH projection/evaluation math must satisfy constant-radiance pi scaling and match THREE.SphericalHarmonics3 irradiance constants/order.', result: 'passed' }
 		],
 		uncertainties: [
 			{ status: 'OPEN', item: 'Screenshot-space RGB ratios are regression signals, not linear-radiance proof.' },
@@ -1236,7 +1239,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			{ status: 'OPEN', item: 'Current validity is heuristic occupancy metadata, not DDGI visibility/depth moments.' },
 			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved by occupancy validity; they need real visibility/depth moments or a separate visibility structure.' },
 			{ status: 'OPEN', item: 'No adaptive density, probe relocation, classification, dilation, or virtual-offset pipeline yet.' },
-			{ status: 'SUPPORTED', item: 'Actual WebGL LightProbeGrid 6^3 / 32px probes-only screenshot and screenshot-space metrics are captured as same-class secondary reference evidence.' }
+			{ status: 'SUPPORTED', item: 'Actual WebGL LightProbeGrid 6^3 / 32px probes-only screenshot and screenshot-space metrics are captured as same-class secondary reference evidence.' },
+			{ status: 'SUPPORTED', item: 'Synthetic SH math contract verifies constant radiance maps to pi-scaled irradiance, x/y/z signs are preserved, and runtime constants/order match THREE.SphericalHarmonics3.getIrradianceAt().' }
 		],
 		proofLadder: [
 			{ level: 'examples', evidence: 'low-res proof snapshots, region matrices, and controlled thin-wall leak rows' },
@@ -1701,6 +1705,16 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	);
 
 	requireSource(
+		example.includes( 'inspectSHMathContract' ) &&
+			example.includes( 'evaluateIrradianceContract' ) &&
+			example.includes( 'THREE.SphericalHarmonics3' ) &&
+			example.includes( 'constantRadiance' ) &&
+			example.includes( 'axisDominance' ) &&
+			example.includes( 'runtime clamps only after all bands are summed' ),
+		'Cornell harness must include an executable SH math contract for projection normalization, irradiance convolution, axis signs, and runtime clamp order.'
+	);
+
+	requireSource(
 		example.includes( 'inspectAtlasPacking' ) &&
 			example.includes( 'readRenderTargetPixelsAsync' ) &&
 			example.includes( 'coefficientPacking' ) &&
@@ -1880,7 +1894,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectAtlasPacking', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'captureLeakRegionMetrics', 'runProbeLeakMatrix', 'applyGroundingParitySnapshot', 'restoreGroundingParitySnapshot', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectSHMathContract', 'inspectAtlasPacking', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'captureLeakRegionMetrics', 'runProbeLeakMatrix', 'applyGroundingParitySnapshot', 'restoreGroundingParitySnapshot', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -2093,6 +2107,18 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( projectionParity.maxShaderToWebGLGridDelta > 1e-3,
 		'projection parity: expected asymmetric fixture to prove WebGPU and WebGL render-target conventions are not directly interchangeable.' );
 	results.push( { step: 'projection parity', projectionParity } );
+
+	const shMathContract = await call( 'inspectSHMathContract' );
+	assert( shMathContract.constantRadiance.maxDelta < 0.0001,
+		'sh math contract: expected constant radiance to evaluate to pi-scaled irradiance.' );
+	assert( shMathContract.axisDominance.positiveXRedBeatsNegativeX === true &&
+		shMathContract.axisDominance.positiveYGreenBeatsNegativeY === true &&
+		shMathContract.axisDominance.positiveZBlueBeatsNegativeZ === true,
+	'sh math contract: expected directional RGB fixture to preserve x/y/z coefficient signs.' );
+	assert( shMathContract.threeJsIrradianceParity.supported === true &&
+		shMathContract.threeJsIrradianceParity.maxDelta < 1e-9,
+	'sh math contract: expected runtime irradiance constants/order to match THREE.SphericalHarmonics3.getIrradianceAt().' );
+	results.push( { step: 'sh math contract', shMathContract } );
 
 	const atlasPacking = await call( 'inspectAtlasPacking' );
 	assert( atlasPacking.resolution === 4 &&
