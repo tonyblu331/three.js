@@ -1,6 +1,8 @@
 import puppeteer from 'puppeteer';
 import { Image } from './image.js';
 import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import { createServer } from '../../utils/server.js';
 
 const server = createServer();
@@ -96,6 +98,13 @@ const width = 400;
 const height = 250;
 const viewScale = 2;
 const jpgQuality = 95;
+const lightProbeParityArtifactDir = path.join( os.tmpdir(), 'codex-threejs-lightprobes-parity' );
+const lightProbeParitySnapshotLabels = [
+	'low-res-damped',
+	'low-res-unweighted',
+	'low-res-validity-weighted',
+	'webgpu-webgl-density-reference'
+];
 
 console.red = msg => console.log( `\x1b[31m${msg}\x1b[39m` );
 console.green = msg => console.log( `\x1b[32m${msg}\x1b[39m` );
@@ -519,6 +528,12 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 			await runSmokeHarness( page, file, smokeHarnesses[ file ] ) :
 			null;
 
+		if ( smokeResults !== null && isMakeScreenshot === false ) {
+
+			await writeLightProbeGroundingParityArtifacts( page, file, smokeHarnesses[ file ], smokeResults );
+
+		}
+
 		const screenshot = ( await Image.read( await page.screenshot() ) ).scale( 1 / viewScale );
 
 		if ( page.error !== undefined ) throw new Error( page.error );
@@ -619,6 +634,413 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 		page.file = undefined; // release lock
 
 	}
+
+}
+
+const getSmokeStep = ( smokeResults, step ) => {
+
+	const result = smokeResults.find( row => row.step === step );
+	if ( result === undefined ) throw new Error( `Missing smoke result step: ${ step }` );
+	return result;
+
+};
+
+const getSnapshotRegion = ( snapshot, regionName ) => {
+
+	const region = snapshot.regions[ regionName ];
+	if ( region === undefined ) throw new Error( `Missing snapshot region: ${ snapshot.label }/${ regionName }` );
+	return region;
+
+};
+
+const createLightProbeBakeTexelBudget = ( resolution, cubemapSize ) => {
+
+	const probes = resolution * resolution * resolution;
+	const cubemapFaceTexels = cubemapSize * cubemapSize;
+	const cubemapTexels = probes * 6 * cubemapFaceTexels;
+	const lowResCubemapTexels = 4 * 4 * 4 * 6 * 8 * 8;
+
+	return {
+		resolution,
+		cubemapSize,
+		probes,
+		cubemapFaceTexels,
+		cubemapTexels,
+		relativeToLowRes: Number( ( cubemapTexels / lowResCubemapTexels ).toFixed( 4 ) )
+	};
+
+};
+
+function assertLightProbeProof( file, condition, message ) {
+
+	if ( condition === false ) throw new Error( `${ file }: ${ message }` );
+
+}
+
+function validateLightProbeParitySnapshot( file, snapshot ) {
+
+	assertLightProbeProof( file, lightProbeParitySnapshotLabels.includes( snapshot.label ),
+		`grounding parity artifact: unexpected snapshot label ${ snapshot.label }.` );
+	assertLightProbeProof( file, snapshot.metrics.status === 'ready',
+		`grounding parity artifact ${ snapshot.label }: expected ready status.` );
+	assertLightProbeProof( file, snapshot.metrics.lightingMode === 'probes only',
+		`grounding parity artifact ${ snapshot.label }: expected probes-only lighting.` );
+	assertLightProbeProof( file, snapshot.metrics.materialType === 'standard',
+		`grounding parity artifact ${ snapshot.label }: expected standard material snapshot.` );
+	assertLightProbeProof( file, Number.isFinite( snapshot.metrics.timings.totalBakeMs ),
+		`grounding parity artifact ${ snapshot.label }: expected finite bake timing.` );
+	assertLightProbeProof( file, Number.isFinite( snapshot.artifactSignature.center.luminance ) &&
+		snapshot.artifactSignature.center.luminance > 18,
+	`grounding parity artifact ${ snapshot.label }: expected visible center luminance floor.` );
+
+	for ( const regionName of [ 'tallBox', 'shortBox', 'sphere', 'rightWall' ] ) {
+
+		const region = getSnapshotRegion( snapshot, regionName );
+		assertLightProbeProof( file, Number.isFinite( region.color.r ) &&
+			Number.isFinite( region.color.g ) &&
+			Number.isFinite( region.color.b ),
+		`grounding parity artifact ${ snapshot.label }/${ regionName }: expected finite RGB averages.` );
+		assertLightProbeProof( file, Number.isFinite( region.colorBias.redOverGreen ) &&
+			Number.isFinite( region.colorBias.greenOverRed ),
+		`grounding parity artifact ${ snapshot.label }/${ regionName }: expected finite color-bias ratios.` );
+		assertLightProbeProof( file, Number.isFinite( region.darkPixelRatio ) &&
+			region.darkPixelRatio >= 0 &&
+			region.darkPixelRatio <= 1,
+		`grounding parity artifact ${ snapshot.label }/${ regionName }: expected bounded dark-pixel ratio.` );
+		assertLightProbeProof( file, Number.isFinite( region.blackPixelRatio ) &&
+			region.blackPixelRatio >= 0 &&
+			region.blackPixelRatio <= 1,
+		`grounding parity artifact ${ snapshot.label }/${ regionName }: expected bounded black-tail ratio.` );
+		assertLightProbeProof( file, Number.isFinite( region.cellEdgeContrast ) &&
+			region.cellEdgeContrast >= 0 &&
+			region.cellEdgeContrast <= 255,
+		`grounding parity artifact ${ snapshot.label }/${ regionName }: expected bounded cell-edge contrast.` );
+
+	}
+
+	if ( snapshot.label === 'low-res-unweighted' ) {
+
+		assertLightProbeProof( file, snapshot.metrics.sampling.weightedProbeSampling === false,
+			'grounding parity artifact: unweighted low-res candidate must stay on hardware-filtered sampling.' );
+
+	}
+
+	if ( snapshot.label === 'low-res-validity-weighted' ) {
+
+		assertLightProbeProof( file, snapshot.metrics.sampling.weightedProbeSampling === true &&
+			snapshot.metrics.sampling.probeValidityMode === 'custom',
+		'grounding parity artifact: validity-weighted low-res candidate must use custom validity metadata.' );
+
+	}
+
+	if ( snapshot.label === 'webgpu-webgl-density-reference' ) {
+
+		assertLightProbeProof( file, snapshot.metrics.resolution === 6 &&
+			snapshot.metrics.cubemapSize === 32,
+		'grounding parity artifact: WebGPU density reference must match the WebGL 6^3 / 32px reference budget.' );
+		assertLightProbeProof( file, snapshot.proofRole === 'same-budget-artifact-pressure' &&
+			/artifact pressure/.test( snapshot.referenceBoundary ),
+		'grounding parity artifact: WebGPU density reference must be labelled as a same-budget artifact pressure row.' );
+
+	}
+
+	assertLightProbeProof( file, snapshot.artifactPressure !== undefined &&
+		Number.isFinite( snapshot.artifactPressure.objectBlackTailRatio ) &&
+		Number.isFinite( snapshot.artifactPressure.objectDarkTailRatio ) &&
+		Number.isFinite( snapshot.artifactPressure.luminanceFloor ) &&
+		Number.isFinite( snapshot.artifactPressure.cellEdgeContrast ),
+	`grounding parity artifact ${ snapshot.label }: expected object-level artifact pressure metrics.` );
+	assertLightProbeProof( file, snapshot.bakeTexelBudget !== undefined &&
+		Number.isFinite( snapshot.bakeTexelBudget.cubemapTexels ) &&
+		Number.isFinite( snapshot.bakeTexelBudget.relativeToLowRes ),
+	`grounding parity artifact ${ snapshot.label }: expected bake texel budget accounting.` );
+
+}
+
+function validateLightProbeParitySnapshots( file, snapshots ) {
+
+	assertLightProbeProof( file, snapshots.length === lightProbeParitySnapshotLabels.length,
+		'grounding parity artifact: expected every frozen proof snapshot.' );
+
+	const rows = new Map( snapshots.map( snapshot => [ snapshot.label, snapshot ] ) );
+
+	for ( const label of lightProbeParitySnapshotLabels ) {
+
+		assertLightProbeProof( file, rows.has( label ),
+			`grounding parity artifact: missing ${ label } snapshot.` );
+
+	}
+
+	const damped = rows.get( 'low-res-damped' );
+	const unweighted = rows.get( 'low-res-unweighted' );
+	const weighted = rows.get( 'low-res-validity-weighted' );
+	const densityReference = rows.get( 'webgpu-webgl-density-reference' );
+
+	assertLightProbeProof( file, damped.probeIntensity === unweighted.probeIntensity &&
+		unweighted.probeIntensity === weighted.probeIntensity,
+	'grounding parity artifact: low-res comparison must not improve bounce by changing global probe intensity.' );
+	assertLightProbeProof( file, unweighted.band1Intensity === 1 &&
+		damped.band1Intensity === 0.6 &&
+		unweighted.band2Intensity === damped.band2Intensity,
+	'grounding parity artifact: low-res comparison must isolate first-band directionality.' );
+	assertLightProbeProof( file, getSnapshotRegion( unweighted, 'tallBox' ).colorBias.redOverGreen >
+		getSnapshotRegion( damped, 'tallBox' ).colorBias.redOverGreen,
+	'grounding parity artifact: full band-1 low-res row must improve tall-box red bias over damped baseline.' );
+	assertLightProbeProof( file, getSnapshotRegion( unweighted, 'sphere' ).colorBias.greenOverRed > 1,
+		'grounding parity artifact: full band-1 low-res row must preserve sphere green bounce.' );
+	assertLightProbeProof( file, getSnapshotRegion( unweighted, 'rightWall' ).colorBias.greenOverRed > 1.25,
+		'grounding parity artifact: full band-1 low-res row must preserve right-side green bounce.' );
+	assertLightProbeProof( file, getSnapshotRegion( unweighted, 'tallBox' ).darkPixelRatio <=
+		getSnapshotRegion( damped, 'tallBox' ).darkPixelRatio + 0.35,
+	'grounding parity artifact: full band-1 low-res row must keep tall-box dark tail bounded.' );
+	assertLightProbeProof( file, densityReference.metrics.resolution === 6 &&
+		densityReference.metrics.cubemapSize === 32 &&
+		densityReference.metrics.sampling.weightedProbeSampling === false,
+	'grounding parity artifact: WebGPU WebGL-like density reference must remain unweighted and use 6^3 / 32px.' );
+	assertLightProbeProof( file, densityReference.bakeTexelBudget.cubemapTexels === 1327104 &&
+		densityReference.bakeTexelBudget.relativeToLowRes === 54,
+	'grounding parity artifact: WebGPU density stress row must report the 54x cubemap texel work budget.' );
+	assertLightProbeProof( file, densityReference.artifactPressure.status === 'PRESSURE' ||
+		densityReference.artifactPressure.objectBlackTailRatio <= 0.15,
+	'grounding parity artifact: WebGPU density stress row must mark visible black-tail artifacts as pressure.' );
+
+}
+
+function createLightProbeProofReport( file, smokeResults, snapshots, restored ) {
+
+	const artifactMatrix = getSmokeStep( smokeResults, 'artifact matrix' ).artifactMatrix;
+	const regionMatrix = getSmokeStep( smokeResults, 'region artifact matrix' ).regionMatrix;
+	const leakMatrix = getSmokeStep( smokeResults, 'leak matrix' ).leakMatrix;
+	const snapshotRows = new Map( snapshots.map( snapshot => [ snapshot.label, snapshot ] ) );
+	const densityReference = snapshotRows.get( 'webgpu-webgl-density-reference' );
+	const bakeTexelBudgets = {
+		lowRes: createLightProbeBakeTexelBudget( 4, 8 ),
+		densityReference: createLightProbeBakeTexelBudget( 6, 32 )
+	};
+
+	return {
+		generatedAt: new Date().toISOString(),
+		file,
+		claim: {
+			status: 'SUPPORTED',
+			text: 'WebGPU LightProbeGridGPU at 4^3 / cubemapSize=8 can show credible low-frequency red/green diffuse bounce and has a DDGI-lite verifier scaffold for controlled APV-style leak reduction without replacing the fast unweighted path.',
+			scope: 'Targeted e2e verifier and screenshot-space diagnostics only; not a photometric proof, real DDGI visibility proof, cascade proof, or adaptive-brick proof.'
+		},
+		verifierBoundary: {
+			primaryVerifier: 'test/e2e/puppeteer.js --webgpu webgpu_lightprobes_cornell',
+			primaryEvidence: 'e2e artifact and region matrices',
+			secondaryEvidence: 'Screenshots written outside the repository and paired with this metrics report.',
+			screenshotPolicy: 'Screenshots are secondary and cannot overrule failed metrics.'
+		},
+		baselineCandidateFamily: {
+			baseline: 'low-res-damped',
+			candidate: 'low-res-unweighted',
+			weightedCandidate: 'low-res-validity-weighted',
+			leakBaseline: 'leak-thin-wall-unweighted',
+			leakCandidate: 'leak-thin-wall-validity-weighted',
+			negativeControl: 'leak-zero-thickness-validity-weighted remains OPEN',
+			sameBudgetStressReference: 'webgpu-webgl-density-reference',
+			webglSourceReference: 'examples/webgl_lightprobes.html uses LightProbeGrid at resolution=6 and cubemapSize=32.'
+		},
+		currentEvidence: {
+			artifactMatrixRows: artifactMatrix.rows.length,
+			regionMatrixRows: regionMatrix.rows.length,
+			leakMatrixRows: leakMatrix.rows.length,
+			artifactComparisons: artifactMatrix.comparisons,
+			regionComparisons: regionMatrix.comparisons,
+			leakComparisons: leakMatrix.comparisons,
+			bakeTexelBudgets,
+			densityReferenceArtifactPressure: densityReference?.artifactPressure ?? null,
+			restored
+		},
+		enemyTerms: [
+			'metric hacking',
+			'hiding dark artifacts',
+			'boosting global probe intensity instead of improving directional bounce',
+			'replacing hardware-filtered unweighted sampling with manual loads',
+			'claiming the zero-thickness negative control is solved',
+			'claiming the same-budget density stress screenshot is a visual-quality win',
+			'hiding L2 SH dark-tail/ringing artifacts behind probe-density language',
+			'confusing screenshot-space RGB ratios with linear radiance',
+			'claiming production DDGI parity without visibility/depth moments'
+		],
+		rejectionGates: [
+			{ gate: 'Tall-box red/green bias must improve over damped baseline.', result: 'passed' },
+			{ gate: 'Sphere and right-side green bounce must remain positive.', result: 'passed' },
+			{ gate: 'Center luminance floor and dark tails must stay bounded.', result: 'passed' },
+			{ gate: 'Low-res candidate must not change global probe intensity.', result: 'passed' },
+			{ gate: 'Unweighted candidate must stay on hardware-filtered sampling.', result: 'passed' },
+			{ gate: 'WebGPU 6^3 / 32px density row must be labelled as an artifact pressure case, not a quality win.', result: 'passed' },
+			{ gate: 'Bake texel budget must report the 54x cubemap work multiplier for 6^3 / 32px versus 4^3 / 8px.', result: 'passed' },
+			{ gate: 'Weighted thin-wall rows must bound wrong-side color leak without erasing correct bounce.', result: 'passed' },
+			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' }
+		],
+		uncertainties: [
+			{ status: 'OPEN', item: 'Screenshot-space RGB ratios are regression signals, not linear-radiance proof.' },
+			{ status: 'OPEN', item: 'Metrics depend on camera, material, tonemapping, and browser/GPU adapter.' },
+			{ status: 'OPEN', item: 'The WebGPU 6^3 / 32px density screenshot is a same-budget stress row; high-frequency bake detail can still produce muddy L2 SH black-tail/ringing artifacts.' },
+			{ status: 'OPEN', item: 'Current validity is heuristic occupancy metadata, not DDGI visibility/depth moments.' },
+			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved by occupancy validity; they need real visibility/depth moments or a separate visibility structure.' },
+			{ status: 'OPEN', item: 'No adaptive density, probe relocation, classification, dilation, or virtual-offset pipeline yet.' },
+			{ status: 'OPEN', item: 'Actual WebGL screenshot parity remains a same-class reference check, not part of this WebGPU-only e2e gate.' }
+		],
+		proofLadder: [
+			{ level: 'examples', evidence: 'low-res proof snapshots, region matrices, and controlled thin-wall leak rows' },
+			{ level: 'counterexamples', evidence: 'damped baseline, L0-only, direct-off, panel-hidden, solids-hidden, and zero-thickness negative-control rows' },
+			{ level: 'artifact-pressure', evidence: 'webgpu-webgl-density-reference tracks object black-tail ratio, luminance floor, cell-edge contrast, and 54x bake texel work' },
+			{ level: 'invariants', evidence: 'source checks keep GPU-resident bake, hardware-filtered unweighted sampling, and fixed demo defaults' },
+			{ level: 'executable-check', evidence: 'targeted WebGPU e2e assertions' },
+			{ level: 'transfer', evidence: 'OPEN: repeat on more browsers/adapters and add actual WebGL metric capture' }
+		],
+		verdict: 'SUPPORTED within the frozen e2e verifier boundary.',
+		proofLedgerDecision: 'CONTINUE',
+		nextPressure: 'If controlled thin-wall rows keep passing, design the next scoped pass for real visibility/depth moments without public preset/API creep.',
+		leakMatrix,
+		snapshots
+	};
+
+}
+
+function createLightProbeProofMarkdown( report ) {
+
+	const lines = [
+		'# LightProbeGridGPU Grounding + DDGI-lite Verifier Proof',
+		'',
+		`- Generated: ${ report.generatedAt }`,
+		`- Claim status: ${ report.claim.status }`,
+		`- Verifier: ${ report.verifierBoundary.primaryVerifier }`,
+		`- Screenshot policy: ${ report.verifierBoundary.screenshotPolicy }`,
+		'',
+		'## Grounding / Parity Snapshots',
+		'',
+		'| Case | Role | Resolution | Cubemap | Bake texels | Weighted | Tall red/green | Sphere green/red | Object black-tail | Pressure | Screenshot |',
+		'|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|'
+	];
+
+	for ( const snapshot of report.snapshots ) {
+
+		const tallBox = getSnapshotRegion( snapshot, 'tallBox' );
+		const sphere = getSnapshotRegion( snapshot, 'sphere' );
+
+		lines.push( [
+			snapshot.label,
+			snapshot.proofRole,
+			snapshot.metrics.resolution,
+			snapshot.metrics.cubemapSize,
+			snapshot.bakeTexelBudget.cubemapTexels,
+			snapshot.metrics.sampling.weightedProbeSampling,
+			tallBox.colorBias.redOverGreen,
+			sphere.colorBias.greenOverRed,
+			snapshot.artifactPressure.objectBlackTailRatio,
+			snapshot.artifactPressure.status,
+			snapshot.screenshot
+		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ) );
+
+	}
+
+	lines.push(
+		'',
+		'## Bake Budget',
+		'',
+		`- Low-res 4³ / 8px: ${ report.currentEvidence.bakeTexelBudgets.lowRes.cubemapTexels } cubemap texels.`,
+		`- Same-budget stress 6³ / 32px: ${ report.currentEvidence.bakeTexelBudgets.densityReference.cubemapTexels } cubemap texels.`,
+		`- Work multiplier: ${ report.currentEvidence.bakeTexelBudgets.densityReference.relativeToLowRes }x.`
+	);
+
+	lines.push(
+		'',
+		'## DDGI-lite Leak Verifier Matrix',
+		'',
+		'| Case | Fixture | Weighted | Validity | Wrong-side ratio | Correct-bounce ratio | Dark ratio | Edge contrast | Status |',
+		'|---|---:|---:|---:|---:|---:|---:|---:|---|'
+	);
+
+	for ( const row of report.leakMatrix.rows ) {
+
+		lines.push( [
+			row.label,
+			row.fixtureMode,
+			row.sampling.weightedProbeSampling,
+			row.sampling.probeValidityMode,
+			row.leakMetrics.wrongSideColorRatio,
+			row.leakMetrics.correctBounceRatio,
+			row.leakMetrics.darkPixelRatio,
+			row.leakMetrics.cellEdgeContrast,
+			row.negativeControlStatus
+		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ) );
+
+	}
+
+	lines.push(
+		'',
+		'## Rejection Gates',
+		...report.rejectionGates.map( gate => `- ${ gate.result.toUpperCase() }: ${ gate.gate }` ),
+		'',
+		'## Uncertainties',
+		...report.uncertainties.map( uncertainty => `- ${ uncertainty.status }: ${ uncertainty.item }` ),
+		'',
+		`## Verdict\n${ report.verdict }`
+	);
+
+	return `${ lines.join( '\n' ) }\n`;
+
+}
+
+async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness, smokeResults ) {
+
+	if ( file !== 'webgpu_lightprobes_cornell' ) return;
+
+	await fs.rm( lightProbeParityArtifactDir, { recursive: true, force: true } );
+	await fs.mkdir( lightProbeParityArtifactDir, { recursive: true } );
+
+	const snapshots = [];
+	let restored;
+
+	try {
+
+		for ( const label of lightProbeParitySnapshotLabels ) {
+
+			const snapshot = await page.evaluate(
+				async ( globalName, label ) => await window[ globalName ].applyGroundingParitySnapshot( label ),
+				smokeHarness.global,
+				label
+			);
+
+			validateLightProbeParitySnapshot( file, snapshot );
+
+			const screenshot = path.join( lightProbeParityArtifactDir, `${ label }.png` );
+			await page.screenshot( { path: screenshot } );
+
+			snapshots.push( {
+				...snapshot,
+				screenshot
+			} );
+
+		}
+
+	} finally {
+
+		restored = await page.evaluate(
+			async globalName => await window[ globalName ].restoreGroundingParitySnapshot(),
+			smokeHarness.global
+		);
+
+	}
+
+	validateLightProbeParitySnapshots( file, snapshots );
+	assertLightProbeProof( file, restored.status === 'ready' &&
+		restored.hasTexture === true &&
+		restored.hasBoundingBox === true,
+	'grounding parity artifact: expected ready demo state restoration after screenshot capture.' );
+
+	const report = createLightProbeProofReport( file, smokeResults, snapshots, restored );
+	const reportPath = path.join( lightProbeParityArtifactDir, 'proof-report.json' );
+	const tablePath = path.join( lightProbeParityArtifactDir, 'proof-table.md' );
+
+	await fs.writeFile( reportPath, `${ JSON.stringify( report, null, '\t' ) }\n` );
+	await fs.writeFile( tablePath, createLightProbeProofMarkdown( report ) );
+
+	console.green( `Grounding parity artifacts written: ${ lightProbeParityArtifactDir }` );
 
 }
 
@@ -753,9 +1175,11 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			/const band2Intensity = this\.band2Intensity/.test( source ) &&
 			/c4\.mul[\s\S]*band2Intensity/.test( source ) &&
 			/c8\.mul[\s\S]*band2Intensity/.test( source ) &&
-			/probeHelperIntensity: 1,\s+band1Intensity: 0\.6,\s+band2Intensity: 0\.55/.test( example ) &&
+			/probeHelperIntensity: 1,\s+band1Intensity: 1,\s+band2Intensity: 0\.55/.test( example ) &&
+			example.includes( 'low-res-damped' ) &&
+			example.includes( 'band1Intensity: 0.6' ) &&
 			example.includes( 'band2Intensity: 0.55' ),
-		'Probe irradiance must expose diagnostic band-1 and band-2 controls so SH ringing can be isolated from probe blending.'
+		'Probe irradiance must default to full first-band SH while keeping damped band diagnostics for ringing isolation.'
 	);
 
 	requireSource(
@@ -790,7 +1214,36 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		example.includes( 'createLocalArtifactMetric' ) &&
 			example.includes( 'captureRegionArtifactMetrics' ) &&
 			example.includes( 'runProbeArtifactRegionMatrix' ) &&
+			example.includes( 'createLeakFixture' ) &&
+			example.includes( 'isVisibleForProbeOccupancy' ) &&
+			example.includes( 'setBaseCornellProbeMeshesVisible' ) &&
+			example.includes( 'leakArtifactRegions' ) &&
+			example.includes( 'captureLeakRegionMetrics' ) &&
+			example.includes( 'runProbeLeakMatrix' ) &&
+			example.includes( 'leak-thin-wall-unweighted' ) &&
+			example.includes( 'leak-thin-wall-normal-weighted' ) &&
+			example.includes( 'leak-thin-wall-validity-weighted' ) &&
+			example.includes( 'leak-zero-thickness-unweighted' ) &&
+			example.includes( 'leak-zero-thickness-validity-weighted' ) &&
+			example.includes( 'wrongSideColorRatio' ) &&
+			example.includes( 'correctBounceRatio' ) &&
+			example.includes( 'negativeControlStatus' ) &&
 			example.includes( 'darkPixelRatio' ) &&
+			example.includes( 'blackPixelRatio' ) &&
+			example.includes( 'objectBlackTailRatio' ) &&
+			example.includes( 'createBakeTexelBudget' ) &&
+			example.includes( 'createObjectArtifactPressure' ) &&
+			example.includes( 'same-budget-artifact-pressure' ) &&
+			example.includes( 'higher bake detail can expose L2 SH dark-tail/ringing artifacts' ) &&
+			example.includes( 'redOverGreen' ) &&
+			example.includes( 'greenOverRed' ) &&
+			example.includes( 'low-res-damped' ) &&
+			example.includes( 'low-res-unweighted' ) &&
+			example.includes( 'low-res-validity-weighted' ) &&
+			example.includes( 'groundingParitySnapshotCases' ) &&
+			example.includes( 'webgpu-webgl-density-reference' ) &&
+			example.includes( 'applyGroundingParitySnapshot' ) &&
+			example.includes( 'restoreGroundingParitySnapshot' ) &&
 			example.includes( 'shadows-off' ) &&
 			example.includes( 'direct-off' ) &&
 			example.includes( 'panel-hidden' ) &&
@@ -897,7 +1350,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectAtlasPacking', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectAtlasPacking', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'captureLeakRegionMetrics', 'runProbeLeakMatrix', 'applyGroundingParitySnapshot', 'restoreGroundingParitySnapshot', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -1179,10 +1632,13 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	results.push( { step: 'probe occupancy', probeOccupancy } );
 
 	const artifactMatrix = await call( 'runProbeDiagnosticMatrix' );
-	assert( Array.isArray( artifactMatrix.rows ) && artifactMatrix.rows.length === 9,
-		'artifact matrix: expected nine bounded diagnostic rows.' );
+	assert( Array.isArray( artifactMatrix.rows ) && artifactMatrix.rows.length === 12,
+		'artifact matrix: expected twelve bounded diagnostic rows.' );
 
 	const artifactRows = new Map( artifactMatrix.rows.map( row => [ row.label, row ] ) );
+	const lowResDampedArtifact = artifactRows.get( 'low-res-damped' );
+	const lowResUnweightedArtifact = artifactRows.get( 'low-res-unweighted' );
+	const lowResValidityWeightedArtifact = artifactRows.get( 'low-res-validity-weighted' );
 	const l0L1L2Artifact = artifactRows.get( 'l0-l1-l2' );
 	const l0OnlyArtifact = artifactRows.get( 'l0-only' );
 	const l0L1Artifact = artifactRows.get( 'l0-l1' );
@@ -1193,7 +1649,10 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	const cubemap16Artifact = artifactRows.get( 'cubemap-16' );
 	const cubemap32Artifact = artifactRows.get( 'cubemap-32' );
 
-	assert( l0L1L2Artifact !== undefined &&
+	assert( lowResDampedArtifact !== undefined &&
+		lowResUnweightedArtifact !== undefined &&
+		lowResValidityWeightedArtifact !== undefined &&
+		l0L1L2Artifact !== undefined &&
 		l0OnlyArtifact !== undefined &&
 		l0L1Artifact !== undefined &&
 		floatLinearArtifact !== undefined &&
@@ -1202,7 +1661,24 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		resolution6Artifact !== undefined &&
 		cubemap16Artifact !== undefined &&
 		cubemap32Artifact !== undefined,
-	'artifact matrix: expected baseline, SH-band, precision, leak, resolution, and cubemap labels.' );
+	'artifact matrix: expected low-res, SH-band, precision, leak, resolution, and cubemap labels.' );
+	assert( lowResDampedArtifact.band1Intensity === 0.6 && lowResDampedArtifact.band2Intensity === 0.55,
+		'artifact matrix: expected damped low-res diagnostic row.' );
+	assert( lowResUnweightedArtifact.band1Intensity === 1 &&
+		lowResUnweightedArtifact.band2Intensity === 0.55 &&
+		lowResUnweightedArtifact.sampling.weightedProbeSampling === false,
+	'artifact matrix: expected full band-1 low-res row to keep hardware-filtered unweighted sampling.' );
+	assert( lowResDampedArtifact.probeIntensity === lowResUnweightedArtifact.probeIntensity,
+		'artifact matrix: low-res bounce improvement must not come from global probe intensity changes.' );
+	assert( lowResValidityWeightedArtifact.band1Intensity === 1 &&
+		lowResValidityWeightedArtifact.band2Intensity === 0.55 &&
+		lowResValidityWeightedArtifact.sampling.weightedProbeSampling === true &&
+		lowResValidityWeightedArtifact.sampling.probeValidityMode === 'custom',
+	'artifact matrix: expected low-res validity-weighted diagnostic row.' );
+	assert( lowResUnweightedArtifact.colorSanity.center.r +
+		lowResUnweightedArtifact.colorSanity.center.g +
+		lowResUnweightedArtifact.colorSanity.center.b > 18,
+	'artifact matrix: expected full band-1 low-res probes to keep center geometry visible.' );
 	assert( l0L1L2Artifact.band1Intensity === 1 && l0L1L2Artifact.band2Intensity === 0.55 && l0L1L2Artifact.sampling.weightedProbeSampling === false,
 		'artifact matrix: expected L0+L1+L2 row to capture unweighted band-2 probe lighting.' );
 	assert( l0OnlyArtifact.band1Intensity === 0 && l0OnlyArtifact.band2Intensity === 0,
@@ -1259,10 +1735,13 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	results.push( { step: 'artifact matrix', artifactMatrix } );
 
 	const regionMatrix = await call( 'runProbeArtifactRegionMatrix' );
-	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 15,
-		'region matrix: expected bounded cubemap, shadow, direct-light, and panel diagnostic rows.' );
+	assert( Array.isArray( regionMatrix.rows ) && regionMatrix.rows.length === 18,
+		'region matrix: expected bounded low-res, cubemap, shadow, direct-light, and panel diagnostic rows.' );
 
 	const regionRows = new Map( regionMatrix.rows.map( row => [ row.label, row ] ) );
+	const regionLowResDamped = regionRows.get( 'low-res-damped' );
+	const regionLowResUnweighted = regionRows.get( 'low-res-unweighted' );
+	const regionLowResValidityWeighted = regionRows.get( 'low-res-validity-weighted' );
 	const regionBaseline = regionRows.get( 'cubemap-8-shadows-on' );
 	const regionCubemap16 = regionRows.get( 'cubemap-16-shadows-on' );
 	const regionCubemap32 = regionRows.get( 'cubemap-32-shadows-on' );
@@ -1279,7 +1758,10 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	const regionBand1Damped16 = regionRows.get( 'cubemap-16-band1-0.6' );
 	const regionBand1Damped32 = regionRows.get( 'cubemap-32-band1-0.6' );
 
-	assert( regionBaseline !== undefined &&
+	assert( regionLowResDamped !== undefined &&
+		regionLowResUnweighted !== undefined &&
+		regionLowResValidityWeighted !== undefined &&
+		regionBaseline !== undefined &&
 		regionCubemap16 !== undefined &&
 		regionCubemap32 !== undefined &&
 		regionShadowless8 !== undefined &&
@@ -1294,7 +1776,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		regionL0L132 !== undefined &&
 		regionBand1Damped16 !== undefined &&
 		regionBand1Damped32 !== undefined,
-	'region matrix: expected cubemap, shadow, direct-light, panel, and regional SH-band diagnostic rows.' );
+	'region matrix: expected low-res, cubemap, shadow, direct-light, panel, and regional SH-band diagnostic rows.' );
 
 	for ( const row of regionMatrix.rows ) {
 
@@ -1306,7 +1788,8 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 			row.regions.ceilingEmitter !== undefined &&
 			row.regions.floorCenter !== undefined &&
 			row.regions.sphere !== undefined &&
-			row.regions.tallBox !== undefined,
+			row.regions.tallBox !== undefined &&
+			row.regions.shortBox !== undefined,
 		`region matrix ${ row.label }: expected named artifact regions.` );
 
 		for ( const region of Object.values( row.regions ) ) {
@@ -1314,12 +1797,54 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 			assert( Number.isFinite( region.luminance.p01 ), `region matrix ${ row.label }: expected finite p01.` );
 			assert( Number.isFinite( region.luminance.p05 ), `region matrix ${ row.label }: expected finite p05.` );
 			assert( Number.isFinite( region.darkPixelRatio ), `region matrix ${ row.label }: expected finite dark-pixel ratio.` );
+			assert( Number.isFinite( region.blackPixelRatio ), `region matrix ${ row.label }: expected finite black-tail ratio.` );
 			assert( Number.isFinite( region.cellEdgeContrast ), `region matrix ${ row.label }: expected finite regional edge contrast.` );
+			assert( Number.isFinite( region.color.r ) &&
+				Number.isFinite( region.color.g ) &&
+				Number.isFinite( region.color.b ),
+			`region matrix ${ row.label }: expected finite regional RGB averages.` );
+			assert( Number.isFinite( region.colorBias.redOverGreen ) &&
+				Number.isFinite( region.colorBias.greenOverRed ),
+			`region matrix ${ row.label }: expected finite regional color-bias ratios.` );
 
 		}
 
+		assert( row.artifactPressure !== undefined &&
+			Number.isFinite( row.artifactPressure.objectBlackTailRatio ) &&
+			Number.isFinite( row.artifactPressure.objectDarkTailRatio ) &&
+			Number.isFinite( row.artifactPressure.luminanceFloor ),
+		`region matrix ${ row.label }: expected object-level artifact pressure metrics.` );
+		assert( row.bakeTexelBudget !== undefined &&
+			Number.isFinite( row.bakeTexelBudget.cubemapTexels ) &&
+			Number.isFinite( row.bakeTexelBudget.relativeToLowRes ),
+		`region matrix ${ row.label }: expected bake texel budget accounting.` );
+
 	}
 
+	assert( regionLowResDamped.band1Intensity === 0.6 &&
+		regionLowResDamped.band2Intensity === 0.55,
+	'region matrix: expected damped low-res regional row.' );
+	assert( regionLowResUnweighted.band1Intensity === 1 &&
+		regionLowResUnweighted.band2Intensity === 0.55 &&
+		regionLowResUnweighted.sampling.weightedProbeSampling === false,
+	'region matrix: expected full band-1 low-res row to use hardware-filtered unweighted sampling.' );
+	assert( regionLowResDamped.probeIntensity === regionLowResUnweighted.probeIntensity,
+		'region matrix: low-res bounce improvement must not come from global probe intensity changes.' );
+	assert( regionLowResValidityWeighted.sampling.weightedProbeSampling === true &&
+		regionLowResValidityWeighted.sampling.probeValidityMode === 'custom',
+	'region matrix: expected low-res validity-weighted row to use custom validity metadata.' );
+	assert( regionLowResUnweighted.regions.tallBox.colorBias.redOverGreen >
+		regionLowResDamped.regions.tallBox.colorBias.redOverGreen,
+	'region matrix: expected full band-1 low-res row to strengthen tall-box red bounce over damped baseline.' );
+	assert( regionLowResUnweighted.regions.sphere.colorBias.greenOverRed > 1,
+		'region matrix: expected full band-1 low-res row to preserve green bounce on the sphere.' );
+	assert( regionLowResUnweighted.regions.rightWall.colorBias.greenOverRed > 1.25,
+		'region matrix: expected full band-1 low-res row to preserve green wall bounce.' );
+	assert( regionLowResUnweighted.regions.tallBox.darkPixelRatio <=
+		regionLowResDamped.regions.tallBox.darkPixelRatio + 0.35,
+	'region matrix: expected full band-1 low-res row to keep tall-box dark tail bounded.' );
+	assert( Math.abs( regionMatrix.comparisons.lowRes.tallBoxCellEdgeContrastDelta ) <= 255,
+		'region matrix: expected full band-1 low-res cell-edge drift to remain bounded.' );
 	assert( regionShadowless8.shadowsDisabledDuringBake === true &&
 		regionShadowless16.shadowsDisabledDuringBake === true &&
 		regionShadowless32.shadowsDisabledDuringBake === true,
@@ -1341,6 +1866,8 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( regionMatrix.restored.sampling.leakReductionMode === 'off',
 		'region matrix: expected leak reduction restoration.' );
 	assert( Number.isFinite( regionMatrix.comparisons.cubemap.darkPixelRatioDelta16 ) &&
+		Number.isFinite( regionMatrix.comparisons.lowRes.tallBoxRedOverGreenGain ) &&
+		Number.isFinite( regionMatrix.comparisons.lowRes.sphereGreenOverRed ) &&
 		Number.isFinite( regionMatrix.comparisons.shadow.darkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.energy.directOffDarkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.energy.panelHiddenDarkPixelRatioDelta16 ) &&
@@ -1351,6 +1878,8 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( Number.isFinite( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta16 ) &&
 		Number.isFinite( regionMatrix.comparisons.damping.band1DampedDarkPixelRatioDelta32 ),
 	'region matrix: expected finite damped-band1 deltas.' );
+	assert( regionMatrix.comparisons.lowRes.tallBoxRedOverGreenGain > 0,
+		'region matrix: expected low-res full band-1 row to improve tall-box red/green bias.' );
 	assert( regionMatrix.comparisons.band.l0ToL1DarkPixelRatioDelta16 >
 		regionMatrix.comparisons.band.l1ToL2DarkPixelRatioDelta16 * 4,
 	'region matrix: expected first-band SH to dominate the cubemap-16 dark-tail regression.' );
@@ -1361,6 +1890,110 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		regionMatrix.comparisons.geometry.solidsHiddenDarkPixelRatioDelta16 < 0.02,
 	'region matrix: expected energy-source and solid-visibility toggles not to dominate the current dark-tail artifact.' );
 	results.push( { step: 'region artifact matrix', regionMatrix } );
+
+	const leakMatrix = await call( 'runProbeLeakMatrix' );
+	assert( Array.isArray( leakMatrix.rows ) && leakMatrix.rows.length === 5,
+		'leak matrix: expected five DDGI-lite verifier scaffold rows.' );
+
+	const leakRows = new Map( leakMatrix.rows.map( row => [ row.label, row ] ) );
+	const leakThinUnweighted = leakRows.get( 'leak-thin-wall-unweighted' );
+	const leakThinNormalWeighted = leakRows.get( 'leak-thin-wall-normal-weighted' );
+	const leakThinValidityWeighted = leakRows.get( 'leak-thin-wall-validity-weighted' );
+	const leakZeroUnweighted = leakRows.get( 'leak-zero-thickness-unweighted' );
+	const leakZeroValidityWeighted = leakRows.get( 'leak-zero-thickness-validity-weighted' );
+
+	assert( leakThinUnweighted !== undefined &&
+		leakThinNormalWeighted !== undefined &&
+		leakThinValidityWeighted !== undefined &&
+		leakZeroUnweighted !== undefined &&
+		leakZeroValidityWeighted !== undefined,
+	'leak matrix: expected thin-wall and zero-thickness proof rows.' );
+
+	for ( const row of leakMatrix.rows ) {
+
+		assert( row.resolution === 4 && row.cubemapSize === 8,
+			`leak matrix ${ row.label }: expected low-res 4^3 / cubemap 8 fixture.` );
+		assert( row.band1Intensity === 1 && row.band2Intensity === 0.55,
+			`leak matrix ${ row.label }: expected full band-1 plus damped L2 anti-ringing fixture.` );
+		assert( row.normalBias === 0.5 && row.viewBias === 0,
+			`leak matrix ${ row.label }: expected frozen bias controls.` );
+		assert( row.lightingMode === 'probes only' && row.materialType === 'standard',
+			`leak matrix ${ row.label }: expected probes-only standard-material fixture.` );
+		assert( Number.isFinite( row.totalBakeMs ) && Number.isFinite( row.frameMs ),
+			`leak matrix ${ row.label }: expected finite bake/frame timings.` );
+		assert( row.leakMetrics.regions.leftReceiver !== undefined &&
+			row.leakMetrics.regions.rightReceiver !== undefined &&
+			row.leakMetrics.regions.divider !== undefined,
+		`leak matrix ${ row.label }: expected named leak regions.` );
+		assert( Number.isFinite( row.leakMetrics.wrongSideColorRatio ) &&
+			Number.isFinite( row.leakMetrics.correctBounceRatio ) &&
+			Number.isFinite( row.leakMetrics.luminance.mean ) &&
+			Number.isFinite( row.leakMetrics.darkPixelRatio ) &&
+			Number.isFinite( row.leakMetrics.cellEdgeContrast ),
+		`leak matrix ${ row.label }: expected finite leak metrics.` );
+		assert( row.leakMetrics.luminance.mean > 8,
+			`leak matrix ${ row.label }: expected visible leak receiver luminance.` );
+		assert( row.leakMetrics.darkPixelRatio <= 0.95,
+			`leak matrix ${ row.label }: expected bounded dark-pixel ratio.` );
+		assert( row.leakMetrics.cellEdgeContrast <= 255,
+			`leak matrix ${ row.label }: expected bounded cell-edge contrast.` );
+
+	}
+
+	assert( leakThinUnweighted.fixtureMode === 'thin-wall' &&
+		leakThinNormalWeighted.fixtureMode === 'thin-wall' &&
+		leakThinValidityWeighted.fixtureMode === 'thin-wall' &&
+		leakZeroUnweighted.fixtureMode === 'zero-thickness' &&
+		leakZeroValidityWeighted.fixtureMode === 'zero-thickness',
+	'leak matrix: expected fixture geometry to change only for the explicit zero-thickness negative control.' );
+	assert( leakThinUnweighted.probeIntensity === leakThinNormalWeighted.probeIntensity &&
+		leakThinUnweighted.probeIntensity === leakThinValidityWeighted.probeIntensity &&
+		leakThinUnweighted.probeIntensity === leakZeroUnweighted.probeIntensity &&
+		leakThinUnweighted.probeIntensity === leakZeroValidityWeighted.probeIntensity,
+	'leak matrix: leak comparison must not improve by changing global probe intensity.' );
+	assert( leakThinUnweighted.sampling.weightedProbeSampling === false &&
+		leakThinUnweighted.sampling.manualIrradianceSampling === false,
+	'leak matrix: unweighted thin-wall baseline must remain hardware-filtered.' );
+	assert( leakThinNormalWeighted.sampling.weightedProbeSampling === true &&
+		leakThinNormalWeighted.sampling.probeValidityMode === 'constant',
+	'leak matrix: normal-weighted thin-wall row must use manual weighted sampling with constant validity.' );
+	assert( leakThinValidityWeighted.sampling.weightedProbeSampling === true &&
+		leakThinValidityWeighted.sampling.probeValidityMode === 'custom' &&
+		leakThinValidityWeighted.sampling.invalidProbeCount > 0 &&
+		leakThinValidityWeighted.occupancy.occupiedProbeCount > 0,
+	'leak matrix: validity-weighted thin-wall row must upload controlled wall occupancy metadata.' );
+	assert( leakZeroUnweighted.negativeControlStatus === 'OPEN' &&
+		leakZeroValidityWeighted.negativeControlStatus === 'OPEN' &&
+		leakMatrix.comparisons.zeroThickness.status === 'OPEN',
+	'leak matrix: zero-thickness negative control must stay explicitly unresolved.' );
+	assert( leakThinUnweighted.leakMetrics.correctBounceRatio > 0.95,
+		'leak matrix: thin-wall baseline must preserve measurable correct-side bounce.' );
+	assert( leakThinNormalWeighted.leakMetrics.correctBounceRatio >
+		leakThinUnweighted.leakMetrics.correctBounceRatio * 0.75,
+	'leak matrix: normal weighting must not erase correct bounce.' );
+	assert( leakThinValidityWeighted.leakMetrics.correctBounceRatio >
+		leakThinUnweighted.leakMetrics.correctBounceRatio * 0.75,
+	'leak matrix: validity weighting must not erase correct bounce.' );
+	assert( leakThinNormalWeighted.leakMetrics.wrongSideColorRatio <=
+		leakThinUnweighted.leakMetrics.wrongSideColorRatio + 0.35,
+	'leak matrix: normal weighting must bound wrong-side color leak versus unweighted.' );
+	assert( leakThinValidityWeighted.leakMetrics.wrongSideColorRatio <=
+		leakThinUnweighted.leakMetrics.wrongSideColorRatio + 0.35,
+	'leak matrix: validity weighting must bound wrong-side color leak versus unweighted.' );
+	assert( leakThinValidityWeighted.leakMetrics.darkPixelRatio <=
+		leakThinUnweighted.leakMetrics.darkPixelRatio + 0.35,
+	'leak matrix: validity weighting must keep dark tails bounded.' );
+	assert( Math.abs( leakMatrix.comparisons.thinWall.validityCellEdgeContrastDelta ) <= 255 &&
+		Number.isFinite( leakMatrix.comparisons.thinWall.normalWrongSideColorRatioDelta ) &&
+		Number.isFinite( leakMatrix.comparisons.thinWall.validityWrongSideColorRatioDelta ) &&
+		Number.isFinite( leakMatrix.comparisons.thinWall.validityCorrectBouncePreservation ) &&
+		Number.isFinite( leakMatrix.comparisons.zeroThickness.validityWrongSideColorRatioDelta ),
+	'leak matrix: expected finite bounded leak comparison deltas.' );
+	assert( leakMatrix.restored.lightingMode === 'direct + probes' &&
+		leakMatrix.restored.sampling.leakReductionMode === 'off' &&
+		leakMatrix.restored.leakFixtureVisible === false,
+	'leak matrix: expected demo state and hidden fixture restoration.' );
+	results.push( { step: 'leak matrix', leakMatrix } );
 
 	await startOperation( 'setLeakReductionMode', 'off' );
 	await waitUntilReady( 'leak reduction off' );

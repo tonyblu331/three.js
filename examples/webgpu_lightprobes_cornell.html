@@ -49,6 +49,7 @@
 			let renderer, scene, camera, controls;
 			let directLight, ambientLight, lightPanel, probeHelper;
 			let probeGrid = null;
+			let leakFixture = null;
 			let baking = false;
 			let pendingRecreate = false;
 			let pendingBake = false;
@@ -69,7 +70,7 @@
 				materialType: 'standard',
 				probeIntensity: 1,
 				probeHelperIntensity: 1,
-				band1Intensity: 0.6,
+				band1Intensity: 1,
 				band2Intensity: 0.55,
 				normalBias: 0.5,
 				viewBias: 0,
@@ -221,6 +222,8 @@
 				ambientLight = new THREE.AmbientLight( 0xffffff, ambientLightIntensity );
 				scene.add( ambientLight );
 
+				createLeakFixture();
+
 			}
 
 			function createProbeMesh( geometry, color ) {
@@ -278,6 +281,105 @@
 
 			}
 
+			function createLeakFixture() {
+
+				const group = new THREE.Group();
+				group.visible = false;
+				scene.add( group );
+
+				const meshes = [];
+				const fixtureMesh = ( mesh ) => {
+
+					mesh.visible = false;
+					mesh.userData.leakFixture = true;
+					meshes.push( mesh );
+					group.add( mesh );
+
+					return mesh;
+
+				};
+
+				const floor = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 5.2, 4.6 ), 0xd8d2c5 ) );
+				floor.position.set( 0, 0.08, 0 );
+				floor.rotation.x = - Math.PI / 2;
+				floor.receiveShadow = true;
+
+				const leftFloorBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 1.45, 4.3 ), 0xff2020 ) );
+				leftFloorBounce.position.set( - 1.85, 0.09, 0 );
+				leftFloorBounce.rotation.x = - Math.PI / 2;
+				leftFloorBounce.receiveShadow = true;
+
+				const rightFloorBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 1.85, 4.3 ), 0x20ff20 ) );
+				rightFloorBounce.position.set( 0.95, 0.1, 0 );
+				rightFloorBounce.rotation.x = - Math.PI / 2;
+				rightFloorBounce.receiveShadow = true;
+
+				const leftWallBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 4.3, 3.4 ), 0xff2020 ) );
+				leftWallBounce.position.set( - 2.52, 1.78, 0 );
+				leftWallBounce.rotation.y = Math.PI / 2;
+				leftWallBounce.receiveShadow = true;
+
+				const rightWallBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 4.3, 3.4 ), 0x20ff20 ) );
+				rightWallBounce.position.set( 2.52, 1.78, 0 );
+				rightWallBounce.rotation.y = - Math.PI / 2;
+				rightWallBounce.receiveShadow = true;
+
+				const backWall = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 5.2, 3.4 ), 0xd8d2c5 ) );
+				backWall.position.set( 0, 1.78, - 2.3 );
+				backWall.receiveShadow = true;
+
+				const thinDivider = fixtureMesh( createProbeMesh( new THREE.BoxGeometry( 0.32, 3.45, 4.45 ), 0xd8d2c5 ) );
+				thinDivider.position.set( - 0.8667, 1.8, 0 );
+				thinDivider.castShadow = true;
+				thinDivider.receiveShadow = true;
+				thinDivider.userData.leakDivider = 'thin-wall';
+
+				const zeroThicknessDivider = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 4.45, 3.45 ), 0xd8d2c5 ) );
+				zeroThicknessDivider.position.set( - 0.8667, 1.8, 0 );
+				zeroThicknessDivider.rotation.y = Math.PI / 2;
+				zeroThicknessDivider.castShadow = true;
+				zeroThicknessDivider.receiveShadow = true;
+				zeroThicknessDivider.material.side = THREE.DoubleSide;
+				zeroThicknessDivider.userData.leakDivider = 'zero-thickness';
+
+				const leftReceiver = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 0.88, 1.25 ), 0xd8d2c5 ) );
+				leftReceiver.position.set( - 1.52, 1.05, 1.55 );
+				leftReceiver.rotation.y = - 0.38;
+				leftReceiver.receiveShadow = true;
+				leftReceiver.userData.leakReceiver = 'left';
+
+				const rightReceiver = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 0.88, 1.25 ), 0xd8d2c5 ) );
+				rightReceiver.position.set( - 0.22, 1.05, 1.55 );
+				rightReceiver.rotation.y = 0.38;
+				rightReceiver.receiveShadow = true;
+				rightReceiver.userData.leakReceiver = 'right';
+
+				leakFixture = {
+					group,
+					meshes,
+					thinDivider,
+					zeroThicknessDivider,
+					leftReceiver,
+					rightReceiver
+				};
+
+			}
+
+			function isVisibleForProbeOccupancy( object ) {
+
+				let current = object;
+
+				while ( current !== null ) {
+
+					if ( current.visible === false ) return false;
+					current = current.parent;
+
+				}
+
+				return true;
+
+			}
+
 			function getGridProbePosition( index, resolution, target ) {
 
 				const iz = Math.floor( index / ( resolution * resolution ) );
@@ -299,7 +401,7 @@
 				scene.updateMatrixWorld( true );
 
 				const totalProbes = resolution * resolution * resolution;
-				const solidProbeMeshes = probeMeshes.filter( mesh => mesh.geometry.type !== 'PlaneGeometry' );
+				const solidProbeMeshes = probeMeshes.filter( mesh => isVisibleForProbeOccupancy( mesh ) && mesh.geometry.type !== 'PlaneGeometry' );
 				const probePosition = new THREE.Vector3();
 				const localProbePosition = new THREE.Vector3();
 				const inverseMatrix = new THREE.Matrix4();
@@ -824,7 +926,89 @@
 					ceilingEmitter: { x0: 0.34, x1: 0.66, y0: 0.12, y1: 0.34 },
 					floorCenter: { x0: 0.30, x1: 0.66, y0: 0.68, y1: 0.9 },
 					sphere: { x0: 0.54, x1: 0.74, y0: 0.42, y1: 0.64 },
-					tallBox: { x0: 0.28, x1: 0.50, y0: 0.46, y1: 0.84 }
+					tallBox: { x0: 0.28, x1: 0.50, y0: 0.46, y1: 0.84 },
+					shortBox: { x0: 0.48, x1: 0.68, y0: 0.58, y1: 0.88 }
+				};
+
+				const leakArtifactRegions = {
+					leftReceiver: { x0: 0.34, x1: 0.47, y0: 0.44, y1: 0.69 },
+					rightReceiver: { x0: 0.47, x1: 0.60, y0: 0.44, y1: 0.69 },
+					divider: { x0: 0.42, x1: 0.52, y0: 0.22, y1: 0.78 }
+				};
+
+				const createObjectScreenRegion = ( object, margin = 0.015 ) => {
+
+					if ( object === undefined || object === null ) return null;
+
+					scene.updateMatrixWorld( true );
+					camera.updateMatrixWorld( true );
+					camera.updateProjectionMatrix();
+
+					if ( object.geometry.boundingBox === null ) object.geometry.computeBoundingBox();
+
+					const box = object.geometry.boundingBox;
+					const corners = [
+						new THREE.Vector3( box.min.x, box.min.y, box.min.z ),
+						new THREE.Vector3( box.min.x, box.min.y, box.max.z ),
+						new THREE.Vector3( box.min.x, box.max.y, box.min.z ),
+						new THREE.Vector3( box.min.x, box.max.y, box.max.z ),
+						new THREE.Vector3( box.max.x, box.min.y, box.min.z ),
+						new THREE.Vector3( box.max.x, box.min.y, box.max.z ),
+						new THREE.Vector3( box.max.x, box.max.y, box.min.z ),
+						new THREE.Vector3( box.max.x, box.max.y, box.max.z )
+					];
+					const projected = new THREE.Vector3();
+					const region = {
+						x0: 1,
+						x1: 0,
+						y0: 1,
+						y1: 0
+					};
+
+					for ( const corner of corners ) {
+
+						projected.copy( corner ).applyMatrix4( object.matrixWorld ).project( camera );
+
+						if ( Number.isFinite( projected.x ) === false ||
+							Number.isFinite( projected.y ) === false ) {
+
+							continue;
+
+						}
+
+						const x = projected.x * 0.5 + 0.5;
+						const y = 1 - ( projected.y * 0.5 + 0.5 );
+
+						region.x0 = Math.min( region.x0, x );
+						region.x1 = Math.max( region.x1, x );
+						region.y0 = Math.min( region.y0, y );
+						region.y1 = Math.max( region.y1, y );
+
+					}
+
+					if ( region.x1 <= region.x0 || region.y1 <= region.y0 ) return null;
+
+					return {
+						x0: Math.max( 0, region.x0 - margin ),
+						x1: Math.min( 1, region.x1 + margin ),
+						y0: Math.max( 0, region.y0 - margin ),
+						y1: Math.min( 1, region.y1 + margin )
+					};
+
+				};
+
+				const createLeakCaptureRegions = () => {
+
+					if ( leakFixture === null ) return leakArtifactRegions;
+
+					const divider = leakFixture.thinDivider.visible ? leakFixture.thinDivider : leakFixture.zeroThicknessDivider;
+
+					return {
+						leftReceiver: createObjectScreenRegion( leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
+						rightReceiver: createObjectScreenRegion( leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver,
+						divider: createObjectScreenRegion( divider, 0.02 ) ?? leakArtifactRegions.divider
+					};
+
 				};
 
 				const captureCanvasSample = () => {
@@ -1330,19 +1514,32 @@
 					const image = canvasSample.context.getImageData( x0, y0, width, height );
 					const luminance = [];
 					let sum = 0;
+					const color = { r: 0, g: 0, b: 0 };
 
 					for ( let i = 0; i < image.data.length; i += 4 ) {
 
-						const value = image.data[ i ] * 0.2126 + image.data[ i + 1 ] * 0.7152 + image.data[ i + 2 ] * 0.0722;
+						const red = image.data[ i ];
+						const green = image.data[ i + 1 ];
+						const blue = image.data[ i + 2 ];
+						const value = red * 0.2126 + green * 0.7152 + blue * 0.0722;
 						luminance.push( value );
 						sum += value;
+						color.r += red;
+						color.g += green;
+						color.b += blue;
 
 					}
 
 					const sorted = [ ...luminance ].sort( ( a, b ) => a - b );
 					const percentile = ( value ) => sorted[ Math.min( sorted.length - 1, Math.max( 0, Math.floor( ( sorted.length - 1 ) * value ) ) ) ];
+					const sampleCount = Math.max( luminance.length, 1 );
+					color.r /= sampleCount;
+					color.g /= sampleCount;
+					color.b /= sampleCount;
 					const darkThreshold = Math.max( 16, percentile( 0.5 ) * 0.35 );
+					const blackThreshold = 32;
 					const darkSamples = luminance.filter( value => value <= darkThreshold ).length;
+					const blackSamples = luminance.filter( value => value <= blackThreshold ).length;
 					const cellCount = Math.max( 2, Math.min( 8, params.resolution ) );
 					const cellMeans = [];
 
@@ -1410,6 +1607,15 @@
 						region,
 						samples: luminance.length,
 						gridCells: cellCount,
+						color: {
+							r: roundMetric( color.r ),
+							g: roundMetric( color.g ),
+							b: roundMetric( color.b )
+						},
+						colorBias: {
+							redOverGreen: roundMetric( color.r / Math.max( color.g, 0.0001 ) ),
+							greenOverRed: roundMetric( color.g / Math.max( color.r, 0.0001 ) )
+						},
 						luminance: {
 							min: roundMetric( sorted[ 0 ] ),
 							p01: roundMetric( percentile( 0.01 ) ),
@@ -1421,24 +1627,97 @@
 						},
 						darkThreshold: roundMetric( darkThreshold ),
 						darkPixelRatio: roundMetric( darkSamples / Math.max( luminance.length, 1 ) ),
+						blackThreshold,
+						blackPixelRatio: roundMetric( blackSamples / Math.max( luminance.length, 1 ) ),
 						cellEdgeContrast: roundMetric( maxCellEdgeContrast ),
 						averageCellEdgeContrast: roundMetric( totalCellEdgeContrast / Math.max( cellEdgeSamples, 1 ) )
 					};
 
 				};
 
-				const captureRegionArtifactMetrics = () => {
+				const captureRegionArtifactMetrics = ( regionsToCapture = artifactRegions ) => {
 
 					const canvasSample = captureCanvasSample();
 					const regions = {};
 
-					for ( const [ name, region ] of Object.entries( artifactRegions ) ) {
+					for ( const [ name, region ] of Object.entries( regionsToCapture ) ) {
 
 						regions[ name ] = createLocalArtifactMetric( region, canvasSample );
 
 					}
 
 					return regions;
+
+				};
+
+				const createBakeTexelBudget = ( resolution = params.resolution, cubemapSize = params.cubemapSize ) => {
+
+					const probes = resolution * resolution * resolution;
+					const cubemapFaceTexels = cubemapSize * cubemapSize;
+					const cubemapTexels = probes * 6 * cubemapFaceTexels;
+					const lowResTexels = 4 * 4 * 4 * 6 * 8 * 8;
+
+					return {
+						resolution,
+						cubemapSize,
+						probes,
+						cubemapFaceTexels,
+						cubemapTexels,
+						relativeToLowRes: roundMetric( cubemapTexels / lowResTexels )
+					};
+
+				};
+
+				const createObjectArtifactPressure = ( regions ) => {
+
+					const objectRegions = [ 'sphere', 'tallBox', 'shortBox' ].map( name => regions[ name ] ).filter( Boolean );
+					const maxDarkPixelRatio = Math.max( ...objectRegions.map( region => region.darkPixelRatio ) );
+					const maxBlackPixelRatio = Math.max( ...objectRegions.map( region => region.blackPixelRatio ) );
+					const maxCellEdgeContrast = Math.max( ...objectRegions.map( region => region.cellEdgeContrast ) );
+					const luminanceFloor = Math.min( ...objectRegions.map( region => region.luminance.p01 ) );
+
+					return {
+						sphereDarkPixelRatio: roundMetric( regions.sphere.darkPixelRatio ),
+						tallBoxDarkPixelRatio: roundMetric( regions.tallBox.darkPixelRatio ),
+						shortBoxDarkPixelRatio: roundMetric( regions.shortBox.darkPixelRatio ),
+						objectDarkTailRatio: roundMetric( maxDarkPixelRatio ),
+						objectBlackTailRatio: roundMetric( maxBlackPixelRatio ),
+						luminanceFloor: roundMetric( luminanceFloor ),
+						cellEdgeContrast: roundMetric( maxCellEdgeContrast ),
+						status: maxBlackPixelRatio > 0.15 || luminanceFloor < 24 ? 'PRESSURE' : 'bounded'
+					};
+
+				};
+
+				const captureLeakRegionMetrics = () => {
+
+					const regions = captureRegionArtifactMetrics( createLeakCaptureRegions() );
+					const leftReceiver = regions.leftReceiver;
+					const rightReceiver = regions.rightReceiver;
+					const wrongSideColorRatio = Math.max(
+						leftReceiver.colorBias.greenOverRed,
+						rightReceiver.colorBias.redOverGreen
+					);
+					const correctBounceRatio = Math.min(
+						leftReceiver.colorBias.redOverGreen,
+						rightReceiver.colorBias.greenOverRed
+					);
+					const luminanceMean = ( leftReceiver.luminance.mean + rightReceiver.luminance.mean ) * 0.5;
+					const darkPixelRatio = Math.max( leftReceiver.darkPixelRatio, rightReceiver.darkPixelRatio );
+					const cellEdgeContrast = Math.max( leftReceiver.cellEdgeContrast, rightReceiver.cellEdgeContrast );
+
+					return {
+						regions,
+						wrongSideColorRatio: roundMetric( wrongSideColorRatio ),
+						correctBounceRatio: roundMetric( correctBounceRatio ),
+						luminance: {
+							mean: roundMetric( luminanceMean ),
+							minP05: roundMetric( Math.min( leftReceiver.luminance.p05, rightReceiver.luminance.p05 ) ),
+							maxP95: roundMetric( Math.max( leftReceiver.luminance.p95, rightReceiver.luminance.p95 ) )
+						},
+						darkPixelRatio: roundMetric( darkPixelRatio ),
+						cellEdgeContrast: roundMetric( cellEdgeContrast )
+					};
 
 				};
 
@@ -1461,6 +1740,232 @@
 						upperCenter: createArtifactColor( upperCenter ),
 						floorCenter: createArtifactColor( floorCenter )
 					};
+
+				};
+
+				const createHarnessStateSnapshot = () => ( {
+					resolution: params.resolution,
+					cubemapSize: params.cubemapSize,
+					projectionPrecision: params.projectionPrecision,
+					band1Intensity: params.band1Intensity,
+					band2Intensity: params.band2Intensity,
+					normalBias: params.normalBias,
+					viewBias: params.viewBias,
+					leakReductionMode: params.leakReductionMode,
+					useProbeValidity: params.useProbeValidity,
+					lightingMode: params.lightingMode,
+					materialType: params.materialType,
+					probeHelper: params.probeHelper
+				} );
+
+				const restoreHarnessState = async ( previousState, reason ) => {
+
+					params.resolution = previousState.resolution;
+					params.cubemapSize = previousState.cubemapSize;
+					params.projectionPrecision = previousState.projectionPrecision;
+					params.band1Intensity = previousState.band1Intensity;
+					params.band2Intensity = previousState.band2Intensity;
+					params.normalBias = previousState.normalBias;
+					params.viewBias = previousState.viewBias;
+					params.leakReductionMode = previousState.leakReductionMode;
+					params.useProbeValidity = previousState.useProbeValidity;
+					params.lightingMode = previousState.lightingMode;
+					params.probeHelper = previousState.probeHelper;
+					probeHelper.visible = previousState.probeHelper;
+
+					if ( params.materialType !== previousState.materialType ) {
+
+						params.materialType = previousState.materialType;
+						updateMaterialType();
+
+					}
+
+					await recreateAndBakeRequired( reason );
+					renderer.render( scene, camera );
+
+				};
+
+				const createProbeVisibilitySnapshot = () => ( {
+					leakFixtureGroupVisible: leakFixture !== null ? leakFixture.group.visible : false,
+					meshes: probeMeshes.map( mesh => mesh.visible )
+				} );
+
+				const restoreProbeVisibilitySnapshot = ( previousVisibility ) => {
+
+					for ( let i = 0; i < probeMeshes.length; i ++ ) {
+
+						probeMeshes[ i ].visible = previousVisibility.meshes[ i ];
+
+					}
+
+					if ( leakFixture !== null ) leakFixture.group.visible = previousVisibility.leakFixtureGroupVisible;
+
+				};
+
+				const setBaseCornellProbeMeshesVisible = ( visible ) => {
+
+					for ( const mesh of probeMeshes ) {
+
+						if ( mesh.userData.leakFixture !== true ) mesh.visible = visible;
+
+					}
+
+				};
+
+				const setLeakFixtureMode = ( mode ) => {
+
+					if ( leakFixture === null ) return;
+
+					const enabled = mode !== 'off';
+					leakFixture.group.visible = enabled;
+
+					for ( const mesh of leakFixture.meshes ) {
+
+						mesh.visible = enabled;
+
+					}
+
+					leakFixture.thinDivider.visible = mode === 'thin-wall';
+					leakFixture.zeroThicknessDivider.visible = mode === 'zero-thickness';
+					leakFixture.zeroThicknessDivider.material.side = THREE.DoubleSide;
+
+				};
+
+				const getProbeHarnessMetrics = () => ( {
+					resolution: params.resolution,
+					cubemapSize: params.cubemapSize,
+					precision: probeGrid.getPrecisionInfo( renderer ),
+					sampling: probeGrid.getSamplingInfo(),
+					memory: probeGrid.getMemoryInfo(),
+					isLightProbeGrid: probeGrid.isLightProbeGrid,
+					hasTexture: probeGrid.texture !== null,
+					hasBoundingBox: probeGrid.boundingBox !== undefined,
+					materialType: params.materialType,
+					lightingMode: params.lightingMode,
+					status: params.bakeStatus,
+					timings: { ...timings }
+				} );
+
+				const groundingParitySnapshotCases = {
+					'low-res-damped': {
+						proofRole: 'baseline',
+						referenceBoundary: 'Current damped WebGPU low-res diagnostic baseline.',
+						resolution: 4,
+						cubemapSize: 8,
+						band1Intensity: 0.6,
+						band2Intensity: 0.55,
+						leakReductionMode: 'off',
+						useProbeValidity: true
+					},
+					'low-res-unweighted': {
+						proofRole: 'candidate',
+						referenceBoundary: 'Full first-band WebGPU low-res candidate using hardware-filtered unweighted sampling.',
+						resolution: 4,
+						cubemapSize: 8,
+						band1Intensity: 1,
+						band2Intensity: 0.55,
+						leakReductionMode: 'off',
+						useProbeValidity: true
+					},
+					'low-res-validity-weighted': {
+						proofRole: 'candidate-weighted',
+						referenceBoundary: 'Full first-band WebGPU low-res candidate using scoped validity/normal-weighted sampling.',
+						resolution: 4,
+						cubemapSize: 8,
+						band1Intensity: 1,
+						band2Intensity: 0.55,
+						leakReductionMode: 'normal',
+						useProbeValidity: true
+					},
+					'webgpu-webgl-density-reference': {
+						proofRole: 'same-budget-artifact-pressure',
+						referenceBoundary: 'WebGPU row using the WebGL LightProbeGrid reference density/cubemap budget as an artifact pressure stress row, not a visual-quality win; higher bake detail can expose L2 SH dark-tail/ringing artifacts.',
+						resolution: 6,
+						cubemapSize: 32,
+						band1Intensity: 1,
+						band2Intensity: 0.55,
+						leakReductionMode: 'off',
+						useProbeValidity: true
+					}
+				};
+
+				let groundingParitySnapshotRestoreState = null;
+
+				const applyGroundingParitySnapshot = async ( label ) => {
+
+					const snapshotCase = groundingParitySnapshotCases[ label ];
+
+					if ( snapshotCase === undefined ) {
+
+						throw new Error( `Unknown grounding parity snapshot case: ${ label }.` );
+
+					}
+
+					if ( groundingParitySnapshotRestoreState === null ) {
+
+						groundingParitySnapshotRestoreState = createHarnessStateSnapshot();
+
+					}
+
+					params.resolution = snapshotCase.resolution;
+					params.cubemapSize = snapshotCase.cubemapSize;
+					params.projectionPrecision = 'half float';
+					params.band1Intensity = snapshotCase.band1Intensity;
+					params.band2Intensity = snapshotCase.band2Intensity;
+					params.normalBias = 0.5;
+					params.viewBias = 0;
+					params.leakReductionMode = snapshotCase.leakReductionMode;
+					params.useProbeValidity = snapshotCase.useProbeValidity;
+					params.lightingMode = 'probes only';
+					params.probeHelper = false;
+					probeHelper.visible = false;
+
+					if ( params.materialType !== 'standard' ) {
+
+						params.materialType = 'standard';
+						updateMaterialType();
+
+					}
+
+					await recreateAndBakeRequired( `grounding parity snapshot ${ label }` );
+					renderer.render( scene, camera );
+					const regions = captureRegionArtifactMetrics();
+
+					return {
+						label,
+						proofRole: snapshotCase.proofRole,
+						referenceBoundary: snapshotCase.referenceBoundary,
+						probeIntensity: params.probeIntensity,
+						probeHelperIntensity: params.probeHelperIntensity,
+						band1Intensity: params.band1Intensity,
+						band2Intensity: params.band2Intensity,
+						normalBias: params.normalBias,
+						viewBias: params.viewBias,
+						metrics: getProbeHarnessMetrics(),
+						bakeTexelBudget: createBakeTexelBudget(),
+						colorSanity: await captureColorSanity(),
+						artifactSignature: captureArtifactSignature(),
+						localArtifactMetric: createLocalArtifactMetric(),
+						regions,
+						artifactPressure: createObjectArtifactPressure( regions )
+					};
+
+				};
+
+				const restoreGroundingParitySnapshot = async () => {
+
+					if ( groundingParitySnapshotRestoreState === null ) {
+
+						return getProbeHarnessMetrics();
+
+					}
+
+					const previousState = groundingParitySnapshotRestoreState;
+					groundingParitySnapshotRestoreState = null;
+
+					await restoreHarnessState( previousState, 'grounding parity snapshot restore' );
+
+					return getProbeHarnessMetrics();
 
 				};
 
@@ -1494,6 +1999,34 @@
 					const previousProbeHelper = params.probeHelper;
 					const rows = [];
 					const cases = [
+						{
+							label: 'low-res-damped',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 0.6,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'low-res-unweighted',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'off'
+						},
+						{
+							label: 'low-res-validity-weighted',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'normal',
+							useProbeValidity: true
+						},
 						{
 							label: 'l0-only',
 							resolution: 4,
@@ -1619,6 +2152,7 @@
 							projectionPrecision: overrides.projectionPrecision ?? params.projectionPrecision,
 							band1Intensity: params.band1Intensity,
 							band2Intensity: params.band2Intensity,
+							probeIntensity: params.probeIntensity,
 							normalBias: params.normalBias,
 							viewBias: params.viewBias,
 							leakReductionMode: params.leakReductionMode,
@@ -1716,11 +2250,15 @@
 					const previousNormalBias = params.normalBias;
 					const previousViewBias = params.viewBias;
 					const previousLeakReductionMode = params.leakReductionMode;
+					const previousUseProbeValidity = params.useProbeValidity;
 					const previousLightingMode = params.lightingMode;
 					const previousMaterialType = params.materialType;
 					const previousProbeHelper = params.probeHelper;
 					const rows = [];
 					const cases = [
+						{ label: 'low-res-damped', cubemapSize: 8, band1Intensity: 0.6, band2Intensity: 0.55, leakReductionMode: 'off', useProbeValidity: true },
+						{ label: 'low-res-unweighted', cubemapSize: 8, band1Intensity: 1, band2Intensity: 0.55, leakReductionMode: 'off', useProbeValidity: true },
+						{ label: 'low-res-validity-weighted', cubemapSize: 8, band1Intensity: 1, band2Intensity: 0.55, leakReductionMode: 'normal', useProbeValidity: true },
 						{ label: 'cubemap-8-shadows-on', cubemapSize: 8, shadowsDisabledDuringBake: false },
 						{ label: 'cubemap-16-shadows-on', cubemapSize: 16, shadowsDisabledDuringBake: false },
 						{ label: 'cubemap-32-shadows-on', cubemapSize: 32, shadowsDisabledDuringBake: false },
@@ -1748,6 +2286,7 @@
 						params.normalBias = previousNormalBias;
 						params.viewBias = previousViewBias;
 						params.leakReductionMode = previousLeakReductionMode;
+						params.useProbeValidity = previousUseProbeValidity;
 						params.lightingMode = previousLightingMode;
 						params.probeHelper = previousProbeHelper;
 						probeHelper.visible = previousProbeHelper;
@@ -1774,7 +2313,8 @@
 							params.band2Intensity = regionCase.band2Intensity ?? 0.55;
 							params.normalBias = 0.5;
 							params.viewBias = 0;
-							params.leakReductionMode = 'off';
+							params.leakReductionMode = regionCase.leakReductionMode ?? 'off';
+							params.useProbeValidity = regionCase.useProbeValidity ?? true;
 							params.lightingMode = 'probes only';
 							params.probeHelper = false;
 							probeHelper.visible = false;
@@ -1800,6 +2340,7 @@
 							const colorSanity = await captureColorSanity();
 							const artifactSignature = captureArtifactSignature();
 							const regions = captureRegionArtifactMetrics();
+							const artifactPressure = createObjectArtifactPressure( regions );
 
 							rows.push( {
 								label: regionCase.label,
@@ -1809,9 +2350,11 @@
 								projectionPrecision: params.projectionPrecision,
 								band1Intensity: params.band1Intensity,
 								band2Intensity: params.band2Intensity,
+								probeIntensity: params.probeIntensity,
 								normalBias: params.normalBias,
 								viewBias: params.viewBias,
 								leakReductionMode: params.leakReductionMode,
+								useProbeValidity: params.useProbeValidity,
 								shadowsDisabledDuringBake: regionCase.shadowsDisabledDuringBake === true,
 								directLightDisabledDuringBake: regionCase.directLightDisabledDuringBake === true,
 								lightPanelHiddenDuringBake: regionCase.lightPanelHiddenDuringBake === true,
@@ -1823,6 +2366,8 @@
 								colorSanity,
 								artifactSignature,
 								regions,
+								artifactPressure,
+								bakeTexelBudget: createBakeTexelBudget(),
 								cubemapMs: timings.cubemapMs,
 								projectionMs: timings.projectionMs,
 								copyMs: timings.copyMs,
@@ -1839,13 +2384,34 @@
 					}
 
 					const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
-					const maxDarkPixelRatio = row => Math.max( ...Object.values( row.regions ).map( region => region.darkPixelRatio ) );
-					const minP05 = row => Math.min( ...Object.values( row.regions ).map( region => region.luminance.p05 ) );
+					const legacyRegionNames = [ 'leftWall', 'rightWall', 'backWall', 'ceilingEmitter', 'floorCenter', 'sphere', 'tallBox' ];
+					const maxDarkPixelRatio = row => Math.max( ...legacyRegionNames.map( name => row.regions[ name ].darkPixelRatio ) );
+					const minP05 = row => Math.min( ...legacyRegionNames.map( name => row.regions[ name ].luminance.p05 ) );
 					const delta = ( a, b, read ) => roundMetric( Math.abs( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) );
+					const signedDelta = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) - read( rowMap.get( a ) ) );
 
 					return {
 						rows,
 						comparisons: {
+							lowRes: {
+								tallBoxRedOverGreenGain: signedDelta(
+									'low-res-damped',
+									'low-res-unweighted',
+									row => row.regions.tallBox.colorBias.redOverGreen
+								),
+								tallBoxDarkPixelRatioDelta: signedDelta(
+									'low-res-damped',
+									'low-res-unweighted',
+									row => row.regions.tallBox.darkPixelRatio
+								),
+								tallBoxCellEdgeContrastDelta: signedDelta(
+									'low-res-damped',
+									'low-res-unweighted',
+									row => row.regions.tallBox.cellEdgeContrast
+								),
+								sphereGreenOverRed: roundMetric( rowMap.get( 'low-res-unweighted' ).regions.sphere.colorBias.greenOverRed ),
+								rightWallGreenOverRed: roundMetric( rowMap.get( 'low-res-unweighted' ).regions.rightWall.colorBias.greenOverRed )
+							},
 							cubemap: {
 								darkPixelRatioDelta16: delta( 'cubemap-8-shadows-on', 'cubemap-16-shadows-on', maxDarkPixelRatio ),
 								darkPixelRatioDelta32: delta( 'cubemap-8-shadows-on', 'cubemap-32-shadows-on', maxDarkPixelRatio ),
@@ -1888,21 +2454,162 @@
 
 				};
 
+				const runProbeLeakMatrix = async () => {
+
+					const previousState = createHarnessStateSnapshot();
+					const previousVisibility = createProbeVisibilitySnapshot();
+					const rows = [];
+					const cases = [
+						{
+							label: 'leak-thin-wall-unweighted',
+							fixtureMode: 'thin-wall',
+							leakReductionMode: 'off',
+							useProbeValidity: true,
+							proofRole: 'baseline'
+						},
+						{
+							label: 'leak-thin-wall-normal-weighted',
+							fixtureMode: 'thin-wall',
+							leakReductionMode: 'normal',
+							useProbeValidity: false,
+							proofRole: 'candidate-normal-weighted'
+						},
+						{
+							label: 'leak-thin-wall-validity-weighted',
+							fixtureMode: 'thin-wall',
+							leakReductionMode: 'normal',
+							useProbeValidity: true,
+							proofRole: 'candidate-validity-normal-weighted'
+						},
+						{
+							label: 'leak-zero-thickness-unweighted',
+							fixtureMode: 'zero-thickness',
+							leakReductionMode: 'off',
+							useProbeValidity: true,
+							proofRole: 'negative-control-baseline',
+							negativeControlStatus: 'OPEN'
+						},
+						{
+							label: 'leak-zero-thickness-validity-weighted',
+							fixtureMode: 'zero-thickness',
+							leakReductionMode: 'normal',
+							useProbeValidity: true,
+							proofRole: 'negative-control-candidate',
+							negativeControlStatus: 'OPEN'
+						}
+					];
+
+					const restoreState = async () => {
+
+						restoreProbeVisibilitySnapshot( previousVisibility );
+						await restoreHarnessState( previousState, 'leak matrix restore' );
+
+					};
+
+					try {
+
+						for ( const leakCase of cases ) {
+
+							setBaseCornellProbeMeshesVisible( false );
+							setLeakFixtureMode( leakCase.fixtureMode );
+
+							params.resolution = 4;
+							params.cubemapSize = 8;
+							params.projectionPrecision = 'half float';
+							params.band1Intensity = 1;
+							params.band2Intensity = 0.55;
+							params.normalBias = 0.5;
+							params.viewBias = 0;
+							params.leakReductionMode = leakCase.leakReductionMode;
+							params.useProbeValidity = leakCase.useProbeValidity;
+							params.lightingMode = 'probes only';
+							params.probeHelper = false;
+							probeHelper.visible = false;
+
+							if ( params.materialType !== 'standard' ) {
+
+								params.materialType = 'standard';
+								updateMaterialType();
+
+							}
+
+							setLeakFixtureMode( leakCase.fixtureMode );
+
+							await recreateAndBakeRequired( `leak matrix ${ leakCase.label }` );
+							renderer.render( scene, camera );
+
+							rows.push( {
+								label: leakCase.label,
+								proofRole: leakCase.proofRole,
+								fixtureMode: leakCase.fixtureMode,
+								negativeControlStatus: leakCase.negativeControlStatus ?? 'not-applicable',
+								resolution: params.resolution,
+								probes: probeGrid.totalProbes,
+								cubemapSize: params.cubemapSize,
+								projectionPrecision: params.projectionPrecision,
+								band1Intensity: params.band1Intensity,
+								band2Intensity: params.band2Intensity,
+								probeIntensity: params.probeIntensity,
+								normalBias: params.normalBias,
+								viewBias: params.viewBias,
+								leakReductionMode: params.leakReductionMode,
+								useProbeValidity: params.useProbeValidity,
+								lightingMode: params.lightingMode,
+								materialType: params.materialType,
+								precision: probeGrid.getPrecisionInfo( renderer ),
+								sampling: probeGrid.getSamplingInfo(),
+								occupancy: collectProbeOccupancy( params.resolution ),
+								leakMetrics: captureLeakRegionMetrics(),
+								cubemapMs: timings.cubemapMs,
+								projectionMs: timings.projectionMs,
+								copyMs: timings.copyMs,
+								totalBakeMs: timings.totalBakeMs,
+								frameMs: timings.frameMs
+							} );
+
+						}
+
+					} finally {
+
+						await restoreState();
+
+					}
+
+					const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
+					const readWrongSide = row => row.leakMetrics.wrongSideColorRatio;
+					const readCorrectBounce = row => row.leakMetrics.correctBounceRatio;
+					const readDarkPixelRatio = row => row.leakMetrics.darkPixelRatio;
+					const readCellEdgeContrast = row => row.leakMetrics.cellEdgeContrast;
+					const signedDelta = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) - read( rowMap.get( a ) ) );
+					const ratio = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
+
+					return {
+						rows,
+						comparisons: {
+							thinWall: {
+								normalWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-normal-weighted', readWrongSide ),
+								validityWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readWrongSide ),
+								normalCorrectBouncePreservation: ratio( 'leak-thin-wall-unweighted', 'leak-thin-wall-normal-weighted', readCorrectBounce ),
+								validityCorrectBouncePreservation: ratio( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readCorrectBounce ),
+								validityDarkPixelRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readDarkPixelRatio ),
+								validityCellEdgeContrastDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readCellEdgeContrast )
+							},
+							zeroThickness: {
+								status: 'OPEN',
+								validityWrongSideColorRatioDelta: signedDelta( 'leak-zero-thickness-unweighted', 'leak-zero-thickness-validity-weighted', readWrongSide ),
+								validityCorrectBouncePreservation: ratio( 'leak-zero-thickness-unweighted', 'leak-zero-thickness-validity-weighted', readCorrectBounce )
+							}
+						},
+						restored: {
+							...window.__webgpuLightProbeGridCornell.getMetrics(),
+							leakFixtureVisible: leakFixture !== null && leakFixture.group.visible === true
+						}
+					};
+
+				};
+
 				window.__webgpuLightProbeGridCornell = {
-					getMetrics: () => ( {
-						resolution: params.resolution,
-						cubemapSize: params.cubemapSize,
-						precision: probeGrid.getPrecisionInfo( renderer ),
-						sampling: probeGrid.getSamplingInfo(),
-						memory: probeGrid.getMemoryInfo(),
-						isLightProbeGrid: probeGrid.isLightProbeGrid,
-						hasTexture: probeGrid.texture !== null,
-						hasBoundingBox: probeGrid.boundingBox !== undefined,
-						materialType: params.materialType,
-						lightingMode: params.lightingMode,
-						status: params.bakeStatus,
-						timings: { ...timings }
-					} ),
+					getMetrics: getProbeHarnessMetrics,
 					setResolution: async ( value ) => {
 
 						params.resolution = value;
@@ -2152,6 +2859,10 @@
 					runArtifactMatrix: runProbeDiagnosticMatrix,
 					runProbeDiagnosticMatrix,
 					runProbeArtifactRegionMatrix,
+					captureLeakRegionMetrics,
+					runProbeLeakMatrix,
+					applyGroundingParitySnapshot,
+					restoreGroundingParitySnapshot,
 					testBakeCoalescing: async () => {
 
 						let result = null;
