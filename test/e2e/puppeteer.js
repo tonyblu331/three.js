@@ -1163,6 +1163,62 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 		deferredRuntimeWork: 'If the same pattern fails on more adapters, next scoped runtime work is private anti-ringing/visibility design: per-probe confidence, visibility/depth moments, probe relocation/classification, or adaptive bricks; no public preset/API change in this pass.'
 	};
 
+	const externalImplementationResearch = {
+		status: 'VERIFIED-SCOPED',
+		searchedFor: [
+			'NVIDIA RTXGI / DDGI SDK',
+			'Unity Adaptive Probe Volumes',
+			'WebGPU surfel GI implementations',
+			'Shade / Usnul WebGPU DDGI notes',
+			'Sixteen Studio / SixTeenStudios public GitHub traces'
+		],
+		primarySources: [
+			{
+				name: 'NVIDIAGameWorks/RTXGI-DDGI',
+				url: 'https://github.com/NVIDIAGameWorks/RTXGI-DDGI',
+				lesson: 'Production DDGI separates irradiance from distance/visibility data, applies normal/view surface bias, wraps normal weighting, Chebyshev variance visibility, weight crushing, and keeps relocation/classification as explicit systems.'
+			},
+			{
+				name: 'NVIDIA light-field probes',
+				url: 'https://research.nvidia.com/publication/2017-02_real-time-global-illumination-using-precomputed-light-field-probes',
+				lesson: 'Leak control comes from storing visibility with probe data; irradiance alone is not enough for walls and occluded receivers.'
+			},
+			{
+				name: 'Unity Adaptive Probe Volumes',
+				url: 'https://docs.unity.cn/2023.3/Documentation/Manual/urp/probevolumes-concept.html',
+				lesson: 'APV samples probes per pixel, organizes data into adaptive 4x4x4 bricks, and exposes density/streaming/debug controls rather than treating a single uniform grid as production-grade.'
+			},
+			{
+				name: 'Unity APV issue-fixing guidance',
+				url: 'https://github.com/Unity-Technologies/Graphics/blob/master/Packages/com.unity.render-pipelines.high-definition/Documentation~/probevolumes-fixissues.md',
+				lesson: 'APV treats invalid probes with virtual offset and dilation, and calls out wall thickness, rendering layers, and probe adjustment volumes as leak controls.'
+			},
+			{
+				name: 'jure/webgiya',
+				url: 'https://github.com/jure/webgiya',
+				lesson: 'A modern WebGPU GI experiment uses explicit pass decomposition, spatial structures, temporal integration, radial depth moments, and resolve-time spatial/normal/occlusion weighting.'
+			},
+			{
+				name: 'Shade WebGPU forum notes',
+				url: 'https://discourse.threejs.org/t/shade-webgpu-graphics/66969/116',
+				lesson: 'The reported DDGI leak strategy combines local cells, per-probe depth maps, normal visibility, parallax correction, and refinement; this is directionally aligned with DDGI-lite visibility scaffolding, not plain SH interpolation.'
+			}
+		],
+		sixteenStudioFinding: 'No relevant public GitHub implementation for “Sixteen Studio” / “SixTeenStudios” + light probes/DDGI/WebGPU was verified in this pass; do not cite or emulate it until the exact repository or implementation is identified.',
+		transferToLightProbeGridGPU: [
+			'Keep the current SH-only grid honest as diffuse irradiance, not real DDGI.',
+			'Next runtime-quality step is a private visibility/depth-moment layer, proven first by the existing thin-wall and zero-thickness negative-control fixtures.',
+			'Add virtual-offset/dilation-style verifier rows before claiming APV-grade invalid-probe handling.',
+			'Keep unweighted sampling on hardware filtering; only weighted visibility paths should use manual loads.',
+			'Track bake memory, pass order, and data dependencies as first-class proof artifacts.'
+		],
+		nonGoalsForCurrentPR: [
+			'No public preset API.',
+			'No claiming production DDGI or APV parity.',
+			'No copying external code; only source-backed architecture lessons are recorded.'
+		]
+	};
+
 	return {
 		generatedAt: new Date().toISOString(),
 		file,
@@ -1197,6 +1253,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			leakComparisons: leakMatrix.comparisons,
 			densityArtifactStudy,
 			mathAndPipelineDecision,
+			externalImplementationResearch,
 			shMathContract,
 			bakeTexelBudgets,
 			performanceEvidence,
@@ -1213,7 +1270,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			'claiming the same-budget density stress screenshot is a visual-quality win',
 			'hiding low-order SH representation dark-tail/ringing artifacts behind probe-density language',
 			'confusing screenshot-space RGB ratios with linear radiance',
-			'claiming production DDGI parity without visibility/depth moments'
+			'claiming production DDGI parity without visibility/depth moments',
+			'citing unverified Sixteen Studio implementation details without an exact public source'
 		],
 		rejectionGates: [
 			{ gate: 'Tall-box red/green bias must improve over damped baseline.', result: 'passed' },
@@ -1228,7 +1286,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			{ gate: 'Weighted thin-wall rows must bound wrong-side color leak without erasing correct bounce.', result: 'passed' },
 			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' },
 			{ gate: 'WebGL same-class reference screenshot must be captured as secondary evidence, not substituted for WebGPU e2e gates.', result: 'passed' },
-			{ gate: 'SH projection/evaluation math must satisfy constant-radiance pi scaling and match THREE.SphericalHarmonics3 irradiance constants/order.', result: 'passed' }
+			{ gate: 'SH projection/evaluation math must satisfy constant-radiance pi scaling and match THREE.SphericalHarmonics3 irradiance constants/order.', result: 'passed' },
+			{ gate: 'External implementation research must be recorded as architecture lessons without expanding current runtime/API scope.', result: 'passed' }
 		],
 		uncertainties: [
 			{ status: 'OPEN', item: 'Screenshot-space RGB ratios are regression signals, not linear-radiance proof.' },
@@ -1240,7 +1299,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored, w
 			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved by occupancy validity; they need real visibility/depth moments or a separate visibility structure.' },
 			{ status: 'OPEN', item: 'No adaptive density, probe relocation, classification, dilation, or virtual-offset pipeline yet.' },
 			{ status: 'SUPPORTED', item: 'Actual WebGL LightProbeGrid 6^3 / 32px probes-only screenshot and screenshot-space metrics are captured as same-class secondary reference evidence.' },
-			{ status: 'SUPPORTED', item: 'Synthetic SH math contract verifies constant radiance maps to pi-scaled irradiance, x/y/z signs are preserved, and runtime constants/order match THREE.SphericalHarmonics3.getIrradianceAt().' }
+			{ status: 'SUPPORTED', item: 'Synthetic SH math contract verifies constant radiance maps to pi-scaled irradiance, x/y/z signs are preserved, and runtime constants/order match THREE.SphericalHarmonics3.getIrradianceAt().' },
+			{ status: 'OPEN', item: 'No relevant public Sixteen Studio / SixTeenStudios light-probe or DDGI implementation was verified; exact source is needed before making implementation claims.' }
 		],
 		proofLadder: [
 			{ level: 'examples', evidence: 'low-res proof snapshots, region matrices, and controlled thin-wall leak rows' },
@@ -1346,7 +1406,29 @@ function createLightProbeProofMarkdown( report ) {
 		`- Deferred runtime work: ${ pipelineDecision.deferredRuntimeWork }`
 	);
 
+	const externalResearch = report.currentEvidence.externalImplementationResearch;
+
 	lines.push(
+		'',
+		'## External Implementation Research',
+		'',
+		`- Status: ${ externalResearch.status }`,
+		`- Sixteen Studio finding: ${ externalResearch.sixteenStudioFinding }`,
+		'',
+		'| Source | Transfer lesson | URL |',
+		'|---|---|---|'
+	);
+
+	for ( const source of externalResearch.primarySources ) {
+
+		lines.push( [ source.name, source.lesson, source.url ].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ) );
+
+	}
+
+	lines.push(
+		'',
+		'### Transfer to LightProbeGridGPU',
+		...externalResearch.transferToLightProbeGridGPU.map( lesson => `- ${ lesson }` ),
 		'',
 		'## Density Artifact Study',
 		'',
