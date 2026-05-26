@@ -39,6 +39,8 @@
 
 			import * as THREE from 'three/webgpu';
 
+			import { Fn, floor, uniform, uv, vec4 } from 'three/tsl';
+
 			import { Inspector } from 'three/addons/inspector/Inspector.js';
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPU.js';
@@ -72,6 +74,7 @@
 				normalBias: 0.5,
 				viewBias: 0,
 				leakReductionMode: 'off',
+				useProbeValidity: true,
 				lightingMode: 'direct + probes',
 				neutralMaterials: false,
 				probeHelper: false,
@@ -369,7 +372,7 @@
 
 				disposeProbeResources();
 
-				probeGrid = new LightProbeGridGPU( gridMin, gridMax, {
+				const probeOptions = {
 					resolution: params.resolution,
 					cubemapSize: params.cubemapSize,
 					projectionPrecision: params.projectionPrecision,
@@ -380,9 +383,12 @@
 					normalBias: params.normalBias,
 					viewBias: params.viewBias,
 					leakReductionMode: params.leakReductionMode,
-					probeValidity: createProbeValidityData( params.resolution ),
 					renderer
-				} );
+				};
+
+				if ( params.useProbeValidity ) probeOptions.probeValidity = createProbeValidityData( params.resolution );
+
+				probeGrid = new LightProbeGridGPU( gridMin, gridMax, probeOptions );
 
 				scene.add( probeGrid );
 				params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
@@ -1035,6 +1041,275 @@
 
 				};
 
+				const inspectAtlasPacking = async () => {
+
+					const shCoefficientCount = 9;
+					const packedAtlasTextureCount = 7;
+					const atlasPadding = 1;
+					const resolution = 4;
+					const totalProbes = resolution * resolution * resolution;
+					const paddedSlices = resolution + 2 * atlasPadding;
+					const atlasDepth = packedAtlasTextureCount * paddedSlices;
+					const syntheticProbeScale = 0.014;
+					const syntheticCoefficientScale = 0.001;
+					const syntheticChannelOffsets = {
+						r: 0,
+						g: 0.0015,
+						b: 0.003,
+						a: 0.0045
+					};
+					const componentNames = [ 'r', 'g', 'b', 'a' ];
+					const coefficientPacking = [
+						[
+							{ coefficient: 0, component: 'r' },
+							{ coefficient: 0, component: 'g' },
+							{ coefficient: 0, component: 'b' },
+							{ coefficient: 1, component: 'r' }
+						],
+						[
+							{ coefficient: 1, component: 'g' },
+							{ coefficient: 1, component: 'b' },
+							{ coefficient: 2, component: 'r' },
+							{ coefficient: 2, component: 'g' }
+						],
+						[
+							{ coefficient: 2, component: 'b' },
+							{ coefficient: 3, component: 'r' },
+							{ coefficient: 3, component: 'g' },
+							{ coefficient: 3, component: 'b' }
+						],
+						[
+							{ coefficient: 4, component: 'r' },
+							{ coefficient: 4, component: 'g' },
+							{ coefficient: 4, component: 'b' },
+							{ coefficient: 5, component: 'r' }
+						],
+						[
+							{ coefficient: 5, component: 'g' },
+							{ coefficient: 5, component: 'b' },
+							{ coefficient: 6, component: 'r' },
+							{ coefficient: 6, component: 'g' }
+						],
+						[
+							{ coefficient: 6, component: 'b' },
+							{ coefficient: 7, component: 'r' },
+							{ coefficient: 7, component: 'g' },
+							{ coefficient: 7, component: 'b' }
+						],
+						[
+							{ coefficient: 8, component: 'r' },
+							{ coefficient: 8, component: 'g' },
+							{ coefficient: 8, component: 'b' },
+							{ value: 'validity' }
+						]
+					];
+					const probeValidity = Float32Array.from(
+						{ length: totalProbes },
+						( _, index ) => 0.25 + ( index % 7 ) * 0.1
+					);
+					const testGrid = new LightProbeGridGPU(
+						new THREE.Vector3( - 1, - 1, - 1 ),
+						new THREE.Vector3( 1, 1, 1 ),
+						{
+							resolution,
+							cubemapSize: 4,
+							projectionPrecision: 'half float',
+							probeValidity,
+							renderer
+						}
+					);
+
+					const encodeSyntheticCoefficient = ( probeIndex, coefficient, component ) =>
+						( probeIndex + 1 ) * syntheticProbeScale +
+						coefficient * syntheticCoefficientScale +
+						syntheticChannelOffsets[ component ];
+
+					const expectedPackedPixel = ( textureIndex, probeIndex ) => coefficientPacking[ textureIndex ].map( ( entry ) => {
+
+						if ( entry.value === 'validity' ) return probeValidity[ probeIndex ];
+
+						return encodeSyntheticCoefficient( probeIndex, entry.coefficient, entry.component );
+
+					} );
+
+					const decodeReadbackValue = ( value, data ) => data instanceof Uint16Array ?
+						THREE.DataUtils.fromHalfFloat( value ) :
+						value;
+
+					const readAtlasPixel = async ( layer, x, y ) => {
+
+						const data = await renderer.readRenderTargetPixelsAsync( testGrid.atlasTarget, x, y, 1, 1, 0, layer );
+
+						return componentNames.map( ( _, index ) => decodeReadbackValue( data[ index ], data ) );
+
+					};
+
+					const createReadbackCheck = async ( { textureIndex, gridZ, x, y, label, sourceGridZ = gridZ } ) => {
+
+						const layer = testGrid._getPackedAtlasLayer( textureIndex, gridZ );
+						const probeIndex = x + y * resolution + sourceGridZ * resolution * resolution;
+						const actual = await readAtlasPixel( layer, x, y );
+						const expected = expectedPackedPixel( textureIndex, probeIndex );
+						const deltas = actual.map( ( value, index ) => Math.abs( value - expected[ index ] ) );
+
+						return {
+							label,
+							textureIndex,
+							layer,
+							gridZ,
+							sourceGridZ,
+							x,
+							y,
+							probeIndex,
+							actual: actual.map( roundMetric ),
+							expected: expected.map( roundMetric ),
+							deltas: deltas.map( roundMetric ),
+							maxDelta: roundMetric( Math.max( ...deltas ) )
+						};
+
+					};
+
+					const renderSyntheticCoefficientBatch = async () => {
+
+						const previousRenderTarget = renderer.getRenderTarget();
+						const previousViewport = new THREE.Vector4();
+						const previousScissor = new THREE.Vector4();
+						const previousScissorTest = renderer.getScissorTest();
+						const previousAutoClear = renderer.autoClear;
+						const probeIndexUniform = uniform( 0 );
+						const sentinelMaterial = new THREE.NodeMaterial();
+						const sentinelScene = new THREE.Scene();
+						const sentinelCamera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
+						const sentinelGeometry = new THREE.PlaneGeometry( 2, 2 );
+						const sentinelMesh = new THREE.Mesh( sentinelGeometry, sentinelMaterial );
+						const writeCoefficient = Fn( () => {
+
+							const coefficient = floor( uv().x.mul( shCoefficientCount ) );
+							const base = probeIndexUniform.add( 1 ).mul( syntheticProbeScale ).add( coefficient.mul( syntheticCoefficientScale ) );
+
+							return vec4(
+								base.add( syntheticChannelOffsets.r ),
+								base.add( syntheticChannelOffsets.g ),
+								base.add( syntheticChannelOffsets.b ),
+								base.add( syntheticChannelOffsets.a )
+							);
+
+						} );
+
+						renderer.getViewport( previousViewport );
+						renderer.getScissor( previousScissor );
+
+						sentinelMaterial.fragmentNode = writeCoefficient();
+						sentinelMaterial.toneMapped = false;
+						sentinelScene.add( sentinelMesh );
+
+						try {
+
+							testGrid.coefficientTarget.scissorTest = false;
+							testGrid.coefficientTarget.viewport.set( 0, 0, shCoefficientCount, totalProbes );
+							testGrid.coefficientTarget.scissor.set( 0, 0, shCoefficientCount, totalProbes );
+							renderer.setRenderTarget( testGrid.coefficientTarget );
+							renderer.clear();
+							renderer.autoClear = false;
+							testGrid.coefficientTarget.scissorTest = true;
+
+							for ( let probeIndex = 0; probeIndex < totalProbes; probeIndex ++ ) {
+
+								probeIndexUniform.value = probeIndex;
+								testGrid.coefficientTarget.viewport.set( 0, probeIndex, shCoefficientCount, 1 );
+								testGrid.coefficientTarget.scissor.set( 0, probeIndex, shCoefficientCount, 1 );
+								renderer.setRenderTarget( testGrid.coefficientTarget );
+								renderer.render( sentinelScene, sentinelCamera );
+
+							}
+
+							await testGrid._repackAtlas( renderer );
+
+						} finally {
+
+							renderer.setRenderTarget( previousRenderTarget );
+							renderer.setViewport( previousViewport );
+							renderer.setScissor( previousScissor );
+							renderer.setScissorTest( previousScissorTest );
+							renderer.autoClear = previousAutoClear;
+
+							sentinelMaterial.dispose();
+							sentinelGeometry.dispose();
+
+						}
+
+					};
+
+					try {
+
+						await renderSyntheticCoefficientBatch();
+
+						const addressChecks = [];
+
+						for ( const textureIndex of [ 0, 1, 6 ] ) {
+
+							for ( const gridZ of [ 0, resolution - 1 ] ) {
+
+								const baseLayer = textureIndex * paddedSlices + atlasPadding;
+
+								addressChecks.push( {
+									textureIndex,
+									gridZ,
+									baseLayer,
+									methodBaseLayer: testGrid._getPackedAtlasBaseLayer( textureIndex ),
+									dataLayer: baseLayer + gridZ,
+									methodDataLayer: testGrid._getPackedAtlasLayer( textureIndex, gridZ ),
+									leadingPaddingLayer: baseLayer - atlasPadding,
+									methodLeadingPaddingLayer: testGrid._getPackedAtlasLayer( textureIndex, - atlasPadding ),
+									trailingPaddingLayer: baseLayer + resolution,
+									methodTrailingPaddingLayer: testGrid._getPackedAtlasLayer( textureIndex, resolution ),
+									centerSampleZ: roundMetric( ( baseLayer + gridZ + 0.5 ) / atlasDepth )
+								} );
+
+							}
+
+						}
+
+						const readbackChecks = [
+							await createReadbackCheck( { label: 'origin-y0-z0-t0', textureIndex: 0, gridZ: 0, x: 0, y: 0 } ),
+							await createReadbackCheck( { label: 'native-y3-z0-t0', textureIndex: 0, gridZ: 0, x: 1, y: resolution - 1 } ),
+							await createReadbackCheck( { label: 'middle-z1-t2', textureIndex: 2, gridZ: 1, x: 2, y: 1 } ),
+							await createReadbackCheck( { label: 'validity-z3-t6', textureIndex: 6, gridZ: 3, x: 3, y: 2 } )
+						];
+						const paddingChecks = [
+							await createReadbackCheck( { label: 'leading-padding-z0-t0', textureIndex: 0, gridZ: - atlasPadding, sourceGridZ: 0, x: 2, y: 1 } ),
+							await createReadbackCheck( { label: 'trailing-padding-z3-t0', textureIndex: 0, gridZ: resolution, sourceGridZ: resolution - 1, x: 2, y: 1 } ),
+							await createReadbackCheck( { label: 'leading-padding-validity-t6', textureIndex: 6, gridZ: - atlasPadding, sourceGridZ: 0, x: 1, y: 2 } )
+						];
+						const allReadbackChecks = [ ...readbackChecks, ...paddingChecks ];
+
+						return {
+							resolution,
+							totalProbes,
+							shCoefficientCount,
+							packedAtlasTextureCount,
+							atlasPadding,
+							paddedSlices,
+							atlasDepth,
+							gridProbeIndexFormula: 'x + y * resolution + z * resolution^2',
+							addressChecks,
+							coefficientPacking,
+							readbackChecks,
+							paddingChecks,
+							maxReadbackDelta: roundMetric( Math.max( ...allReadbackChecks.map( check => check.maxDelta ) ) ),
+							validityProbeIndex: readbackChecks[ 3 ].probeIndex,
+							validityExpected: readbackChecks[ 3 ].expected[ 3 ],
+							validityActual: readbackChecks[ 3 ].actual[ 3 ]
+						};
+
+					} finally {
+
+						testGrid.dispose();
+
+					}
+
+				};
+
 				const inspectProbeOccupancy = () => {
 
 					return {
@@ -1213,6 +1488,7 @@
 					const previousNormalBias = params.normalBias;
 					const previousViewBias = params.viewBias;
 					const previousLeakReductionMode = params.leakReductionMode;
+					const previousUseProbeValidity = params.useProbeValidity;
 					const previousLightingMode = params.lightingMode;
 					const previousMaterialType = params.materialType;
 					const previousProbeHelper = params.probeHelper;
@@ -1255,13 +1531,24 @@
 							leakReductionMode: 'off'
 						},
 						{
+							label: 'leak-normal-constant-validity',
+							resolution: 4,
+							projectionPrecision: 'half float',
+							cubemapSize: 8,
+							band1Intensity: 1,
+							band2Intensity: 0.55,
+							leakReductionMode: 'normal',
+							useProbeValidity: false
+						},
+						{
 							label: 'leak-normal',
 							resolution: 4,
 							projectionPrecision: 'half float',
 							cubemapSize: 8,
 							band1Intensity: 1,
 							band2Intensity: 0.55,
-							leakReductionMode: 'normal'
+							leakReductionMode: 'normal',
+							useProbeValidity: true
 						},
 						{
 							label: 'resolution-6',
@@ -1302,6 +1589,7 @@
 						params.normalBias = previousNormalBias;
 						params.viewBias = previousViewBias;
 						params.leakReductionMode = previousLeakReductionMode;
+						params.useProbeValidity = previousUseProbeValidity;
 						params.lightingMode = previousLightingMode;
 						params.probeHelper = previousProbeHelper;
 						probeHelper.visible = previousProbeHelper;
@@ -1362,6 +1650,7 @@
 							params.normalBias = 0.5;
 							params.viewBias = 0;
 							params.leakReductionMode = diagnosticCase.leakReductionMode;
+							params.useProbeValidity = diagnosticCase.useProbeValidity ?? true;
 							params.lightingMode = 'probes only';
 							params.probeHelper = false;
 							probeHelper.visible = false;
@@ -1377,29 +1666,6 @@
 
 							await captureDiagnosticRow( diagnosticCase.label );
 
-							if ( diagnosticCase.label === 'float-linear' ) {
-
-								const previousManualFloatSampling = probeGrid.manualFloatSampling;
-								const previousActiveProjectionPrecision = probeGrid.activeProjectionPrecision;
-
-								try {
-
-									// Rebind only the material graph so hardware/manual sampling read the same baked atlas.
-									probeGrid.manualFloatSampling = true;
-									probeGrid.activeProjectionPrecision = 'float-manual (same-atlas diagnostic)';
-									syncProbeGridBindings();
-									await captureDiagnosticRow( 'float-manual', { projectionPrecision: 'float manual' } );
-
-								} finally {
-
-									probeGrid.manualFloatSampling = previousManualFloatSampling;
-									probeGrid.activeProjectionPrecision = previousActiveProjectionPrecision;
-									syncProbeGridBindings();
-
-								}
-
-							}
-
 						}
 
 					} finally {
@@ -1412,17 +1678,22 @@
 					const delta = ( a, b, read ) => roundMetric( Math.abs( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) );
 					const centerLuminance = row => row.artifactSignature.center.luminance;
 					const cellEdgeContrast = row => row.localArtifactMetric.cellEdgeContrast;
+					const darkPixelRatio = row => row.localArtifactMetric.darkPixelRatio;
 
 					return {
 						rows,
 						comparisons: {
-							sampler: {
-								centerLuminanceDelta: delta( 'float-linear', 'float-manual', centerLuminance ),
-								cellEdgeContrastDelta: delta( 'float-linear', 'float-manual', cellEdgeContrast )
+							precision: {
+								halfToFloatCenterLuminanceDelta: delta( 'l0-l1-l2', 'float-linear', centerLuminance ),
+								halfToFloatCellEdgeDelta: delta( 'l0-l1-l2', 'float-linear', cellEdgeContrast )
 							},
 							band: {
 								l0ToL1CellEdgeDelta: delta( 'l0-only', 'l0-l1', cellEdgeContrast ),
 								l1ToL2CellEdgeDelta: delta( 'l0-l1', 'l0-l1-l2', cellEdgeContrast )
+							},
+							validity: {
+								normalCustomToConstantDarkPixelRatioDelta: delta( 'leak-normal-constant-validity', 'leak-normal', darkPixelRatio ),
+								normalCustomToConstantCellEdgeDelta: delta( 'leak-normal-constant-validity', 'leak-normal', cellEdgeContrast )
 							},
 							density: {
 								resolution4To6CellEdgeDelta: delta( 'l0-l1-l2', 'resolution-6', cellEdgeContrast ),
@@ -1837,6 +2108,7 @@
 
 					},
 					inspectProjectionParity,
+					inspectAtlasPacking,
 					inspectProbeOccupancy,
 					compareLeakReductionModes: async () => {
 
@@ -1940,7 +2212,7 @@
 						const results = [];
 						const resolutions = [ 2, 4, 6 ];
 						const cubemapSizes = [ 8, 16, 32 ];
-						const projectionPrecisions = [ 'half float', 'float', 'float manual' ];
+						const projectionPrecisions = [ 'half float', 'float' ];
 
 						for ( const resolution of resolutions ) {
 
@@ -1996,15 +2268,11 @@
 
 							assert( floatMetrics.precision.activePrecision === 'float-linear',
 								'float: expected float-linear when float32-filterable is available.' );
-							assert( floatMetrics.precision.manualFloatSampling === false,
-								'float: expected hardware filtering when float32-filterable is available.' );
 
 						} else {
 
 							assert( floatMetrics.precision.activePrecision === 'half-linear (fallback)',
 								'float: expected half-linear fallback when float32-filterable is unavailable.' );
-							assert( floatMetrics.precision.manualFloatSampling === false,
-								'float: expected PR01 to avoid manual sampling fallback.' );
 
 						}
 

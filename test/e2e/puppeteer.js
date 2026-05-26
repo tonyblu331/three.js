@@ -723,8 +723,11 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		/probesSH\.sample[\s\S]*_getPackedAtlasSampleZ/.test( source ) &&
 			/packedLoad\.load[\s\S]*_getPackedAtlasLoadCoord/.test( source ) &&
 			/setRenderTarget\( this\.atlasTarget, this\._getPackedAtlasLayer/.test( source ) &&
-			/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ),
-		'Atlas sample/load/repack/helper paths must use centralized atlas address helpers.'
+			/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ) &&
+			source.includes( 'viewportCoordinate' ) &&
+			/const ix = int\( floor\( viewportCoordinate\.x \) \)/.test( source ) &&
+			/const iy = int\( floor\( viewportCoordinate\.y \) \)/.test( source ),
+		'Atlas sample/load/repack/helper paths must use centralized atlas address helpers and WebGPU-native viewport coordinates for repack.'
 	);
 
 	requireSource(
@@ -732,6 +735,13 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			/probeCoord\.y\.mul\( resolutionMinusOne \)\.add\( 0\.5 \)\.div\( resolution \)/.test( source ) &&
 			/probeCoord\.z\.mul\( resolutionMinusOne \)\.add\( 0\.5 \)\.div\( resolution \)/.test( source ),
 		'Hardware-filtered atlas sampling must center X/Y/Z coordinates on probe texels before blending.'
+	);
+
+	requireSource(
+		source.includes( 'loadPackedSamples' ) &&
+			source.includes( 'weightedSamples[ 0 ].div( safeWeight )' ) &&
+			source.includes( 'weightedSamples[ i ].addAssign( sample[ i ].mul( weight ) )' ),
+		'Weighted manual atlas sampling must accumulate packed SH coefficients before SH evaluation/clamping.'
 	);
 
 	requireSource(
@@ -756,6 +766,16 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'generator-render-target-webgpu' ) &&
 			example.includes( 'webgl-light-probe-grid' ),
 		'Cornell harness must include a synthetic cubemap projection parity fixture for WebGPU, WebGL, LightProbeGenerator, and SphericalHarmonics3 conventions.'
+	);
+
+	requireSource(
+		example.includes( 'inspectAtlasPacking' ) &&
+			example.includes( 'readRenderTargetPixelsAsync' ) &&
+			example.includes( 'coefficientPacking' ) &&
+			example.includes( 'leading-padding-validity-t6' ) &&
+			example.includes( 'gridProbeIndexFormula' ) &&
+			example.includes( 'centerSampleZ' ),
+		'Cornell harness must include an executable atlas packing, padding, validity-channel, and Y-orientation verifier.'
 	);
 
 	requireSource(
@@ -784,12 +804,13 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'ceilingEmitter' ) &&
 			example.includes( 'cellEdgeContrast' ) &&
 			example.includes( 'runProbeDiagnosticMatrix' ) &&
-			example.includes( 'float-manual' ) &&
 			example.includes( 'l0-only' ) &&
 			example.includes( 'l0-l1-l2' ) &&
+			example.includes( 'leak-normal-constant-validity' ) &&
+			example.includes( 'normalCustomToConstantDarkPixelRatioDelta' ) &&
 			example.includes( 'resolution-6' ) &&
 			example.includes( 'cubemap-32' ),
-		'Cornell harness must expose sampler, SH-band, density, and local artifact diagnostics without adding primary UI knobs.'
+		'Cornell harness must expose precision, SH-band, validity, density, and local artifact diagnostics without adding primary UI knobs.'
 	);
 
 	requireSource(
@@ -849,9 +870,10 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 	);
 
 	requireSource(
-		source.includes( 'requested === \'float manual\'' ) &&
-			source.includes( 'this.activeProjectionPrecision = hasFloatFiltering ? \'float-linear\' : \'half-linear (fallback)\'' ),
-		'PR01 float precision must avoid implicit float-manual fallback.'
+		source.includes( 'this.activeProjectionPrecision = hasFloatFiltering ? \'float-linear\' : \'half-linear (fallback)\'' ) &&
+			source.includes( 'requested === \'float manual\'' ) === false &&
+			source.includes( 'this.projectionPrecision === \'float manual\'' ) === false,
+		'Float precision must use hardware filtering when float32-filterable exists and half-float fallback otherwise, with no public float-manual precision mode.'
 	);
 
 	const addons = await fs.readFile( 'examples/jsm/Addons.js', 'utf8' );
@@ -875,7 +897,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectAtlasPacking', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
@@ -1089,6 +1111,58 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		'projection parity: expected asymmetric fixture to prove WebGPU and WebGL render-target conventions are not directly interchangeable.' );
 	results.push( { step: 'projection parity', projectionParity } );
 
+	const atlasPacking = await call( 'inspectAtlasPacking' );
+	assert( atlasPacking.resolution === 4 &&
+		atlasPacking.totalProbes === 64 &&
+		atlasPacking.shCoefficientCount === 9,
+	'atlas packing: expected bounded synthetic 4x4x4 probe fixture.' );
+	assert( atlasPacking.packedAtlasTextureCount === 7 &&
+		atlasPacking.paddedSlices === 6 &&
+		atlasPacking.atlasPadding === 1 &&
+		atlasPacking.atlasDepth === 42,
+	'atlas packing: expected seven SH sub-volumes with one padding slice on each side.' );
+	assert( atlasPacking.gridProbeIndexFormula === 'x + y * resolution + z * resolution^2',
+		'atlas packing: expected explicit probe index formula.' );
+	assert( Array.isArray( atlasPacking.addressChecks ) &&
+		atlasPacking.addressChecks.length === 6 &&
+		atlasPacking.addressChecks.every( check =>
+			check.baseLayer === check.methodBaseLayer &&
+			check.dataLayer === check.methodDataLayer &&
+			check.leadingPaddingLayer === check.methodLeadingPaddingLayer &&
+			check.trailingPaddingLayer === check.methodTrailingPaddingLayer &&
+			Number.isFinite( check.centerSampleZ ) &&
+			check.centerSampleZ > 0 &&
+			check.centerSampleZ < 1 ),
+	'atlas packing: expected address helper formulas to match CPU atlas layout.' );
+	assert( Array.isArray( atlasPacking.coefficientPacking ) &&
+		atlasPacking.coefficientPacking.length === 7 &&
+		atlasPacking.coefficientPacking.every( row => Array.isArray( row ) && row.length === 4 ) &&
+		atlasPacking.coefficientPacking[ 6 ][ 3 ].value === 'validity',
+	'atlas packing: expected 27 SH channels plus validity in the final packed atlas channel.' );
+	assert( Array.isArray( atlasPacking.readbackChecks ) &&
+		atlasPacking.readbackChecks.length === 4 &&
+		Array.isArray( atlasPacking.paddingChecks ) &&
+		atlasPacking.paddingChecks.length === 3,
+	'atlas packing: expected render-path readbacks for data and padding layers.' );
+	assert( atlasPacking.readbackChecks.some( check =>
+		check.label === 'origin-y0-z0-t0' &&
+		check.probeIndex === 0 &&
+		check.x === 0 &&
+		check.y === 0 ),
+	'atlas packing: expected native texture y=0 to contain grid y=0, not an upside-down row.' );
+	assert( atlasPacking.readbackChecks.some( check =>
+		check.label === 'native-y3-z0-t0' &&
+		check.probeIndex === 13 &&
+		check.x === 1 &&
+		check.y === 3 ),
+	'atlas packing: expected native texture y=3 to contain grid y=3.' );
+	assert( atlasPacking.maxReadbackDelta < 0.008,
+		`atlas packing: expected synthetic render-path readback to match packed SH layout, got ${ atlasPacking.maxReadbackDelta }.` );
+	assert( Number.isFinite( atlasPacking.validityActual ) &&
+		Math.abs( atlasPacking.validityActual - atlasPacking.validityExpected ) < 0.008,
+	'atlas packing: expected custom probe validity to survive coefficient-atlas repack.' );
+	results.push( { step: 'atlas packing', atlasPacking } );
+
 	const probeOccupancy = await call( 'inspectProbeOccupancy' );
 	assert( probeOccupancy.totalProbes === 64,
 		'probe occupancy: expected default resolution 4 probe count.' );
@@ -1113,7 +1187,7 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	const l0OnlyArtifact = artifactRows.get( 'l0-only' );
 	const l0L1Artifact = artifactRows.get( 'l0-l1' );
 	const floatLinearArtifact = artifactRows.get( 'float-linear' );
-	const floatManualArtifact = artifactRows.get( 'float-manual' );
+	const leakNormalConstantValidityArtifact = artifactRows.get( 'leak-normal-constant-validity' );
 	const leakNormalArtifact = artifactRows.get( 'leak-normal' );
 	const resolution6Artifact = artifactRows.get( 'resolution-6' );
 	const cubemap16Artifact = artifactRows.get( 'cubemap-16' );
@@ -1123,12 +1197,12 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		l0OnlyArtifact !== undefined &&
 		l0L1Artifact !== undefined &&
 		floatLinearArtifact !== undefined &&
-		floatManualArtifact !== undefined &&
+		leakNormalConstantValidityArtifact !== undefined &&
 		leakNormalArtifact !== undefined &&
 		resolution6Artifact !== undefined &&
 		cubemap16Artifact !== undefined &&
 		cubemap32Artifact !== undefined,
-	'artifact matrix: expected baseline, SH-band, sampler, leak, resolution, and cubemap labels.' );
+	'artifact matrix: expected baseline, SH-band, precision, leak, resolution, and cubemap labels.' );
 	assert( l0L1L2Artifact.band1Intensity === 1 && l0L1L2Artifact.band2Intensity === 0.55 && l0L1L2Artifact.sampling.weightedProbeSampling === false,
 		'artifact matrix: expected L0+L1+L2 row to capture unweighted band-2 probe lighting.' );
 	assert( l0OnlyArtifact.band1Intensity === 0 && l0OnlyArtifact.band2Intensity === 0,
@@ -1137,11 +1211,14 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 		'artifact matrix: expected L0+L1 row to disable only second-band SH.' );
 	assert( floatLinearArtifact.precision.requestedPrecision === 'float',
 		'artifact matrix: expected float-linear precision row.' );
-	assert( floatManualArtifact.projectionPrecision === 'float manual' &&
-		floatManualArtifact.precision.manualFloatSampling === true,
-	'artifact matrix: expected float-manual same-atlas sampling row.' );
+	assert( leakNormalConstantValidityArtifact.sampling.weightedProbeSampling === true &&
+		leakNormalConstantValidityArtifact.sampling.probeValidityMode === 'constant',
+	'artifact matrix: expected isolated normal-weighted constant-validity row.' );
 	assert( leakNormalArtifact.sampling.weightedProbeSampling === true,
 		'artifact matrix: expected normal leak reduction row to use weighted sampling.' );
+	assert( leakNormalArtifact.sampling.probeValidityMode === 'custom' &&
+		leakNormalArtifact.sampling.invalidProbeCount > 0,
+	'artifact matrix: expected normal leak reduction row to use custom probe validity.' );
 	assert( resolution6Artifact.resolution === 6,
 		'artifact matrix: expected density row to increase probe resolution.' );
 	assert( cubemap16Artifact.cubemapSize === 16,
@@ -1164,10 +1241,14 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 	}
 
-	assert( Number.isFinite( artifactMatrix.comparisons.sampler.centerLuminanceDelta ),
-		'artifact matrix: expected finite sampler parity delta.' );
+	assert( Number.isFinite( artifactMatrix.comparisons.precision.halfToFloatCenterLuminanceDelta ) &&
+		Number.isFinite( artifactMatrix.comparisons.precision.halfToFloatCellEdgeDelta ),
+	'artifact matrix: expected finite half/float precision diagnostic deltas.' );
 	assert( Number.isFinite( artifactMatrix.comparisons.band.l0ToL1CellEdgeDelta ),
 		'artifact matrix: expected finite SH band diagnostic delta.' );
+	assert( Number.isFinite( artifactMatrix.comparisons.validity.normalCustomToConstantDarkPixelRatioDelta ) &&
+		Number.isFinite( artifactMatrix.comparisons.validity.normalCustomToConstantCellEdgeDelta ),
+	'artifact matrix: expected finite isolated validity diagnostic deltas.' );
 	assert( Number.isFinite( artifactMatrix.comparisons.density.resolution4To6CellEdgeDelta ),
 		'artifact matrix: expected finite density diagnostic delta.' );
 
@@ -1356,15 +1437,11 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 
 		assert( floatMetrics.precision.activePrecision === 'float-linear',
 			'float: expected float-linear when float32-filterable is available.' );
-		assert( floatMetrics.precision.manualFloatSampling === false,
-			'float: expected hardware filtering when float32-filterable is available.' );
 
 	} else {
 
 		assert( floatMetrics.precision.activePrecision === 'half-linear (fallback)',
 			'float: expected half-linear fallback when float32-filterable is unavailable.' );
-		assert( floatMetrics.precision.manualFloatSampling === false,
-			'float: expected PR01 to avoid manual sampling fallback.' );
 
 	}
 

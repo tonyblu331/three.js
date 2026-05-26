@@ -39,7 +39,6 @@ import {
 	lights,
 	Loop,
 	max,
-	mix,
 	normalWorld,
 	positionWorld,
 	texture3D,
@@ -47,6 +46,7 @@ import {
 	uint,
 	uniform,
 	uv,
+	viewportCoordinate,
 	vec3,
 	vec4
 } from 'three/tsl';
@@ -74,8 +74,8 @@ const _matrix = /*@__PURE__*/ new Matrix4();
  * values, packed into 7 RGBA atlas sub-volumes because ceil( 27 / 4 ) = 7.
  * During bake, cubemap samples are projected with solid angle weighting. At
  * runtime, hardware filtering provides trilinear interpolation for filterable
- * textures, while the explicit float-manual mode performs the same interpolation
- * from nearest-loads for debugging and compatibility checks.
+ * textures. Optional leak reduction performs a manual nearest-load blend only
+ * when per-neighbor weights are required.
  * Optional leak reduction translates DDGI-style wrap weighting and APV-style
  * surface bias into a small manual neighbor blend. It is not a full DDGI
  * visibility system: the atlas keeps a constant validity channel for future
@@ -98,16 +98,15 @@ class LightProbeGridGPU extends Object3D {
 	 * Constructs a WebGPU irradiance probe grid.
 	 *
 	 * The grid owns its bake render targets and helper resources. Applications
-	 * should treat the runtime fields (`texture`, `boundingBox`,
-	 * `activeProjectionPrecision`, and `manualFloatSampling`) as read-only
-	 * inspection data.
+	 * should treat the runtime fields (`texture`, `boundingBox`, and
+	 * `activeProjectionPrecision`) as read-only inspection data.
 	 *
 	 * @param {Vector3} min - Minimum world-space grid corner.
 	 * @param {Vector3} max - Maximum world-space grid corner.
 	 * @param {Object} [options] - Probe grid options.
 	 * @param {number} [options.resolution=4] - Probe count per axis, must be at least 2.
 	 * @param {number} [options.cubemapSize=8] - Cubemap face size used during bake.
-	 * @param {'auto'|'half float'|'float'|'float manual'} [options.projectionPrecision='auto'] - Projection texture precision policy.
+	 * @param {'auto'|'half float'|'float'} [options.projectionPrecision='auto'] - Projection texture precision policy.
 	 * @param {number} [options.probeIntensity=1] - Runtime irradiance intensity.
 	 * @param {number} [options.helperIntensity=1] - Helper display intensity.
 	 * @param {number} [options.band1Intensity=1] - Diagnostic multiplier for first-band SH coefficients.
@@ -196,13 +195,6 @@ class LightProbeGridGPU extends Object3D {
 		this.paddedSlices = 0;
 		this.atlasDepth = 0;
 
-		/**
-		 * Whether runtime irradiance sampling uses explicit nearest-load trilinear interpolation.
-		 *
-		 * @type {boolean}
-		 * @readonly
-		 */
-		this.manualFloatSampling = false;
 		this.repackTextureIndex = uniform( 0 );
 		this.repackSliceZ = uniform( 0 );
 		this.repackResolution = uniform( new Vector3() );
@@ -378,7 +370,6 @@ class LightProbeGridGPU extends Object3D {
 			requestedPrecision: this.projectionPrecision,
 			activePrecision: this.activeProjectionPrecision,
 			textureType: this._getTextureType() === FloatType ? 'float' : 'half float',
-			manualFloatSampling: this.manualFloatSampling,
 			float32Filterable: renderer !== null ? renderer.hasFeature( 'float32-filterable' ) : null
 		};
 
@@ -427,7 +418,7 @@ class LightProbeGridGPU extends Object3D {
 
 	_usesManualIrradianceSampling() {
 
-		return this.manualFloatSampling || this._usesWeightedProbeSampling();
+		return this._usesWeightedProbeSampling();
 
 	}
 
@@ -522,7 +513,6 @@ class LightProbeGridGPU extends Object3D {
 
 		const resolution = this.resolution;
 		const resolutionMinusOne = resolution - 1;
-		const weightedProbeSampling = this._usesWeightedProbeSampling();
 		const gridMinNode = vec3( this.min.x, this.min.y, this.min.z );
 		const gridExtentNode = vec3(
 			this.max.x - this.min.x,
@@ -531,22 +521,23 @@ class LightProbeGridGPU extends Object3D {
 		);
 		const packedLoad = texture3D( this.atlasTarget.texture ).setSampler( false );
 
-		const samplePackedProbe = Fn( ( { coord } ) => {
+		const loadPackedSamples = ( coord ) => {
 
 			const x = int( coord.x );
 			const y = int( coord.y );
 			const z = int( coord.z );
-			const s0 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 0 ) );
-			const s1 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 1 ) );
-			const s2 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 2 ) );
-			const s3 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 3 ) );
-			const s4 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 4 ) );
-			const s5 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 5 ) );
-			const s6 = packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 6 ) );
 
-			return vec4( this._evaluatePackedSH( s0, s1, s2, s3, s4, s5, s6 ), s6.w );
+			return [
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 0 ) ),
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 1 ) ),
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 2 ) ),
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 3 ) ),
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 4 ) ),
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 5 ) ),
+				packedLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 6 ) )
+			];
 
-		} );
+		};
 
 		const sampleManual = Fn( () => {
 
@@ -563,60 +554,62 @@ class LightProbeGridGPU extends Object3D {
 			const y1 = int( clamp( base.y.add( 1 ), 0, resolutionMinusOne ) );
 			const z1 = int( clamp( base.z.add( 1 ), 0, resolutionMinusOne ) );
 
-			if ( weightedProbeSampling ) {
+			const weightedSamples = [];
+			const totalWeight = float( 0 ).toVar();
+			const normal = normalWorld.normalize();
+			const wx0 = blend.x.oneMinus();
+			const wy0 = blend.y.oneMinus();
+			const wz0 = blend.z.oneMinus();
 
-				const irradiance = vec3( 0 ).toVar();
-				const totalWeight = float( 0 ).toVar();
-				const normal = normalWorld.normalize();
-				const wx0 = blend.x.oneMinus();
-				const wy0 = blend.y.oneMinus();
-				const wz0 = blend.z.oneMinus();
+			for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
 
-				const addProbe = ( coord, trilinearWeight ) => {
-
-					const sample = samplePackedProbe( { coord } );
-					const probePosition = gridMinNode.add( coord.toFloat().div( resolutionMinusOne ).mul( gridExtentNode ) );
-					const probeDirection = this._safeNormalize( probePosition.sub( positionWorld ) );
-					const wrapShading = normal.dot( probeDirection ).add( 1 ).mul( 0.5 );
-					const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
-					const validityWeight = sample.w.max( PROBE_VALIDITY_FLOOR );
-					const weight = trilinearWeight.mul( normalWeight ).mul( validityWeight );
-
-					irradiance.addAssign( sample.xyz.mul( weight ) );
-					totalWeight.addAssign( weight );
-
-				};
-
-				addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ) );
-				addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ) );
-				addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ) );
-				addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ) );
-				addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ) );
-				addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ) );
-				addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ) );
-				addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ) );
-
-				return irradiance.div( totalWeight.max( 0.0001 ) ).mul( this.probeIntensity );
+				weightedSamples.push( vec4( 0 ).toVar() );
 
 			}
 
-			const c000 = samplePackedProbe( { coord: vec3( x0, y0, z0 ) } ).xyz;
-			const c100 = samplePackedProbe( { coord: vec3( x1, y0, z0 ) } ).xyz;
-			const c010 = samplePackedProbe( { coord: vec3( x0, y1, z0 ) } ).xyz;
-			const c110 = samplePackedProbe( { coord: vec3( x1, y1, z0 ) } ).xyz;
-			const c001 = samplePackedProbe( { coord: vec3( x0, y0, z1 ) } ).xyz;
-			const c101 = samplePackedProbe( { coord: vec3( x1, y0, z1 ) } ).xyz;
-			const c011 = samplePackedProbe( { coord: vec3( x0, y1, z1 ) } ).xyz;
-			const c111 = samplePackedProbe( { coord: vec3( x1, y1, z1 ) } ).xyz;
+			const addProbe = ( coord, trilinearWeight ) => {
 
-			const x00 = mix( c000, c100, blend.x );
-			const x10 = mix( c010, c110, blend.x );
-			const x01 = mix( c001, c101, blend.x );
-			const x11 = mix( c011, c111, blend.x );
-			const y0Mix = mix( x00, x10, blend.y );
-			const y1Mix = mix( x01, x11, blend.y );
+				const sample = loadPackedSamples( coord );
+				const probePosition = gridMinNode.add( coord.toFloat().div( resolutionMinusOne ).mul( gridExtentNode ) );
+				const probeDirection = this._safeNormalize( probePosition.sub( positionWorld ) );
+				const wrapShading = normal.dot( probeDirection ).add( 1 ).mul( 0.5 );
+				const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
+				const validityWeight = sample[ 6 ].w.max( PROBE_VALIDITY_FLOOR );
+				const weight = trilinearWeight.mul( normalWeight ).mul( validityWeight );
 
-			return mix( y0Mix, y1Mix, blend.z ).mul( this.probeIntensity );
+				for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
+
+					// Accumulate packed SH coefficients. `_evaluateCoefficients()` clamps
+					// negative ringing, so evaluating each probe first would break hardware
+					// filtering equivalence.
+					weightedSamples[ i ].addAssign( sample[ i ].mul( weight ) );
+
+				}
+
+				totalWeight.addAssign( weight );
+
+			};
+
+			addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ) );
+			addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ) );
+			addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ) );
+			addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ) );
+			addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ) );
+			addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ) );
+			addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ) );
+			addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ) );
+
+			const safeWeight = totalWeight.max( 0.0001 );
+
+			return this._evaluatePackedSH(
+				weightedSamples[ 0 ].div( safeWeight ),
+				weightedSamples[ 1 ].div( safeWeight ),
+				weightedSamples[ 2 ].div( safeWeight ),
+				weightedSamples[ 3 ].div( safeWeight ),
+				weightedSamples[ 4 ].div( safeWeight ),
+				weightedSamples[ 5 ].div( safeWeight ),
+				weightedSamples[ 6 ].div( safeWeight )
+			).mul( this.probeIntensity );
 
 		} );
 
@@ -875,8 +868,8 @@ class LightProbeGridGPU extends Object3D {
 		this.atlasTarget = new RenderTarget3D( this.resolution, this.resolution, this.atlasDepth, {
 			format: RGBAFormat,
 			type: this._getTextureType(),
-			minFilter: this.manualFloatSampling ? NearestFilter : LinearFilter,
-			magFilter: this.manualFloatSampling ? NearestFilter : LinearFilter,
+			minFilter: LinearFilter,
+			magFilter: LinearFilter,
 			generateMipmaps: false,
 			depthBuffer: false
 		} );
@@ -1135,8 +1128,8 @@ class LightProbeGridGPU extends Object3D {
 		const repack = Fn( () => {
 
 			const nx = int( resolution.x );
-			const ix = int( floor( uv().x.mul( resolution.x ) ) );
-			const iy = int( floor( uv().y.mul( resolution.y ) ) );
+			const ix = int( floor( viewportCoordinate.x ) );
+			const iy = int( floor( viewportCoordinate.y ) );
 			const iz = int( sliceZ );
 			const probeIndex = ix.add( iy.mul( nx ) ).add( iz.mul( nx.mul( nx ) ) );
 
@@ -1202,29 +1195,18 @@ class LightProbeGridGPU extends Object3D {
 
 		if ( this.projectionFallbackType === HalfFloatType || requested === 'half' || requested === 'half float' ) {
 
-			this.manualFloatSampling = false;
 			this.activeProjectionPrecision = this.projectionFallbackType === HalfFloatType ? 'half-linear (fallback)' : 'half-linear';
-			return;
-
-		}
-
-		if ( requested === 'float manual' ) {
-
-			this.manualFloatSampling = true;
-			this.activeProjectionPrecision = 'float-manual';
 			return;
 
 		}
 
 		if ( requested === 'float' ) {
 
-			this.manualFloatSampling = false;
 			this.activeProjectionPrecision = hasFloatFiltering ? 'float-linear' : 'half-linear (fallback)';
 			return;
 
 		}
 
-		this.manualFloatSampling = false;
 		this.activeProjectionPrecision = hasFloatFiltering ? 'float-linear' : 'half-linear';
 
 	}
@@ -1233,7 +1215,6 @@ class LightProbeGridGPU extends Object3D {
 
 		if ( this.projectionFallbackType !== null ) return this.projectionFallbackType;
 		if ( this.projectionPrecision === 'float' && this.activeProjectionPrecision === 'float-linear' ) return FloatType;
-		if ( this.projectionPrecision === 'float manual' ) return FloatType;
 		if ( this.projectionPrecision === 'auto' && this.activeProjectionPrecision === 'float-linear' ) return FloatType;
 
 		return HalfFloatType;
