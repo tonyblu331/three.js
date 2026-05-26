@@ -88,7 +88,38 @@
 				projectionMs: 0,
 				copyMs: 0,
 				totalBakeMs: 0,
-				frameMs: 0
+				frameMs: 0,
+				wallClockTotalBakeMs: 0,
+				timingSource: 'unavailable',
+				deterministicTimerDetected: false
+			};
+
+			const getTimingNow = () => {
+
+				const nonDeterministicNow = performance._now;
+				return typeof nonDeterministicNow === 'function' ? nonDeterministicNow.call( performance ) : performance.now();
+
+			};
+
+			const roundTiming = ( value ) => Number( Math.max( value, 0 ).toFixed( 2 ) );
+
+			const normalizeBakeTimings = ( nextTimings, wallClockTotalBakeMs ) => {
+
+				const fallbackTotalBakeMs = roundTiming( wallClockTotalBakeMs );
+				const sourceTotalBakeMs = Number.isFinite( nextTimings?.totalBakeMs ) ? nextTimings.totalBakeMs : 0;
+				const hasSourceTiming = sourceTotalBakeMs > 0;
+				const hasFallbackTiming = fallbackTotalBakeMs > 0;
+
+				return {
+					cubemapMs: Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					projectionMs: Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
+					copyMs: Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					totalBakeMs: hasSourceTiming ? sourceTotalBakeMs : hasFallbackTiming ? fallbackTotalBakeMs : sourceTotalBakeMs,
+					wallClockTotalBakeMs: fallbackTotalBakeMs,
+					timingSource: hasSourceTiming ? 'probe-grid-performance-now' : hasFallbackTiming ? 'harness-wall-clock-fallback' : 'unavailable',
+					deterministicTimerDetected: typeof performance._now === 'function' && performance.now() === 0
+				};
+
 			};
 
 			if ( WebGPU.isAvailable() === false ) {
@@ -612,14 +643,19 @@
 					directLight.shadow.needsUpdate = true;
 					ambientLight.intensity = ambientLightIntensity;
 
+					const bakeStartMs = getTimingNow();
 					const nextTimings = await runBake();
+					const normalizedTimings = normalizeBakeTimings( nextTimings, getTimingNow() - bakeStartMs );
 
 					params.bakeStatus = 'ready';
 					params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
-					timings.cubemapMs = nextTimings.cubemapMs;
-					timings.projectionMs = nextTimings.projectionMs;
-					timings.copyMs = nextTimings.copyMs;
-					timings.totalBakeMs = nextTimings.totalBakeMs;
+					timings.cubemapMs = normalizedTimings.cubemapMs;
+					timings.projectionMs = normalizedTimings.projectionMs;
+					timings.copyMs = normalizedTimings.copyMs;
+					timings.totalBakeMs = normalizedTimings.totalBakeMs;
+					timings.wallClockTotalBakeMs = normalizedTimings.wallClockTotalBakeMs;
+					timings.timingSource = normalizedTimings.timingSource;
+					timings.deterministicTimerDetected = normalizedTimings.deterministicTimerDetected;
 
 				} catch ( error ) {
 
@@ -1879,10 +1915,49 @@
 					},
 					'webgpu-webgl-density-reference': {
 						proofRole: 'same-budget-artifact-pressure',
-						referenceBoundary: 'WebGPU row using the WebGL LightProbeGrid reference density/cubemap budget as an artifact pressure stress row, not a visual-quality win; higher bake detail can expose L2 SH dark-tail/ringing artifacts.',
+						referenceBoundary: 'WebGPU row using the WebGL LightProbeGrid reference density/cubemap budget as an artifact pressure stress row, not a visual-quality win; higher bake detail can expose low-order / 9-coefficient SH representation dark-tail/ringing artifacts.',
+						antiRingingPolicy: {
+							mode: 'full-band-stress',
+							bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
+							runtimePath: 'hardware-filtered-unweighted',
+							action: 'Expose the high-contrast low-order SH representation pressure case without claiming visual quality.'
+						},
 						resolution: 6,
 						cubemapSize: 32,
 						band1Intensity: 1,
+						band2Intensity: 0.55,
+						leakReductionMode: 'off',
+						useProbeValidity: true
+					},
+					'webgpu-webgl-density-shadowless': {
+						proofRole: 'same-budget-shadow-control',
+						referenceBoundary: 'Same 6³ / 32px stress budget with bake-time shadows disabled to isolate whether black-tail pressure is dominated by baked direct-shadow detail.',
+						antiRingingPolicy: {
+							mode: 'shadowless-cause-control',
+							bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
+							runtimePath: 'hardware-filtered-unweighted',
+							action: 'Hold the same SH band policy while removing bake-time shadow contrast.'
+						},
+						resolution: 6,
+						cubemapSize: 32,
+						band1Intensity: 1,
+						band2Intensity: 0.55,
+						leakReductionMode: 'off',
+						useProbeValidity: true,
+						disableShadowsDuringBake: true
+					},
+					'webgpu-webgl-density-damped': {
+						proofRole: 'same-budget-quality-candidate',
+						referenceBoundary: 'Same 6³ / 32px stress budget with anti-ringing first-band damping promoted as the quality candidate for the muddy black-tail artifact.',
+						antiRingingPolicy: {
+							mode: 'band1-damped-quality',
+							bandPolicy: 'L0 preserved, L1=0.6, L2=0.55',
+							runtimePath: 'hardware-filtered-unweighted',
+							action: 'Reduce first-band directional overshoot after high-detail bake compression while preserving probe intensity, bake budget, and the fast unweighted sample() path.'
+						},
+						resolution: 6,
+						cubemapSize: 32,
+						band1Intensity: 0.6,
 						band2Intensity: 0.55,
 						leakReductionMode: 'off',
 						useProbeValidity: true
@@ -1927,7 +2002,13 @@
 
 					}
 
-					await recreateAndBakeRequired( `grounding parity snapshot ${ label }` );
+					await recreateAndBakeRequired(
+						`grounding parity snapshot ${ label }`,
+						false,
+						{
+							disableShadowsDuringBake: snapshotCase.disableShadowsDuringBake
+						}
+					);
 					renderer.render( scene, camera );
 					const regions = captureRegionArtifactMetrics();
 
@@ -1935,12 +2016,19 @@
 						label,
 						proofRole: snapshotCase.proofRole,
 						referenceBoundary: snapshotCase.referenceBoundary,
+						antiRingingPolicy: snapshotCase.antiRingingPolicy ?? {
+							mode: 'not-applied',
+							bandPolicy: 'demo default',
+							runtimePath: params.leakReductionMode === 'normal' ? 'manual-weighted-textureLoad' : 'hardware-filtered-unweighted',
+							action: 'Not part of the same-budget density anti-ringing candidate family.'
+						},
 						probeIntensity: params.probeIntensity,
 						probeHelperIntensity: params.probeHelperIntensity,
 						band1Intensity: params.band1Intensity,
 						band2Intensity: params.band2Intensity,
 						normalBias: params.normalBias,
 						viewBias: params.viewBias,
+						shadowsDisabledDuringBake: snapshotCase.disableShadowsDuringBake === true,
 						metrics: getProbeHarnessMetrics(),
 						bakeTexelBudget: createBakeTexelBudget(),
 						colorSanity: await captureColorSanity(),
@@ -1980,6 +2068,9 @@
 					projectionMs: nextTimings.projectionMs,
 					copyMs: nextTimings.copyMs,
 					totalBakeMs: nextTimings.totalBakeMs,
+					wallClockTotalBakeMs: nextTimings.wallClockTotalBakeMs,
+					timingSource: nextTimings.timingSource,
+					deterministicTimerDetected: nextTimings.deterministicTimerDetected,
 					frameMs: timings.frameMs
 				} );
 
@@ -2167,6 +2258,9 @@
 							projectionMs: timings.projectionMs,
 							copyMs: timings.copyMs,
 							totalBakeMs: timings.totalBakeMs,
+							wallClockTotalBakeMs: timings.wallClockTotalBakeMs,
+							timingSource: timings.timingSource,
+							deterministicTimerDetected: timings.deterministicTimerDetected,
 							frameMs: timings.frameMs
 						} );
 
@@ -2372,6 +2466,9 @@
 								projectionMs: timings.projectionMs,
 								copyMs: timings.copyMs,
 								totalBakeMs: timings.totalBakeMs,
+								wallClockTotalBakeMs: timings.wallClockTotalBakeMs,
+								timingSource: timings.timingSource,
+								deterministicTimerDetected: timings.deterministicTimerDetected,
 								frameMs: timings.frameMs
 							} );
 
@@ -2564,6 +2661,9 @@
 								projectionMs: timings.projectionMs,
 								copyMs: timings.copyMs,
 								totalBakeMs: timings.totalBakeMs,
+								wallClockTotalBakeMs: timings.wallClockTotalBakeMs,
+								timingSource: timings.timingSource,
+								deterministicTimerDetected: timings.deterministicTimerDetected,
 								frameMs: timings.frameMs
 							} );
 

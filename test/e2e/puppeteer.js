@@ -103,7 +103,9 @@ const lightProbeParitySnapshotLabels = [
 	'low-res-damped',
 	'low-res-unweighted',
 	'low-res-validity-weighted',
-	'webgpu-webgl-density-reference'
+	'webgpu-webgl-density-reference',
+	'webgpu-webgl-density-shadowless',
+	'webgpu-webgl-density-damped'
 ];
 
 console.red = msg => console.log( `\x1b[31m${msg}\x1b[39m` );
@@ -687,8 +689,10 @@ function validateLightProbeParitySnapshot( file, snapshot ) {
 		`grounding parity artifact ${ snapshot.label }: expected probes-only lighting.` );
 	assertLightProbeProof( file, snapshot.metrics.materialType === 'standard',
 		`grounding parity artifact ${ snapshot.label }: expected standard material snapshot.` );
-	assertLightProbeProof( file, Number.isFinite( snapshot.metrics.timings.totalBakeMs ),
-		`grounding parity artifact ${ snapshot.label }: expected finite bake timing.` );
+	assertLightProbeProof( file, Number.isFinite( snapshot.metrics.timings.totalBakeMs ) &&
+		snapshot.metrics.timings.totalBakeMs > 0 &&
+		snapshot.metrics.timings.timingSource !== 'unavailable',
+	`grounding parity artifact ${ snapshot.label }: expected positive measured bake timing with a known timing source.` );
 	assertLightProbeProof( file, Number.isFinite( snapshot.artifactSignature.center.luminance ) &&
 		snapshot.artifactSignature.center.luminance > 18,
 	`grounding parity artifact ${ snapshot.label }: expected visible center luminance floor.` );
@@ -733,14 +737,41 @@ function validateLightProbeParitySnapshot( file, snapshot ) {
 
 	}
 
-	if ( snapshot.label === 'webgpu-webgl-density-reference' ) {
+	if ( snapshot.label.startsWith( 'webgpu-webgl-density-' ) ) {
 
 		assertLightProbeProof( file, snapshot.metrics.resolution === 6 &&
 			snapshot.metrics.cubemapSize === 32,
-		'grounding parity artifact: WebGPU density reference must match the WebGL 6^3 / 32px reference budget.' );
+		`grounding parity artifact ${ snapshot.label }: WebGPU density row must match the WebGL 6^3 / 32px reference budget.` );
+
+	}
+
+	if ( snapshot.label === 'webgpu-webgl-density-reference' ) {
+
 		assertLightProbeProof( file, snapshot.proofRole === 'same-budget-artifact-pressure' &&
 			/artifact pressure/.test( snapshot.referenceBoundary ),
 		'grounding parity artifact: WebGPU density reference must be labelled as a same-budget artifact pressure row.' );
+		assertLightProbeProof( file, snapshot.antiRingingPolicy?.mode === 'full-band-stress' &&
+			snapshot.antiRingingPolicy.runtimePath === 'hardware-filtered-unweighted',
+		'grounding parity artifact: WebGPU density reference must explicitly remain a full-band hardware-filtered stress row.' );
+
+	}
+
+	if ( snapshot.label === 'webgpu-webgl-density-shadowless' ) {
+
+		assertLightProbeProof( file, snapshot.proofRole === 'same-budget-shadow-control' &&
+			snapshot.shadowsDisabledDuringBake === true &&
+			snapshot.antiRingingPolicy?.mode === 'shadowless-cause-control',
+		'grounding parity artifact: WebGPU density shadowless row must disable bake-time shadows without changing SH band policy.' );
+
+	}
+
+	if ( snapshot.label === 'webgpu-webgl-density-damped' ) {
+
+		assertLightProbeProof( file, snapshot.proofRole === 'same-budget-quality-candidate' &&
+			snapshot.band1Intensity === 0.6 &&
+			snapshot.antiRingingPolicy?.mode === 'band1-damped-quality' &&
+			snapshot.antiRingingPolicy.runtimePath === 'hardware-filtered-unweighted',
+		'grounding parity artifact: WebGPU density damped row must be promoted to a same-budget hardware-filtered anti-ringing quality candidate.' );
 
 	}
 
@@ -775,6 +806,8 @@ function validateLightProbeParitySnapshots( file, snapshots ) {
 	const unweighted = rows.get( 'low-res-unweighted' );
 	const weighted = rows.get( 'low-res-validity-weighted' );
 	const densityReference = rows.get( 'webgpu-webgl-density-reference' );
+	const densityShadowless = rows.get( 'webgpu-webgl-density-shadowless' );
+	const densityDamped = rows.get( 'webgpu-webgl-density-damped' );
 
 	assertLightProbeProof( file, damped.probeIntensity === unweighted.probeIntensity &&
 		unweighted.probeIntensity === weighted.probeIntensity,
@@ -797,12 +830,49 @@ function validateLightProbeParitySnapshots( file, snapshots ) {
 		densityReference.metrics.cubemapSize === 32 &&
 		densityReference.metrics.sampling.weightedProbeSampling === false,
 	'grounding parity artifact: WebGPU WebGL-like density reference must remain unweighted and use 6^3 / 32px.' );
+	assertLightProbeProof( file, densityShadowless.metrics.resolution === 6 &&
+		densityShadowless.metrics.cubemapSize === 32 &&
+		densityShadowless.shadowsDisabledDuringBake === true,
+	'grounding parity artifact: WebGPU density shadowless row must preserve same budget and disable bake shadows.' );
+	assertLightProbeProof( file, densityDamped.metrics.resolution === 6 &&
+		densityDamped.metrics.cubemapSize === 32 &&
+		densityDamped.band1Intensity === 0.6 &&
+		densityDamped.band2Intensity === densityReference.band2Intensity &&
+		densityDamped.normalBias === densityReference.normalBias &&
+		densityDamped.viewBias === densityReference.viewBias &&
+		densityDamped.probeIntensity === densityReference.probeIntensity &&
+		densityDamped.metrics.materialType === densityReference.metrics.materialType &&
+		densityDamped.metrics.lightingMode === densityReference.metrics.lightingMode &&
+		densityDamped.metrics.precision.requestedPrecision === densityReference.metrics.precision.requestedPrecision &&
+		densityDamped.metrics.sampling.probeValidityMode === densityReference.metrics.sampling.probeValidityMode &&
+		densityDamped.metrics.sampling.invalidProbeCount === densityReference.metrics.sampling.invalidProbeCount &&
+		densityDamped.metrics.sampling.manualIrradianceSampling === false &&
+		densityDamped.metrics.sampling.weightedProbeSampling === false &&
+		densityDamped.metrics.sampling.weightedProbeSampling === densityReference.metrics.sampling.weightedProbeSampling,
+	'grounding parity artifact: WebGPU density quality candidate must preserve same budget, probe intensity, precision, material, bias, validity mode, and unweighted sampling while damping first-band SH.' );
+	assertLightProbeProof( file, densityDamped.antiRingingPolicy?.mode === 'band1-damped-quality' &&
+		densityDamped.antiRingingPolicy.bandPolicy === 'L0 preserved, L1=0.6, L2=0.55' &&
+		densityDamped.bakeTexelBudget.cubemapTexels === densityReference.bakeTexelBudget.cubemapTexels,
+	'grounding parity artifact: same-budget quality candidate must encode the math action as L1 damping, not a hidden budget or intensity change.' );
 	assertLightProbeProof( file, densityReference.bakeTexelBudget.cubemapTexels === 1327104 &&
 		densityReference.bakeTexelBudget.relativeToLowRes === 54,
 	'grounding parity artifact: WebGPU density stress row must report the 54x cubemap texel work budget.' );
 	assertLightProbeProof( file, densityReference.artifactPressure.status === 'PRESSURE' ||
 		densityReference.artifactPressure.objectBlackTailRatio <= 0.15,
 	'grounding parity artifact: WebGPU density stress row must mark visible black-tail artifacts as pressure.' );
+	assertLightProbeProof( file, densityShadowless.artifactPressure.objectBlackTailRatio <=
+		densityReference.artifactPressure.objectBlackTailRatio + 0.02,
+	'grounding parity artifact: shadowless density control must not worsen object black-tail pressure.' );
+	assertLightProbeProof( file, densityDamped.artifactPressure.status === 'bounded' &&
+		densityDamped.artifactPressure.objectBlackTailRatio <= 0.08 &&
+		densityDamped.artifactPressure.luminanceFloor >= 24,
+	'grounding parity artifact: same-budget quality candidate must address muddy object black-tail pressure.' );
+	assertLightProbeProof( file, densityDamped.artifactPressure.objectBlackTailRatio <=
+		densityReference.artifactPressure.objectBlackTailRatio - 0.25,
+	'grounding parity artifact: same-budget quality candidate must materially reduce black-tail pressure.' );
+	assertLightProbeProof( file, densityDamped.artifactPressure.cellEdgeContrast <=
+		densityReference.artifactPressure.cellEdgeContrast,
+	'grounding parity artifact: same-budget quality candidate must not trade black-tail fix for worse cell-edge contrast.' );
 
 }
 
@@ -813,9 +883,66 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 	const leakMatrix = getSmokeStep( smokeResults, 'leak matrix' ).leakMatrix;
 	const snapshotRows = new Map( snapshots.map( snapshot => [ snapshot.label, snapshot ] ) );
 	const densityReference = snapshotRows.get( 'webgpu-webgl-density-reference' );
+	const densityShadowless = snapshotRows.get( 'webgpu-webgl-density-shadowless' );
+	const densityDamped = snapshotRows.get( 'webgpu-webgl-density-damped' );
 	const bakeTexelBudgets = {
 		lowRes: createLightProbeBakeTexelBudget( 4, 8 ),
 		densityReference: createLightProbeBakeTexelBudget( 6, 32 )
+	};
+	const createDensityDelta = snapshot => ( {
+		objectBlackTailDelta: Number( (
+			snapshot.artifactPressure.objectBlackTailRatio -
+			densityReference.artifactPressure.objectBlackTailRatio
+		).toFixed( 4 ) ),
+		luminanceFloorDelta: Number( (
+			snapshot.artifactPressure.luminanceFloor -
+			densityReference.artifactPressure.luminanceFloor
+		).toFixed( 4 ) ),
+		cellEdgeContrastDelta: Number( (
+			snapshot.artifactPressure.cellEdgeContrast -
+			densityReference.artifactPressure.cellEdgeContrast
+		).toFixed( 4 ) )
+	} );
+	const densityArtifactStudy = {
+		reference: densityReference.artifactPressure,
+		shadowless: {
+			...densityShadowless.artifactPressure,
+			...createDensityDelta( densityShadowless )
+		},
+		damped: {
+			...densityDamped.artifactPressure,
+			...createDensityDelta( densityDamped )
+		}
+	};
+	const snapshotBakeTimings = snapshots.map( snapshot =>
+		snapshot.metrics?.timings?.totalBakeMs ?? snapshot.totalBakeMs ?? 0
+	);
+	const positiveBakeTimings = snapshotBakeTimings.filter( timing => timing > 0 );
+	const timingSources = snapshots.map( snapshot =>
+		snapshot.metrics?.timings?.timingSource ?? 'unavailable'
+	);
+	const timingSourceCounts = timingSources.reduce( ( counts, source ) => {
+
+		counts[ source ] = ( counts[ source ] ?? 0 ) + 1;
+		return counts;
+
+	}, {} );
+	const performanceEvidence = {
+		bakeTexelBudgetStatus: 'asserted',
+		measuredTimingStatus: positiveBakeTimings.length === snapshotBakeTimings.length ?
+			'reported-not-gated' :
+			'unavailable-or-zero-not-asserted',
+		measuredTimingNote: 'Static cubemap texel work is the only performance gate. Positive bake timings are reported as diagnostics; under the deterministic e2e timer the harness uses performance._now as a wall-clock fallback for total bake time.',
+		snapshotBakeTimings,
+		timingSources,
+		timingSourceCounts
+	};
+	const mathAndPipelineDecision = {
+		rootCauseHypothesis: 'The muddy density-reference artifact is dominated by low-order / 9-coefficient SH representation pressure: a 6^3 / 32px bake captures sharper high-contrast lighting, then the low-order SH representation stores it as only 9 coefficients. Full L1 directionality can create negative/dark lobes after evaluation and non-negative clamp.',
+		action: 'Use a same-budget band1-damped quality candidate: preserve L0 mean irradiance, keep L2 at 0.55, reduce L1 directional overshoot to 0.6, and keep global probeIntensity unchanged.',
+		webgpuPipelineFlow: 'GPU bake cubemaps -> GPU SH projection into packed atlas -> hardware texture.sample() for unweighted runtime queries -> sampler-disabled manual loads / shader texture loads only for validity/normal-weighted rows -> SH band evaluation and clamp.',
+		webgpuQuirkBoundary: 'This pass treats the issue as SH band-policy pressure, not a WebGPU texture-filtering bug: the quality candidate keeps the same half-float atlas path, same 6^3 / 32px bake budget, and the same hardware-filtered unweighted sampler.',
+		deferredRuntimeWork: 'If the same pattern fails on more adapters, next scoped runtime work is private anti-ringing/visibility design: per-probe confidence, visibility/depth moments, probe relocation/classification, or adaptive bricks; no public preset/API change in this pass.'
 	};
 
 	return {
@@ -840,6 +967,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			leakCandidate: 'leak-thin-wall-validity-weighted',
 			negativeControl: 'leak-zero-thickness-validity-weighted remains OPEN',
 			sameBudgetStressReference: 'webgpu-webgl-density-reference',
+			sameBudgetQualityCandidate: 'webgpu-webgl-density-damped',
 			webglSourceReference: 'examples/webgl_lightprobes.html uses LightProbeGrid at resolution=6 and cubemapSize=32.'
 		},
 		currentEvidence: {
@@ -849,7 +977,10 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			artifactComparisons: artifactMatrix.comparisons,
 			regionComparisons: regionMatrix.comparisons,
 			leakComparisons: leakMatrix.comparisons,
+			densityArtifactStudy,
+			mathAndPipelineDecision,
 			bakeTexelBudgets,
+			performanceEvidence,
 			densityReferenceArtifactPressure: densityReference?.artifactPressure ?? null,
 			restored
 		},
@@ -860,7 +991,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			'replacing hardware-filtered unweighted sampling with manual loads',
 			'claiming the zero-thickness negative control is solved',
 			'claiming the same-budget density stress screenshot is a visual-quality win',
-			'hiding L2 SH dark-tail/ringing artifacts behind probe-density language',
+			'hiding low-order SH representation dark-tail/ringing artifacts behind probe-density language',
 			'confusing screenshot-space RGB ratios with linear radiance',
 			'claiming production DDGI parity without visibility/depth moments'
 		],
@@ -871,6 +1002,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			{ gate: 'Low-res candidate must not change global probe intensity.', result: 'passed' },
 			{ gate: 'Unweighted candidate must stay on hardware-filtered sampling.', result: 'passed' },
 			{ gate: 'WebGPU 6^3 / 32px density row must be labelled as an artifact pressure case, not a quality win.', result: 'passed' },
+			{ gate: 'Same-budget quality candidate must reduce object black-tail below 0.08 and recover luminance floor above 24.', result: 'passed' },
+			{ gate: 'Same-budget quality candidate must preserve L0/probe intensity/bake budget and change only the SH band policy.', result: 'passed' },
 			{ gate: 'Bake texel budget must report the 54x cubemap work multiplier for 6^3 / 32px versus 4^3 / 8px.', result: 'passed' },
 			{ gate: 'Weighted thin-wall rows must bound wrong-side color leak without erasing correct bounce.', result: 'passed' },
 			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' }
@@ -878,7 +1011,9 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 		uncertainties: [
 			{ status: 'OPEN', item: 'Screenshot-space RGB ratios are regression signals, not linear-radiance proof.' },
 			{ status: 'OPEN', item: 'Metrics depend on camera, material, tonemapping, and browser/GPU adapter.' },
-			{ status: 'OPEN', item: 'The WebGPU 6^3 / 32px density screenshot is a same-budget stress row; high-frequency bake detail can still produce muddy L2 SH black-tail/ringing artifacts.' },
+			{ status: 'SUPPORTED', item: 'The same-budget quality candidate uses first-band anti-ringing damping to reduce the density stress black-tail while preserving the 6^3 / 32px bake budget.' },
+			{ status: 'OPEN', item: 'The WebGPU 6^3 / 32px full-band density screenshot remains a stress row; high-frequency bake detail can still produce muddy low-order / 9-coefficient SH representation black-tail/ringing artifacts.' },
+			{ status: 'OPEN', item: 'Measured bake timings are diagnostics only and may report zero in this harness run; static cubemap texel budget is the asserted performance evidence.' },
 			{ status: 'OPEN', item: 'Current validity is heuristic occupancy metadata, not DDGI visibility/depth moments.' },
 			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved by occupancy validity; they need real visibility/depth moments or a separate visibility structure.' },
 			{ status: 'OPEN', item: 'No adaptive density, probe relocation, classification, dilation, or virtual-offset pipeline yet.' },
@@ -888,6 +1023,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			{ level: 'examples', evidence: 'low-res proof snapshots, region matrices, and controlled thin-wall leak rows' },
 			{ level: 'counterexamples', evidence: 'damped baseline, L0-only, direct-off, panel-hidden, solids-hidden, and zero-thickness negative-control rows' },
 			{ level: 'artifact-pressure', evidence: 'webgpu-webgl-density-reference tracks object black-tail ratio, luminance floor, cell-edge contrast, and 54x bake texel work' },
+			{ level: 'candidate-action', evidence: 'webgpu-webgl-density-damped must reduce object black-tail below 0.08 at the same bake texel budget by changing only the L1 band policy' },
 			{ level: 'invariants', evidence: 'source checks keep GPU-resident bake, hardware-filtered unweighted sampling, and fixed demo defaults' },
 			{ level: 'executable-check', evidence: 'targeted WebGPU e2e assertions' },
 			{ level: 'transfer', evidence: 'OPEN: repeat on more browsers/adapters and add actual WebGL metric capture' }
@@ -895,6 +1031,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 		verdict: 'SUPPORTED within the frozen e2e verifier boundary.',
 		proofLedgerDecision: 'CONTINUE',
 		nextPressure: 'If controlled thin-wall rows keep passing, design the next scoped pass for real visibility/depth moments without public preset/API creep.',
+		artifactMatrix,
+		regionMatrix,
 		leakMatrix,
 		snapshots
 	};
@@ -913,8 +1051,8 @@ function createLightProbeProofMarkdown( report ) {
 		'',
 		'## Grounding / Parity Snapshots',
 		'',
-		'| Case | Role | Resolution | Cubemap | Bake texels | Weighted | Tall red/green | Sphere green/red | Object black-tail | Pressure | Screenshot |',
-		'|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|'
+		'| Case | Role | Resolution | Cubemap | Bake texels | Band policy | Weighted | Tall red/green | Sphere green/red | Object black-tail | Pressure | Screenshot |',
+		'|---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|'
 	];
 
 	for ( const snapshot of report.snapshots ) {
@@ -928,6 +1066,7 @@ function createLightProbeProofMarkdown( report ) {
 			snapshot.metrics.resolution,
 			snapshot.metrics.cubemapSize,
 			snapshot.bakeTexelBudget.cubemapTexels,
+			snapshot.antiRingingPolicy?.bandPolicy ?? 'n/a',
 			snapshot.metrics.sampling.weightedProbeSampling,
 			tallBox.colorBias.redOverGreen,
 			sphere.colorBias.greenOverRed,
@@ -944,7 +1083,59 @@ function createLightProbeProofMarkdown( report ) {
 		'',
 		`- Low-res 4³ / 8px: ${ report.currentEvidence.bakeTexelBudgets.lowRes.cubemapTexels } cubemap texels.`,
 		`- Same-budget stress 6³ / 32px: ${ report.currentEvidence.bakeTexelBudgets.densityReference.cubemapTexels } cubemap texels.`,
-		`- Work multiplier: ${ report.currentEvidence.bakeTexelBudgets.densityReference.relativeToLowRes }x.`
+		`- Work multiplier: ${ report.currentEvidence.bakeTexelBudgets.densityReference.relativeToLowRes }x.`,
+		`- Timing policy: ${ report.currentEvidence.performanceEvidence.measuredTimingStatus } — ${ report.currentEvidence.performanceEvidence.measuredTimingNote }`
+	);
+
+	const pipelineDecision = report.currentEvidence.mathAndPipelineDecision;
+
+	lines.push(
+		'',
+		'## Math / WebGPU Pipeline Decision',
+		'',
+		`- Root cause hypothesis: ${ pipelineDecision.rootCauseHypothesis }`,
+		`- Action taken: ${ pipelineDecision.action }`,
+		`- Pipeline flow: ${ pipelineDecision.webgpuPipelineFlow }`,
+		`- WebGPU boundary: ${ pipelineDecision.webgpuQuirkBoundary }`,
+		`- Deferred runtime work: ${ pipelineDecision.deferredRuntimeWork }`
+	);
+
+	lines.push(
+		'',
+		'## Density Artifact Study',
+		'',
+		'| Control | Role | Object black-tail | Black-tail delta | Luminance floor | Luminance delta | Edge delta | Status |',
+		'|---|---|---:|---:|---:|---:|---:|---|',
+		[
+			'reference',
+			'stress',
+			report.currentEvidence.densityArtifactStudy.reference.objectBlackTailRatio,
+			0,
+			report.currentEvidence.densityArtifactStudy.reference.luminanceFloor,
+			0,
+			0,
+			report.currentEvidence.densityArtifactStudy.reference.status
+		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ),
+		[
+			'shadowless',
+			'cause-control',
+			report.currentEvidence.densityArtifactStudy.shadowless.objectBlackTailRatio,
+			report.currentEvidence.densityArtifactStudy.shadowless.objectBlackTailDelta,
+			report.currentEvidence.densityArtifactStudy.shadowless.luminanceFloor,
+			report.currentEvidence.densityArtifactStudy.shadowless.luminanceFloorDelta,
+			report.currentEvidence.densityArtifactStudy.shadowless.cellEdgeContrastDelta,
+			report.currentEvidence.densityArtifactStudy.shadowless.status
+		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ),
+		[
+			'damped',
+			'quality-candidate',
+			report.currentEvidence.densityArtifactStudy.damped.objectBlackTailRatio,
+			report.currentEvidence.densityArtifactStudy.damped.objectBlackTailDelta,
+			report.currentEvidence.densityArtifactStudy.damped.luminanceFloor,
+			report.currentEvidence.densityArtifactStudy.damped.luminanceFloorDelta,
+			report.currentEvidence.densityArtifactStudy.damped.cellEdgeContrastDelta,
+			report.currentEvidence.densityArtifactStudy.damped.status
+		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' )
 	);
 
 	lines.push(
@@ -1034,6 +1225,16 @@ async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness
 	'grounding parity artifact: expected ready demo state restoration after screenshot capture.' );
 
 	const report = createLightProbeProofReport( file, smokeResults, snapshots, restored );
+	assertLightProbeProof( file, Array.isArray( report.artifactMatrix.rows ) &&
+		Array.isArray( report.regionMatrix.rows ) &&
+		report.artifactMatrix.rows.length > 0 &&
+		report.regionMatrix.rows.length > 0,
+	'grounding parity artifact: proof report must persist raw artifact and region matrices for auditability.' );
+	assertLightProbeProof( file,
+		report.currentEvidence.performanceEvidence.bakeTexelBudgetStatus === 'asserted' &&
+		report.currentEvidence.performanceEvidence.measuredTimingStatus === 'reported-not-gated' &&
+		report.currentEvidence.performanceEvidence.snapshotBakeTimings.every( timing => timing > 0 ),
+		'grounding parity artifact: proof report must keep cubemap texel budget as the performance gate while reporting positive non-gated bake timings.' );
 	const reportPath = path.join( lightProbeParityArtifactDir, 'proof-report.json' );
 	const tablePath = path.join( lightProbeParityArtifactDir, 'proof-table.md' );
 
@@ -1048,9 +1249,10 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 
 	if ( file !== 'webgpu_lightprobes_cornell' ) return;
 
-	const [ example, source ] = await Promise.all( [
+	const [ example, source, e2eSource ] = await Promise.all( [
 		fs.readFile( smokeHarness.example, 'utf8' ),
-		fs.readFile( smokeHarness.source, 'utf8' )
+		fs.readFile( smokeHarness.source, 'utf8' ),
+		fs.readFile( 'test/e2e/puppeteer.js', 'utf8' )
 	] );
 
 	const requireSource = ( condition, message ) => {
@@ -1233,8 +1435,15 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'objectBlackTailRatio' ) &&
 			example.includes( 'createBakeTexelBudget' ) &&
 			example.includes( 'createObjectArtifactPressure' ) &&
+			example.includes( 'antiRingingPolicy' ) &&
+			example.includes( 'band1-damped-quality' ) &&
+			example.includes( 'L0 preserved, L1=0.6, L2=0.55' ) &&
+			example.includes( 'hardware-filtered-unweighted' ) &&
+			example.includes( 'performance._now' ) &&
+			example.includes( 'harness-wall-clock-fallback' ) &&
+			example.includes( 'timingSource' ) &&
 			example.includes( 'same-budget-artifact-pressure' ) &&
-			example.includes( 'higher bake detail can expose L2 SH dark-tail/ringing artifacts' ) &&
+			example.includes( 'higher bake detail can expose low-order / 9-coefficient SH representation dark-tail/ringing artifacts' ) &&
 			example.includes( 'redOverGreen' ) &&
 			example.includes( 'greenOverRed' ) &&
 			example.includes( 'low-res-damped' ) &&
@@ -1242,6 +1451,11 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'low-res-validity-weighted' ) &&
 			example.includes( 'groundingParitySnapshotCases' ) &&
 			example.includes( 'webgpu-webgl-density-reference' ) &&
+			example.includes( 'webgpu-webgl-density-shadowless' ) &&
+			example.includes( 'webgpu-webgl-density-damped' ) &&
+			example.includes( 'same-budget-shadow-control' ) &&
+			example.includes( 'same-budget-quality-candidate' ) &&
+			example.includes( 'disableShadowsDuringBake: snapshotCase.disableShadowsDuringBake' ) &&
 			example.includes( 'applyGroundingParitySnapshot' ) &&
 			example.includes( 'restoreGroundingParitySnapshot' ) &&
 			example.includes( 'shadows-off' ) &&
@@ -1264,6 +1478,16 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 			example.includes( 'resolution-6' ) &&
 			example.includes( 'cubemap-32' ),
 		'Cornell harness must expose precision, SH-band, validity, density, and local artifact diagnostics without adding primary UI knobs.'
+	);
+
+	requireSource(
+		e2eSource.includes( 'mathAndPipelineDecision' ) &&
+			e2eSource.includes( 'webgpuPipelineFlow' ) &&
+			e2eSource.includes( 'GPU bake cubemaps -> GPU SH projection into packed atlas' ) &&
+			e2eSource.includes( 'sampler-disabled manual loads / shader texture loads only for validity/normal-weighted rows' ) &&
+			e2eSource.includes( 'same-budget band1-damped quality candidate' ) &&
+			e2eSource.includes( 'same half-float atlas path' ),
+		'LightProbeGrid proof report must spell out the SH math action and WebGPU pipeline boundary, not only screenshot metrics.'
 	);
 
 	requireSource(
@@ -1705,7 +1929,10 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	for ( const row of artifactMatrix.rows ) {
 
 		assert( row.lightingMode === 'probes only', `artifact matrix ${ row.label }: expected probes-only capture.` );
-		assert( Number.isFinite( row.totalBakeMs ), `artifact matrix ${ row.label }: expected finite bake timing.` );
+		assert( Number.isFinite( row.totalBakeMs ) &&
+			row.totalBakeMs > 0 &&
+			row.timingSource !== 'unavailable',
+		`artifact matrix ${ row.label }: expected positive measured bake timing with a known timing source.` );
 		assert( Number.isFinite( row.artifactSignature.center.luminance ), `artifact matrix ${ row.label }: expected finite center luminance.` );
 		assert( Number.isFinite( row.localArtifactMetric.luminance.min ), `artifact matrix ${ row.label }: expected finite luminance minimum.` );
 		assert( Number.isFinite( row.localArtifactMetric.luminance.p05 ), `artifact matrix ${ row.label }: expected finite luminance p05.` );
@@ -1781,7 +2008,10 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	for ( const row of regionMatrix.rows ) {
 
 		assert( row.lightingMode === 'probes only', `region matrix ${ row.label }: expected probes-only capture.` );
-		assert( Number.isFinite( row.totalBakeMs ), `region matrix ${ row.label }: expected finite bake timing.` );
+		assert( Number.isFinite( row.totalBakeMs ) &&
+			row.totalBakeMs > 0 &&
+			row.timingSource !== 'unavailable',
+		`region matrix ${ row.label }: expected positive measured bake timing with a known timing source.` );
 		assert( row.regions.leftWall !== undefined &&
 			row.regions.rightWall !== undefined &&
 			row.regions.backWall !== undefined &&
@@ -1919,8 +2149,11 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 			`leak matrix ${ row.label }: expected frozen bias controls.` );
 		assert( row.lightingMode === 'probes only' && row.materialType === 'standard',
 			`leak matrix ${ row.label }: expected probes-only standard-material fixture.` );
-		assert( Number.isFinite( row.totalBakeMs ) && Number.isFinite( row.frameMs ),
-			`leak matrix ${ row.label }: expected finite bake/frame timings.` );
+		assert( Number.isFinite( row.totalBakeMs ) &&
+			row.totalBakeMs > 0 &&
+			row.timingSource !== 'unavailable' &&
+			Number.isFinite( row.frameMs ),
+		`leak matrix ${ row.label }: expected positive measured bake timing and finite frame timing.` );
 		assert( row.leakMetrics.regions.leftReceiver !== undefined &&
 			row.leakMetrics.regions.rightReceiver !== undefined &&
 			row.leakMetrics.regions.divider !== undefined,
@@ -2031,7 +2264,10 @@ async function runSmokeHarness( page, file, smokeHarness ) {
 	assert( benchmark.estimatedGpuBytes.atlasBytes > 0, 'benchmark: expected atlas memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.probeValidityBytes > 0, 'benchmark: expected probe validity memory estimate.' );
 	assert( benchmark.precision.requestedPrecision === 'half float', 'benchmark: expected requested precision metadata.' );
-	assert( Number.isFinite( benchmark.totalBakeMs ), 'benchmark: expected finite total bake timing.' );
+	assert( Number.isFinite( benchmark.totalBakeMs ) &&
+		benchmark.totalBakeMs > 0 &&
+		benchmark.timingSource !== 'unavailable',
+	'benchmark: expected positive total bake timing with a known timing source.' );
 	assert( Number.isFinite( benchmark.cubemapMs ), 'benchmark: expected finite cubemap timing.' );
 	assert( Number.isFinite( benchmark.projectionMs ), 'benchmark: expected finite projection timing.' );
 	assert( Number.isFinite( benchmark.copyMs ), 'benchmark: expected finite copy timing.' );
