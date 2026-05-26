@@ -99,6 +99,7 @@ const height = 250;
 const viewScale = 2;
 const jpgQuality = 95;
 const lightProbeParityArtifactDir = path.join( os.tmpdir(), 'codex-threejs-lightprobes-parity' );
+const lightProbeWebGLReferenceLabel = 'webgl-lightprobegrid-reference';
 const lightProbeParitySnapshotLabels = [
 	'low-res-damped',
 	'low-res-unweighted',
@@ -673,6 +674,181 @@ const createLightProbeBakeTexelBudget = ( resolution, cubemapSize ) => {
 
 };
 
+const lightProbeReferenceRegions = {
+	leftWall: { x0: 0.10, x1: 0.20, y0: 0.42, y1: 0.62 },
+	rightWall: { x0: 0.72, x1: 0.88, y0: 0.36, y1: 0.72 },
+	backWall: { x0: 0.30, x1: 0.64, y0: 0.30, y1: 0.58 },
+	floorCenter: { x0: 0.30, x1: 0.66, y0: 0.68, y1: 0.9 },
+	sphere: { x0: 0.54, x1: 0.74, y0: 0.42, y1: 0.64 },
+	tallBox: { x0: 0.28, x1: 0.50, y0: 0.46, y1: 0.84 },
+	shortBox: { x0: 0.48, x1: 0.68, y0: 0.58, y1: 0.88 }
+};
+
+const roundLightProbeMetric = value => Number( value.toFixed( 4 ) );
+
+function createLightProbeImageRegionMetric( image, region, gridCells = 6 ) {
+
+	const x0 = Math.floor( image.width * region.x0 );
+	const x1 = Math.floor( image.width * region.x1 );
+	const y0 = Math.floor( image.height * region.y0 );
+	const y1 = Math.floor( image.height * region.y1 );
+	const width = Math.max( x1 - x0, 1 );
+	const height = Math.max( y1 - y0, 1 );
+	const luminance = [];
+	const color = { r: 0, g: 0, b: 0 };
+	let sum = 0;
+
+	for ( let y = y0; y < y1; y ++ ) {
+
+		for ( let x = x0; x < x1; x ++ ) {
+
+			const i = ( y * image.width + x ) * 4;
+			const red = image.data[ i ];
+			const green = image.data[ i + 1 ];
+			const blue = image.data[ i + 2 ];
+			const value = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+
+			luminance.push( value );
+			sum += value;
+			color.r += red;
+			color.g += green;
+			color.b += blue;
+
+		}
+
+	}
+
+	const sorted = [ ...luminance ].sort( ( a, b ) => a - b );
+	const percentile = value => sorted[ Math.min( sorted.length - 1, Math.max( 0, Math.floor( ( sorted.length - 1 ) * value ) ) ) ];
+	const sampleCount = Math.max( luminance.length, 1 );
+	color.r /= sampleCount;
+	color.g /= sampleCount;
+	color.b /= sampleCount;
+	const darkThreshold = Math.max( 16, percentile( 0.5 ) * 0.35 );
+	const blackThreshold = 32;
+	const darkSamples = luminance.filter( value => value <= darkThreshold ).length;
+	const blackSamples = luminance.filter( value => value <= blackThreshold ).length;
+	const cellCount = Math.max( 2, Math.min( 8, gridCells ) );
+	const cellMeans = [];
+
+	for ( let cy = 0; cy < cellCount; cy ++ ) {
+
+		cellMeans[ cy ] = [];
+
+		for ( let cx = 0; cx < cellCount; cx ++ ) {
+
+			const cellX0 = Math.floor( cx * width / cellCount );
+			const cellX1 = Math.max( cellX0 + 1, Math.floor( ( cx + 1 ) * width / cellCount ) );
+			const cellY0 = Math.floor( cy * height / cellCount );
+			const cellY1 = Math.max( cellY0 + 1, Math.floor( ( cy + 1 ) * height / cellCount ) );
+			let cellSum = 0;
+			let cellSamples = 0;
+
+			for ( let y = cellY0; y < cellY1; y ++ ) {
+
+				for ( let x = cellX0; x < cellX1; x ++ ) {
+
+					cellSum += luminance[ y * width + x ];
+					cellSamples ++;
+
+				}
+
+			}
+
+			cellMeans[ cy ][ cx ] = cellSum / Math.max( cellSamples, 1 );
+
+		}
+
+	}
+
+	let maxCellEdgeContrast = 0;
+
+	for ( let cy = 0; cy < cellCount; cy ++ ) {
+
+		for ( let cx = 0; cx < cellCount; cx ++ ) {
+
+			if ( cx + 1 < cellCount ) {
+
+				maxCellEdgeContrast = Math.max( maxCellEdgeContrast, Math.abs( cellMeans[ cy ][ cx ] - cellMeans[ cy ][ cx + 1 ] ) );
+
+			}
+
+			if ( cy + 1 < cellCount ) {
+
+				maxCellEdgeContrast = Math.max( maxCellEdgeContrast, Math.abs( cellMeans[ cy ][ cx ] - cellMeans[ cy + 1 ][ cx ] ) );
+
+			}
+
+		}
+
+	}
+
+	return {
+		region,
+		samples: luminance.length,
+		gridCells: cellCount,
+		color: {
+			r: roundLightProbeMetric( color.r ),
+			g: roundLightProbeMetric( color.g ),
+			b: roundLightProbeMetric( color.b )
+		},
+		colorBias: {
+			redOverGreen: roundLightProbeMetric( color.r / Math.max( color.g, 0.0001 ) ),
+			greenOverRed: roundLightProbeMetric( color.g / Math.max( color.r, 0.0001 ) )
+		},
+		luminance: {
+			min: roundLightProbeMetric( sorted[ 0 ] ),
+			p01: roundLightProbeMetric( percentile( 0.01 ) ),
+			p05: roundLightProbeMetric( percentile( 0.05 ) ),
+			median: roundLightProbeMetric( percentile( 0.5 ) ),
+			p95: roundLightProbeMetric( percentile( 0.95 ) ),
+			max: roundLightProbeMetric( sorted[ sorted.length - 1 ] ),
+			mean: roundLightProbeMetric( sum / sampleCount )
+		},
+		darkThreshold: roundLightProbeMetric( darkThreshold ),
+		darkPixelRatio: roundLightProbeMetric( darkSamples / sampleCount ),
+		blackThreshold,
+		blackPixelRatio: roundLightProbeMetric( blackSamples / sampleCount ),
+		cellEdgeContrast: roundLightProbeMetric( maxCellEdgeContrast )
+	};
+
+}
+
+function captureLightProbeImageRegions( image ) {
+
+	const regions = {};
+
+	for ( const [ name, region ] of Object.entries( lightProbeReferenceRegions ) ) {
+
+		regions[ name ] = createLightProbeImageRegionMetric( image, region );
+
+	}
+
+	return regions;
+
+}
+
+function createLightProbeImageArtifactPressure( regions ) {
+
+	const objectRegions = [ 'sphere', 'tallBox', 'shortBox' ].map( name => regions[ name ] ).filter( Boolean );
+	const maxDarkPixelRatio = Math.max( ...objectRegions.map( region => region.darkPixelRatio ) );
+	const maxBlackPixelRatio = Math.max( ...objectRegions.map( region => region.blackPixelRatio ) );
+	const maxCellEdgeContrast = Math.max( ...objectRegions.map( region => region.cellEdgeContrast ) );
+	const luminanceFloor = Math.min( ...objectRegions.map( region => region.luminance.p01 ) );
+
+	return {
+		sphereDarkPixelRatio: roundLightProbeMetric( regions.sphere.darkPixelRatio ),
+		tallBoxDarkPixelRatio: roundLightProbeMetric( regions.tallBox.darkPixelRatio ),
+		shortBoxDarkPixelRatio: roundLightProbeMetric( regions.shortBox.darkPixelRatio ),
+		objectDarkTailRatio: roundLightProbeMetric( maxDarkPixelRatio ),
+		objectBlackTailRatio: roundLightProbeMetric( maxBlackPixelRatio ),
+		luminanceFloor: roundLightProbeMetric( luminanceFloor ),
+		cellEdgeContrast: roundLightProbeMetric( maxCellEdgeContrast ),
+		status: maxBlackPixelRatio > 0.15 || luminanceFloor < 24 ? 'PRESSURE' : 'bounded'
+	};
+
+}
+
 function assertLightProbeProof( file, condition, message ) {
 
 	if ( condition === false ) throw new Error( `${ file }: ${ message }` );
@@ -876,7 +1052,48 @@ function validateLightProbeParitySnapshots( file, snapshots ) {
 
 }
 
-function createLightProbeProofReport( file, smokeResults, snapshots, restored ) {
+function validateLightProbeWebGLReference( file, reference ) {
+
+	assertLightProbeProof( file, reference.label === lightProbeWebGLReferenceLabel,
+		'WebGL reference artifact: expected stable reference label.' );
+	assertLightProbeProof( file, reference.proofRole === 'same-class-webgl-reference',
+		'WebGL reference artifact: expected same-class reference role.' );
+	assertLightProbeProof( file, reference.metrics.backend === 'WebGL' &&
+		reference.metrics.implementation === 'LightProbeGrid' &&
+		reference.metrics.resolution === 6 &&
+		reference.metrics.cubemapSize === 32 &&
+		reference.metrics.lightingMode === 'probes only',
+	'WebGL reference artifact: expected LightProbeGrid 6^3 / 32px probes-only reference metrics.' );
+
+	for ( const regionName of [ 'tallBox', 'shortBox', 'sphere', 'rightWall' ] ) {
+
+		const region = getSnapshotRegion( reference, regionName );
+		assertLightProbeProof( file, Number.isFinite( region.color.r ) &&
+			Number.isFinite( region.color.g ) &&
+			Number.isFinite( region.color.b ),
+		`WebGL reference artifact ${ regionName }: expected finite RGB averages.` );
+		assertLightProbeProof( file, Number.isFinite( region.colorBias.redOverGreen ) &&
+			Number.isFinite( region.colorBias.greenOverRed ),
+		`WebGL reference artifact ${ regionName }: expected finite color-bias ratios.` );
+		assertLightProbeProof( file, Number.isFinite( region.darkPixelRatio ) &&
+			region.darkPixelRatio >= 0 &&
+			region.darkPixelRatio <= 1,
+		`WebGL reference artifact ${ regionName }: expected bounded dark-pixel ratio.` );
+
+	}
+
+	assertLightProbeProof( file, getSnapshotRegion( reference, 'tallBox' ).colorBias.redOverGreen > 1,
+		'WebGL reference artifact: expected positive tall-box red bounce signal.' );
+	assertLightProbeProof( file, getSnapshotRegion( reference, 'sphere' ).colorBias.greenOverRed > 1,
+		'WebGL reference artifact: expected positive sphere green bounce signal.' );
+	assertLightProbeProof( file, reference.artifactPressure !== undefined &&
+		Number.isFinite( reference.artifactPressure.objectBlackTailRatio ) &&
+		Number.isFinite( reference.artifactPressure.luminanceFloor ),
+	'WebGL reference artifact: expected object-level artifact pressure metrics.' );
+
+}
+
+function createLightProbeProofReport( file, smokeResults, snapshots, restored, webglReference ) {
 
 	const artifactMatrix = getSmokeStep( smokeResults, 'artifact matrix' ).artifactMatrix;
 	const regionMatrix = getSmokeStep( smokeResults, 'region artifact matrix' ).regionMatrix;
@@ -968,7 +1185,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			negativeControl: 'leak-zero-thickness-validity-weighted remains OPEN',
 			sameBudgetStressReference: 'webgpu-webgl-density-reference',
 			sameBudgetQualityCandidate: 'webgpu-webgl-density-damped',
-			webglSourceReference: 'examples/webgl_lightprobes.html uses LightProbeGrid at resolution=6 and cubemapSize=32.'
+			webglSourceReference: lightProbeWebGLReferenceLabel
 		},
 		currentEvidence: {
 			artifactMatrixRows: artifactMatrix.rows.length,
@@ -981,6 +1198,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			mathAndPipelineDecision,
 			bakeTexelBudgets,
 			performanceEvidence,
+			webglReference,
 			densityReferenceArtifactPressure: densityReference?.artifactPressure ?? null,
 			restored
 		},
@@ -1006,18 +1224,19 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			{ gate: 'Same-budget quality candidate must preserve L0/probe intensity/bake budget and change only the SH band policy.', result: 'passed' },
 			{ gate: 'Bake texel budget must report the 54x cubemap work multiplier for 6^3 / 32px versus 4^3 / 8px.', result: 'passed' },
 			{ gate: 'Weighted thin-wall rows must bound wrong-side color leak without erasing correct bounce.', result: 'passed' },
-			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' }
+			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' },
+			{ gate: 'WebGL same-class reference screenshot must be captured as secondary evidence, not substituted for WebGPU e2e gates.', result: 'passed' }
 		],
 		uncertainties: [
 			{ status: 'OPEN', item: 'Screenshot-space RGB ratios are regression signals, not linear-radiance proof.' },
 			{ status: 'OPEN', item: 'Metrics depend on camera, material, tonemapping, and browser/GPU adapter.' },
 			{ status: 'SUPPORTED', item: 'The same-budget quality candidate uses first-band anti-ringing damping to reduce the density stress black-tail while preserving the 6^3 / 32px bake budget.' },
 			{ status: 'OPEN', item: 'The WebGPU 6^3 / 32px full-band density screenshot remains a stress row; high-frequency bake detail can still produce muddy low-order / 9-coefficient SH representation black-tail/ringing artifacts.' },
-			{ status: 'OPEN', item: 'Measured bake timings are diagnostics only and may report zero in this harness run; static cubemap texel budget is the asserted performance evidence.' },
+			{ status: 'OPEN', item: 'Measured bake timings are diagnostics only; deterministic e2e uses a wall-clock fallback so unavailable/zero timing evidence cannot masquerade as measured proof.' },
 			{ status: 'OPEN', item: 'Current validity is heuristic occupancy metadata, not DDGI visibility/depth moments.' },
 			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved by occupancy validity; they need real visibility/depth moments or a separate visibility structure.' },
 			{ status: 'OPEN', item: 'No adaptive density, probe relocation, classification, dilation, or virtual-offset pipeline yet.' },
-			{ status: 'OPEN', item: 'Actual WebGL screenshot parity remains a same-class reference check, not part of this WebGPU-only e2e gate.' }
+			{ status: 'SUPPORTED', item: 'Actual WebGL LightProbeGrid 6^3 / 32px probes-only screenshot and screenshot-space metrics are captured as same-class secondary reference evidence.' }
 		],
 		proofLadder: [
 			{ level: 'examples', evidence: 'low-res proof snapshots, region matrices, and controlled thin-wall leak rows' },
@@ -1026,7 +1245,7 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 			{ level: 'candidate-action', evidence: 'webgpu-webgl-density-damped must reduce object black-tail below 0.08 at the same bake texel budget by changing only the L1 band policy' },
 			{ level: 'invariants', evidence: 'source checks keep GPU-resident bake, hardware-filtered unweighted sampling, and fixed demo defaults' },
 			{ level: 'executable-check', evidence: 'targeted WebGPU e2e assertions' },
-			{ level: 'transfer', evidence: 'OPEN: repeat on more browsers/adapters and add actual WebGL metric capture' }
+			{ level: 'transfer', evidence: 'WebGL same-class reference is captured; OPEN: repeat WebGPU/WebGL proof on more browsers/adapters' }
 		],
 		verdict: 'SUPPORTED within the frozen e2e verifier boundary.',
 		proofLedgerDecision: 'CONTINUE',
@@ -1034,7 +1253,8 @@ function createLightProbeProofReport( file, smokeResults, snapshots, restored ) 
 		artifactMatrix,
 		regionMatrix,
 		leakMatrix,
-		snapshots
+		snapshots,
+		webglReference
 	};
 
 }
@@ -1076,6 +1296,28 @@ function createLightProbeProofMarkdown( report ) {
 		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ) );
 
 	}
+
+	const webglTallBox = getSnapshotRegion( report.webglReference, 'tallBox' );
+	const webglSphere = getSnapshotRegion( report.webglReference, 'sphere' );
+
+	lines.push(
+		'',
+		'## WebGL Same-Class Reference',
+		'',
+		'| Case | Role | Resolution | Cubemap | Tall red/green | Sphere green/red | Object black-tail | Pressure | Screenshot |',
+		'|---|---|---:|---:|---:|---:|---:|---|---|',
+		[
+			report.webglReference.label,
+			report.webglReference.proofRole,
+			report.webglReference.metrics.resolution,
+			report.webglReference.metrics.cubemapSize,
+			webglTallBox.colorBias.redOverGreen,
+			webglSphere.colorBias.greenOverRed,
+			report.webglReference.artifactPressure.objectBlackTailRatio,
+			report.webglReference.artifactPressure.status,
+			report.webglReference.screenshot
+		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' )
+	);
 
 	lines.push(
 		'',
@@ -1224,7 +1466,10 @@ async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness
 		restored.hasBoundingBox === true,
 	'grounding parity artifact: expected ready demo state restoration after screenshot capture.' );
 
-	const report = createLightProbeProofReport( file, smokeResults, snapshots, restored );
+	const webglReference = await captureLightProbeWebGLReference( page );
+	validateLightProbeWebGLReference( file, webglReference );
+
+	const report = createLightProbeProofReport( file, smokeResults, snapshots, restored, webglReference );
 	assertLightProbeProof( file, Array.isArray( report.artifactMatrix.rows ) &&
 		Array.isArray( report.regionMatrix.rows ) &&
 		report.artifactMatrix.rows.length > 0 &&
@@ -1233,8 +1478,9 @@ async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness
 	assertLightProbeProof( file,
 		report.currentEvidence.performanceEvidence.bakeTexelBudgetStatus === 'asserted' &&
 		report.currentEvidence.performanceEvidence.measuredTimingStatus === 'reported-not-gated' &&
-		report.currentEvidence.performanceEvidence.snapshotBakeTimings.every( timing => timing > 0 ),
-		'grounding parity artifact: proof report must keep cubemap texel budget as the performance gate while reporting positive non-gated bake timings.' );
+		report.currentEvidence.performanceEvidence.snapshotBakeTimings.every( timing => timing > 0 ) &&
+		report.currentEvidence.webglReference?.label === lightProbeWebGLReferenceLabel,
+		'grounding parity artifact: proof report must keep cubemap texel budget as the performance gate, report positive non-gated bake timings, and persist the WebGL reference.' );
 	const reportPath = path.join( lightProbeParityArtifactDir, 'proof-report.json' );
 	const tablePath = path.join( lightProbeParityArtifactDir, 'proof-table.md' );
 
@@ -1245,14 +1491,65 @@ async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness
 
 }
 
+async function captureLightProbeWebGLReference( page ) {
+
+	const webglPage = await page.browser().newPage();
+	const viewport = page.viewport();
+
+	try {
+
+		if ( viewport !== null ) await webglPage.setViewport( viewport );
+
+		await webglPage.goto( `http://localhost:${ port }/examples/webgl_lightprobes.html?testHarness`, {
+			waitUntil: 'networkidle0',
+			timeout: networkTimeout * 60000
+		} );
+
+		await webglPage.waitForFunction(
+			() => window.__webglLightProbeGridCornell !== undefined,
+			{ timeout: networkTimeout * 60000 }
+		);
+
+		const metrics = await webglPage.evaluate( async () => {
+
+			const harness = window.__webglLightProbeGridCornell;
+			await harness.waitUntilReady();
+			return await harness.applyReferenceSnapshot();
+
+		} );
+
+		const screenshot = path.join( lightProbeParityArtifactDir, `${ lightProbeWebGLReferenceLabel }.png` );
+		const screenshotBuffer = await webglPage.screenshot( { path: screenshot } );
+		const image = await Image.read( screenshotBuffer );
+		const regions = captureLightProbeImageRegions( image );
+
+		return {
+			label: lightProbeWebGLReferenceLabel,
+			proofRole: 'same-class-webgl-reference',
+			referenceBoundary: 'WebGL LightProbeGrid same-class reference at 6^3 / 32px, captured as secondary screenshot-space evidence; not a production DDGI target and not a substitute for WebGPU e2e gates.',
+			metrics,
+			regions,
+			artifactPressure: createLightProbeImageArtifactPressure( regions ),
+			screenshot
+		};
+
+	} finally {
+
+		await webglPage.close();
+
+	}
+
+}
+
 async function checkSmokeSourceInvariants( file, smokeHarness ) {
 
 	if ( file !== 'webgpu_lightprobes_cornell' ) return;
 
-	const [ example, source, e2eSource ] = await Promise.all( [
+	const [ example, source, e2eSource, webglExample ] = await Promise.all( [
 		fs.readFile( smokeHarness.example, 'utf8' ),
 		fs.readFile( smokeHarness.source, 'utf8' ),
-		fs.readFile( 'test/e2e/puppeteer.js', 'utf8' )
+		fs.readFile( 'test/e2e/puppeteer.js', 'utf8' ),
+		fs.readFile( 'examples/webgl_lightprobes.html', 'utf8' )
 	] );
 
 	const requireSource = ( condition, message ) => {
@@ -1265,6 +1562,15 @@ async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		example.includes( 'searchParams.has( \'testHarness\' ) === false' ) &&
 			example.includes( `window.${ smokeHarness.global }` ),
 		'Smoke harness must stay gated behind ?testHarness.'
+	);
+
+	requireSource(
+		webglExample.includes( 'window.__webglLightProbeGridCornell' ) &&
+			webglExample.includes( 'applyReferenceSnapshot' ) &&
+			webglExample.includes( 'params.lightingMode = mode' ) &&
+			e2eSource.includes( lightProbeWebGLReferenceLabel ) &&
+			e2eSource.includes( 'captureLightProbeWebGLReference' ),
+		'WebGL LightProbeGrid reference capture must stay explicit, harness-gated, and secondary to the WebGPU proof.'
 	);
 
 	requireSource(

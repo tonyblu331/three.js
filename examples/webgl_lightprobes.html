@@ -37,6 +37,7 @@
 
 			let camera, scene, renderer, controls;
 			let probes, probesHelper;
+			let directLight, ambientLight, params;
 
 			init();
 
@@ -126,17 +127,17 @@
 				scene.add( sphere );
 
 				// Light
-				const light = new THREE.PointLight( 0xffffff, 40 );
-				light.position.set( 0, 4.5, 0 );
-				light.castShadow = true;
-				light.shadow.mapSize.setScalar( 256 );
-				light.shadow.radius = 10;
-				light.shadow.normalBias = - 0.02;
-				scene.add( light );
+				directLight = new THREE.PointLight( 0xffffff, 40 );
+				directLight.position.set( 0, 4.5, 0 );
+				directLight.castShadow = true;
+				directLight.shadow.mapSize.setScalar( 256 );
+				directLight.shadow.radius = 10;
+				directLight.shadow.normalBias = - 0.02;
+				scene.add( directLight );
 
 				// Dim ambient to see GI effect better
-				const ambient = new THREE.AmbientLight( 0xffffff, 0.05 );
-				scene.add( ambient );
+				ambientLight = new THREE.AmbientLight( 0xffffff, 0.05 );
+				scene.add( ambientLight );
 
 				// Renderer
 
@@ -189,10 +190,11 @@
 
 				}
 
-				const params = {
+				params = {
 					enabled: true,
 					showProbes: false,
-					resolution: 6
+					resolution: 6,
+					lightingMode: 'direct + probes'
 				};
 
 				await bakeWithResolution( params.resolution );
@@ -216,9 +218,72 @@
 
 				} );
 
+				createTestHarness( bakeWithResolution, gui );
+
 				//
 
 				window.addEventListener( 'resize', onWindowResize );
+
+			}
+
+			function createTestHarness( bakeWithResolution, gui ) {
+
+				const searchParams = new URLSearchParams( window.location.search );
+
+				if ( searchParams.has( 'testHarness' ) === false ) return;
+
+				document.getElementById( 'info' )?.remove();
+				gui.domElement.style.display = 'none';
+
+				const setLightingMode = ( mode ) => {
+
+					params.lightingMode = mode;
+					probes.visible = mode === 'direct + probes' || mode === 'probes only';
+					directLight.intensity = mode === 'direct + probes' || mode === 'direct only' ? 40 : 0;
+					ambientLight.intensity = mode === 'direct + probes' ? 0.05 : 0;
+
+				};
+
+				const getMetrics = () => ( {
+					status: probes ? 'ready' : 'idle',
+					backend: 'WebGL',
+					implementation: 'LightProbeGrid',
+					resolution: params.resolution,
+					cubemapSize: 32,
+					probes: params.resolution * params.resolution * params.resolution,
+					lightingMode: params.lightingMode,
+					materialType: 'standard',
+					probeVisible: probes?.visible === true,
+					showProbes: probesHelper?.visible === true
+				} );
+
+				window.__webglLightProbeGridCornell = {
+					waitUntilReady: async () => {
+
+						for ( let i = 0; i < 120; i ++ ) {
+
+							if ( probes ) return getMetrics();
+
+							await new Promise( resolve => setTimeout( resolve, 100 ) );
+
+						}
+
+						throw new Error( 'WebGL LightProbeGrid bake timed out.' );
+
+					},
+					applyReferenceSnapshot: async () => {
+
+						params.resolution = 6;
+						await bakeWithResolution( params.resolution );
+						setLightingMode( 'probes only' );
+						probesHelper.visible = false;
+						renderer.render( scene, camera );
+
+						return getMetrics();
+
+					},
+					getMetrics
+				};
 
 			}
 
