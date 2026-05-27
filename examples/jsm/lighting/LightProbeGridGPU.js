@@ -21,6 +21,7 @@ import {
 	RGBAFormat,
 	Scene,
 	SphereGeometry,
+	StorageTexture,
 	Vector3,
 	Vector4
 } from 'three/webgpu';
@@ -43,8 +44,10 @@ import {
 	positionWorld,
 	texture3D,
 	textureLoad,
+	textureStore,
 	uint,
 	uniform,
+	uvec2,
 	uv,
 	viewportCoordinate,
 	vec3,
@@ -66,6 +69,33 @@ const _gridSize = /*@__PURE__*/ new Vector3();
 const _currentViewport = /*@__PURE__*/ new Vector4();
 const _currentScissor = /*@__PURE__*/ new Vector4();
 const _matrix = /*@__PURE__*/ new Matrix4();
+
+const getBakeTimingPerformance = () => globalThis.performance;
+const getBakeTimingNow = () => {
+
+	const timingPerformance = getBakeTimingPerformance();
+
+	if ( timingPerformance === undefined ) return Date.now();
+
+	const nonDeterministicNow = timingPerformance._now;
+
+	return typeof nonDeterministicNow === 'function' ?
+		nonDeterministicNow.call( timingPerformance ) :
+		timingPerformance.now();
+
+};
+const isDeterministicPerformanceNow = () => {
+
+	const timingPerformance = getBakeTimingPerformance();
+
+	return timingPerformance !== undefined &&
+		typeof timingPerformance._now === 'function' &&
+		timingPerformance.now() === 0;
+
+};
+const getBakeTimingSource = () => isDeterministicPerformanceNow() ?
+	'non-deterministic-performance-now' :
+	'performance-now';
 
 /**
  * GPU-resident L2 spherical harmonics irradiance probe grid.
@@ -155,6 +185,8 @@ class LightProbeGridGPU extends Object3D {
 
 		this.probeIntensity = uniform( options.probeIntensity ?? 1 );
 		this.helperIntensity = uniform( options.helperIntensity ?? 1 );
+		this.helperDebugMode = uniform( this._validateHelperDebugMode( options.helperDebugMode ?? 'irradiance' ) );
+		this.helperDepthMode = this._validateHelperDepthMode( options.helperDepthMode ?? 'depth-tested' );
 		this.band1Intensity = uniform( options.band1Intensity ?? 1 );
 		this.band2Intensity = uniform( options.band2Intensity ?? 1 );
 		this.normalBias = uniform( options.normalBias ?? 0.5 );
@@ -168,6 +200,10 @@ class LightProbeGridGPU extends Object3D {
 		this.cubeRenderTarget = null;
 		this.cubeCamera = null;
 		this.coefficientTarget = null;
+		this.computeProjectionTexture = null;
+		this.computeProjectionNode = null;
+		this.computeProjectionProbeIndex = uniform( 0 );
+		this.computeProjectionFallbackReason = null;
 		this.atlasTarget = null;
 		this.probeValidityTexture = null;
 		this.probeValidityTextureWidth = 0;
@@ -189,7 +225,11 @@ class LightProbeGridGPU extends Object3D {
 		this.repackCamera = null;
 		this.repackMesh = null;
 		this.repackMaterial = null;
+		this.repackFragmentMaterial = null;
+		this.repackComputeProjectionMaterial = null;
 		this.helper = null;
+		this._activeProjectionBackend = 'fragment-coefficient-projection';
+		this._projectionBackendOverride = 'auto';
 
 		this.totalProbes = 0;
 		this.paddedSlices = 0;
@@ -229,6 +269,8 @@ class LightProbeGridGPU extends Object3D {
 
 		if ( options.probeIntensity !== undefined ) this.probeIntensity.value = options.probeIntensity;
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
+		if ( options.helperDebugMode !== undefined ) this.setHelperDebugMode( options.helperDebugMode );
+		if ( options.helperDepthMode !== undefined ) this.setHelperDepthMode( options.helperDepthMode );
 		if ( options.band1Intensity !== undefined ) this.band1Intensity.value = options.band1Intensity;
 		if ( options.band2Intensity !== undefined ) this.band2Intensity.value = options.band2Intensity;
 		if ( options.normalBias !== undefined ) this.normalBias.value = options.normalBias;
@@ -260,6 +302,23 @@ class LightProbeGridGPU extends Object3D {
 		}
 
 		return mode;
+
+	}
+
+	_validateHelperDebugMode( mode ) {
+
+		if ( mode === 'irradiance' ) return 0;
+		if ( mode === 'validity' ) return 1;
+
+		throw new Error( `LightProbeGridGPU: helperDebugMode must be "irradiance" or "validity", got "${ mode }".` );
+
+	}
+
+	_validateHelperDepthMode( mode ) {
+
+		if ( mode === 'depth-tested' || mode === 'x-ray' ) return mode;
+
+		throw new Error( `LightProbeGridGPU: helperDepthMode must be "depth-tested" or "x-ray", got "${ mode }".` );
 
 	}
 
@@ -298,7 +357,9 @@ class LightProbeGridGPU extends Object3D {
 	dispose() {
 
 		if ( this.projectionMaterial !== null ) this.projectionMaterial.dispose();
-		if ( this.repackMaterial !== null ) this.repackMaterial.dispose();
+		if ( this.computeProjectionNode !== null ) this.computeProjectionNode.dispose();
+		if ( this.repackFragmentMaterial !== null ) this.repackFragmentMaterial.dispose();
+		if ( this.repackComputeProjectionMaterial !== null ) this.repackComputeProjectionMaterial.dispose();
 		if ( this.projectionMesh !== null ) this.projectionMesh.geometry.dispose();
 		if ( this.repackMesh !== null ) this.repackMesh.geometry.dispose();
 		if ( this.helper !== null ) {
@@ -310,11 +371,16 @@ class LightProbeGridGPU extends Object3D {
 
 		if ( this.cubeRenderTarget !== null ) this.cubeRenderTarget.dispose();
 		if ( this.coefficientTarget !== null ) this.coefficientTarget.dispose();
+		if ( this.computeProjectionTexture !== null ) this.computeProjectionTexture.dispose();
 		if ( this.atlasTarget !== null ) this.atlasTarget.dispose();
 		if ( this.probeValidityTexture !== null ) this.probeValidityTexture.dispose();
 
 		this.projectionMaterial = null;
+		this.computeProjectionNode = null;
+		this.computeProjectionTexture = null;
 		this.repackMaterial = null;
+		this.repackFragmentMaterial = null;
+		this.repackComputeProjectionMaterial = null;
 		this.projectionScene = null;
 		this.projectionCamera = null;
 		this.projectionMesh = null;
@@ -381,17 +447,22 @@ class LightProbeGridGPU extends Object3D {
 		const rgbaBytes = 4 * bytesPerChannel;
 		const cubemapBytes = 6 * this.cubemapSize * this.cubemapSize * rgbaBytes;
 		const coefficientBytes = SH_COEFFICIENTS * this.totalProbes * rgbaBytes;
+		const computeCoefficientBytes = this.computeProjectionTexture !== null ? coefficientBytes : 0;
 		const atlasBytes = this.resolution * this.resolution * this.atlasDepth * rgbaBytes;
 		const probeValidityBytes = this.probeValidityTextureWidth * this.probeValidityTextureHeight * 4 * 4;
 
 		return {
 			cubemapBytes,
 			coefficientBytes,
+			computeCoefficientBytes,
 			atlasBytes,
 			probeValidityBytes,
-			total: cubemapBytes + coefficientBytes + atlasBytes + probeValidityBytes,
+			total: cubemapBytes + coefficientBytes + computeCoefficientBytes + atlasBytes + probeValidityBytes,
 			bytesPerChannel,
-			backend: { ...BACKEND_LABELS }
+			backend: {
+				...BACKEND_LABELS,
+				projection: this._activeProjectionBackend
+			}
 		};
 
 	}
@@ -665,6 +736,34 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
+	setHelperDebugMode( mode ) {
+
+		this.helperDebugMode.value = this._validateHelperDebugMode( mode );
+		return this;
+
+	}
+
+	setHelperDepthMode( mode ) {
+
+		this.helperDepthMode = this._validateHelperDepthMode( mode );
+		this._applyHelperDepthMode();
+
+		return this;
+
+	}
+
+	_applyHelperDepthMode() {
+
+		if ( this.helper === null ) return;
+
+		const xRay = this.helperDepthMode === 'x-ray';
+		this.helper.material.depthTest = xRay === false;
+		this.helper.material.depthWrite = false;
+		this.helper.material.needsUpdate = true;
+		this.helper.renderOrder = xRay ? 1000 : 0;
+
+	}
+
 	/**
 	 * Bakes the probe grid and returns the in-flight bake promise.
 	 *
@@ -693,6 +792,80 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
+	_canUseComputeProjection( renderer ) {
+
+		return renderer !== null &&
+			renderer.isWebGPURenderer === true &&
+			typeof renderer.compute === 'function' &&
+			this.computeProjectionNode !== null &&
+			this.computeProjectionTexture !== null &&
+			this.computeProjectionFallbackReason === null;
+
+	}
+
+	_validateProjectionBackendOverride( projectionBackendOverride ) {
+
+		if ( projectionBackendOverride !== 'auto' &&
+			projectionBackendOverride !== 'force-fragment' &&
+			projectionBackendOverride !== 'force-compute' ) {
+
+			throw new Error( 'LightProbeGridGPU: projectionBackendOverride must be "auto", "force-fragment", or "force-compute".' );
+
+		}
+
+		return projectionBackendOverride;
+
+	}
+
+	_setProjectionBackendOverrideForProfiling( projectionBackendOverride ) {
+
+		this._projectionBackendOverride = this._validateProjectionBackendOverride( projectionBackendOverride );
+		return this._projectionBackendOverride;
+
+	}
+
+	_selectProjectionBackend( renderer, projectionBackendOverride = this._projectionBackendOverride ) {
+
+		const override = this._validateProjectionBackendOverride( projectionBackendOverride );
+
+		if ( override === 'force-fragment' ) return 'fragment-coefficient-projection';
+
+		return this._canUseComputeProjection( renderer ) ?
+			'compute-probe-reduction' :
+			'fragment-coefficient-projection';
+
+	}
+
+	_setRepackSource( projectionBackend ) {
+
+		const material = projectionBackend === 'compute-probe-reduction' ?
+			this.repackComputeProjectionMaterial :
+			this.repackFragmentMaterial;
+
+		this.repackMaterial = material;
+
+		if ( this.repackMesh !== null ) this.repackMesh.material = material;
+
+	}
+
+	_runFragmentCoefficientProjection( renderer, probeIndex ) {
+
+		this.coefficientTarget.viewport.set( 0, probeIndex, SH_COEFFICIENTS, 1 );
+		this.coefficientTarget.scissor.set( 0, probeIndex, SH_COEFFICIENTS, 1 );
+
+		renderer.setRenderTarget( this.coefficientTarget );
+		renderer.autoClear = false;
+		renderer.render( this.projectionScene, this.projectionCamera );
+
+	}
+
+	_runComputeProjection( renderer, probeIndex ) {
+
+		this.computeProjectionProbeIndex.value = probeIndex;
+		renderer.compute( this.computeProjectionNode );
+
+	}
+
 	async _bake( renderer, scene, options = {} ) {
 
 		this._resolvePrecision( renderer );
@@ -706,12 +879,22 @@ class LightProbeGridGPU extends Object3D {
 		const currentShadowAutoUpdate = hasShadowMap ? renderer.shadowMap.autoUpdate : undefined;
 		const currentProbeIntensity = this.probeIntensity.value;
 		const currentHelperVisible = this.helper?.visible ?? false;
-		const totalStart = performance.now();
+		const timingSource = getBakeTimingSource();
+		const deterministicTimerDetected = isDeterministicPerformanceNow();
+		const totalStart = getBakeTimingNow();
 
 		let cubemapMs = 0;
 		let projectionMs = 0;
 		let copyMs = 0;
 		let retryHalfFloat = false;
+		let retryFragmentProjection = false;
+		const projectionBackendOverride = this._validateProjectionBackendOverride( options.projectionBackendOverride ?? this._projectionBackendOverride );
+		const projectionBackend = this._selectProjectionBackend( renderer, projectionBackendOverride );
+		const projectionCubemapSweepsPerProbe = projectionBackend === 'compute-probe-reduction' ? 1 : SH_COEFFICIENTS;
+		const projectionTexelVisits = this.totalProbes * projectionCubemapSweepsPerProbe * 6 * this.cubemapSize * this.cubemapSize;
+
+		this._activeProjectionBackend = projectionBackend;
+		this._setRepackSource( projectionBackend );
 
 		renderer.getViewport( _currentViewport );
 		renderer.getScissor( _currentScissor );
@@ -741,29 +924,41 @@ class LightProbeGridGPU extends Object3D {
 				this.getProbePosition( i, _probePosition );
 				this.cubeCamera.position.copy( _probePosition );
 
-				let phaseStart = performance.now();
+				let phaseStart = getBakeTimingNow();
 				renderer.autoClear = true;
 				this.cubeCamera.update( renderer, scene );
-				cubemapMs += performance.now() - phaseStart;
+				cubemapMs += getBakeTimingNow() - phaseStart;
 
-				this.coefficientTarget.viewport.set( 0, i, SH_COEFFICIENTS, 1 );
-				this.coefficientTarget.scissor.set( 0, i, SH_COEFFICIENTS, 1 );
+				phaseStart = getBakeTimingNow();
 
-				phaseStart = performance.now();
-				renderer.setRenderTarget( this.coefficientTarget );
-				renderer.autoClear = false;
-				renderer.render( this.projectionScene, this.projectionCamera );
-				projectionMs += performance.now() - phaseStart;
+				if ( projectionBackend === 'compute-probe-reduction' ) {
+
+					this._runComputeProjection( renderer, i );
+
+				} else {
+
+					this._runFragmentCoefficientProjection( renderer, i );
+
+				}
+
+				projectionMs += getBakeTimingNow() - phaseStart;
 
 			}
 
-			const copyStart = performance.now();
+			const copyStart = getBakeTimingNow();
 			await this._repackAtlas( renderer );
-			copyMs = performance.now() - copyStart;
+			copyMs = getBakeTimingNow() - copyStart;
 
 		} catch ( error ) {
 
-			if ( this.projectionFallbackType === null &&
+			if ( projectionBackend === 'compute-probe-reduction' ) {
+
+				retryFragmentProjection = true;
+				this.computeProjectionFallbackReason = error instanceof Error ? error.message : String( error );
+				this._activeProjectionBackend = 'fragment-coefficient-projection';
+				this._setRepackSource( 'fragment-coefficient-projection' );
+
+			} else if ( this.projectionFallbackType === null &&
 				this.projectionPrecision === 'float' &&
 				( this.coefficientTarget.texture.type === FloatType || this.atlasTarget.texture.type === FloatType ) ) {
 
@@ -796,13 +991,26 @@ class LightProbeGridGPU extends Object3D {
 
 		}
 
+		if ( retryFragmentProjection ) return this._bake( renderer, scene, options );
 		if ( retryHalfFloat ) return this._bake( renderer, scene, options );
 
 		return {
 			cubemapMs: Number( cubemapMs.toFixed( 2 ) ),
 			projectionMs: Number( projectionMs.toFixed( 2 ) ),
 			copyMs: Number( copyMs.toFixed( 2 ) ),
-			totalBakeMs: Number( ( performance.now() - totalStart ).toFixed( 2 ) ),
+			projectionBackendRequest: projectionBackendOverride,
+			projectionBackend: this._activeProjectionBackend,
+			projectionBackendForced: projectionBackendOverride !== 'auto',
+			projectionCubemapSweepsPerProbe,
+			projectionTexelVisits,
+			projectionTexelVisitReductionRatio: projectionBackend === 'compute-probe-reduction' ?
+				Number( ( 1 - ( 1 / SH_COEFFICIENTS ) ).toFixed( 4 ) ) :
+				0,
+			computeProjectionFallbackReason: this.computeProjectionFallbackReason,
+			totalBakeMs: Number( ( getBakeTimingNow() - totalStart ).toFixed( 2 ) ),
+			timingSource,
+			projectionTimingSource: timingSource,
+			deterministicTimerDetected,
 			precision: this.getPrecisionInfo( renderer )
 		};
 
@@ -845,6 +1053,7 @@ class LightProbeGridGPU extends Object3D {
 
 		const oldHelperVisible = this.helper?.visible ?? false;
 		this.dispose();
+		this.computeProjectionFallbackReason = null;
 
 		this.totalProbes = this.resolution * this.resolution * this.resolution;
 		this.paddedSlices = this.resolution + 2 * ATLAS_PADDING;
@@ -865,6 +1074,14 @@ class LightProbeGridGPU extends Object3D {
 			magFilter: NearestFilter,
 			depthBuffer: false
 		} );
+		this.computeProjectionTexture = new StorageTexture( SH_COEFFICIENTS, this.totalProbes );
+		this.computeProjectionTexture.format = RGBAFormat;
+		this.computeProjectionTexture.type = this._getTextureType();
+		this.computeProjectionTexture.minFilter = NearestFilter;
+		this.computeProjectionTexture.magFilter = NearestFilter;
+		this.computeProjectionTexture.generateMipmaps = false;
+		this.computeProjectionTexture.mipmapsAutoUpdate = false;
+
 		this.atlasTarget = new RenderTarget3D( this.resolution, this.resolution, this.atlasDepth, {
 			format: RGBAFormat,
 			type: this._getTextureType(),
@@ -877,7 +1094,10 @@ class LightProbeGridGPU extends Object3D {
 
 		this._createProbeValidityTexture();
 		this.projectionMaterial = this._createProjectionMaterial();
-		this.repackMaterial = this._createRepackMaterial();
+		this.computeProjectionNode = this._createComputeProjectionNode();
+		this.repackFragmentMaterial = this._createRepackMaterial( this.coefficientTarget.texture );
+		this.repackComputeProjectionMaterial = this._createRepackMaterial( this.computeProjectionTexture );
+		this.repackMaterial = this.repackFragmentMaterial;
 
 		if ( this.projectionScene === null ) {
 
@@ -960,6 +1180,7 @@ class LightProbeGridGPU extends Object3D {
 		const geometry = new SphereGeometry( 0.055, 12, 8 );
 		const material = new MeshBasicNodeMaterial();
 		const atlasLoad = texture3D( this.atlasTarget.texture ).setSampler( false );
+		const helperDebugMode = this.helperDebugMode;
 		const evaluateInstanceProbe = Fn( () => {
 
 			const index = int( instanceIndex );
@@ -967,8 +1188,28 @@ class LightProbeGridGPU extends Object3D {
 			const y = index.sub( z.mul( this.resolution * this.resolution ) ).div( this.resolution );
 			const x = index.sub( z.mul( this.resolution * this.resolution ) ).sub( y.mul( this.resolution ) );
 			const s0 = atlasLoad.load( this._getPackedAtlasLoadCoord( x, y, z ) ).xyz;
+			const validity = atlasLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 6 ) ).w;
+			const irradianceColor = max( s0.mul( 0.886227 ), vec3( 0 ) );
+			const validityColor = vec3( 1.0, 0.12, 0.08 ).toVar();
+			const helperColor = irradianceColor.toVar();
 
-			return max( s0.mul( 0.886227 ), vec3( 0 ) );
+			If( validity.greaterThanEqual( 0.999 ), () => {
+
+				validityColor.assign( vec3( 0.08, 1.0, 0.22 ) );
+
+			} ).ElseIf( validity.greaterThanEqual( 0.5 ), () => {
+
+				validityColor.assign( vec3( 1.0, 0.72, 0.05 ) );
+
+			} );
+
+			If( helperDebugMode.greaterThan( 0.5 ), () => {
+
+				helperColor.assign( validityColor );
+
+			} );
+
+			return helperColor;
 
 		} );
 
@@ -985,6 +1226,7 @@ class LightProbeGridGPU extends Object3D {
 		}
 
 		this.helper.instanceMatrix.needsUpdate = true;
+		this._applyHelperDepthMode();
 
 	}
 
@@ -1111,9 +1353,108 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	_createRepackMaterial() {
+	_createComputeProjectionNode() {
 
-		const batch = this.coefficientTarget.texture;
+		const cubemapSize = this.cubemapSize;
+		const pixelSize = 2 / cubemapSize;
+
+		const computeProjection = Fn( () => {
+
+			const probeIndex = uint( this.computeProjectionProbeIndex );
+			const c0 = vec3( 0 ).toVar();
+			const c1 = vec3( 0 ).toVar();
+			const c2 = vec3( 0 ).toVar();
+			const c3 = vec3( 0 ).toVar();
+			const c4 = vec3( 0 ).toVar();
+			const c5 = vec3( 0 ).toVar();
+			const c6 = vec3( 0 ).toVar();
+			const c7 = vec3( 0 ).toVar();
+			const c8 = vec3( 0 ).toVar();
+			const totalWeight = float( 0 ).toVar();
+
+			Loop( { start: int( 0 ), end: int( 6 ), type: 'int', condition: '<' }, ( { i: face } ) => {
+
+				Loop( { start: int( 0 ), end: int( cubemapSize ), type: 'int', condition: '<' }, ( { i: iy } ) => {
+
+					Loop( { start: int( 0 ), end: int( cubemapSize ), type: 'int', condition: '<' }, ( { i: ix } ) => {
+
+						const col = float( 1.0 ).sub( float( ix ).add( 0.5 ).mul( pixelSize ) );
+						const row = float( 1.0 ).sub( float( iy ).add( 0.5 ).mul( pixelSize ) );
+						const coord = vec3( 0 ).toVar();
+
+						If( face.equal( int( 0 ) ), () => {
+
+							coord.assign( vec3( - 1.0, row, col ) );
+
+						} ).ElseIf( face.equal( int( 1 ) ), () => {
+
+							coord.assign( vec3( 1.0, row, col.negate() ) );
+
+						} ).ElseIf( face.equal( int( 2 ) ), () => {
+
+							coord.assign( vec3( col, 1.0, row.negate() ) );
+
+						} ).ElseIf( face.equal( int( 3 ) ), () => {
+
+							coord.assign( vec3( col, - 1.0, row ) );
+
+						} ).ElseIf( face.equal( int( 4 ) ), () => {
+
+							coord.assign( vec3( col, row, 1.0 ) );
+
+						} ).Else( () => {
+
+							coord.assign( vec3( col.negate(), row, - 1.0 ) );
+
+						} );
+
+						const lengthSq = coord.dot( coord );
+						const weight = float( 4.0 ).div( lengthSq.sqrt().mul( lengthSq ) );
+						const dir = coord.normalize();
+						const x = dir.x;
+						const y = dir.y;
+						const z = dir.z;
+						const radiance = cubeTexture( this.cubeRenderTarget.texture, coord, 0 ).rgb;
+						const weightedRadiance = radiance.mul( weight );
+
+						totalWeight.addAssign( weight );
+						c0.addAssign( weightedRadiance.mul( 0.282095 ) );
+						c1.addAssign( weightedRadiance.mul( y.mul( 0.488603 ) ) );
+						c2.addAssign( weightedRadiance.mul( z.mul( 0.488603 ) ) );
+						c3.addAssign( weightedRadiance.mul( x.mul( 0.488603 ) ) );
+						c4.addAssign( weightedRadiance.mul( x.mul( y ).mul( 1.092548 ) ) );
+						c5.addAssign( weightedRadiance.mul( y.mul( z ).mul( 1.092548 ) ) );
+						c6.addAssign( weightedRadiance.mul( z.mul( z ).mul( 3.0 ).sub( 1.0 ).mul( 0.315392 ) ) );
+						c7.addAssign( weightedRadiance.mul( x.mul( z ).mul( 1.092548 ) ) );
+						c8.addAssign( weightedRadiance.mul( x.mul( x ).sub( y.mul( y ) ).mul( 0.546274 ) ) );
+
+					} );
+
+				} );
+
+			} );
+
+			const norm = float( 4 * Math.PI ).div( totalWeight );
+
+			textureStore( this.computeProjectionTexture, uvec2( uint( 0 ), probeIndex ), vec4( c0.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 1 ), probeIndex ), vec4( c1.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 2 ), probeIndex ), vec4( c2.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 3 ), probeIndex ), vec4( c3.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 4 ), probeIndex ), vec4( c4.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 5 ), probeIndex ), vec4( c5.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 6 ), probeIndex ), vec4( c6.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 7 ), probeIndex ), vec4( c7.mul( norm ), 1 ) ).toWriteOnly();
+			textureStore( this.computeProjectionTexture, uvec2( uint( 8 ), probeIndex ), vec4( c8.mul( norm ), 1 ) ).toWriteOnly();
+
+		} );
+
+		return computeProjection().compute( 1 ).setName( 'LightProbeGridGPU compute projection' );
+
+	}
+
+	_createRepackMaterial( coefficientTexture ) {
+
+		const batch = coefficientTexture;
 		const resolution = this.repackResolution;
 		const textureIndex = this.repackTextureIndex;
 		const sliceZ = this.repackSliceZ;

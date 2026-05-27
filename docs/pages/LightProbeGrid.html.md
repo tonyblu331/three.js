@@ -2,7 +2,7 @@
 
 A 3D grid of L2 Spherical Harmonic irradiance probes that provides position-dependent diffuse global illumination.
 
-Note that this class can only be used with [WebGLRenderer](WebGLRenderer.html). A version for [WebGPURenderer](WebGPURenderer.html) will be added at a later point.
+Note that this page documents the [WebGLRenderer](WebGLRenderer.html) baseline. Experimental WebGPU work lives in the `LightProbeGridGPU` addon and remains proof-scoped while its runtime visibility/depth behavior and public API boundary are stabilized. Current WebGPU proof artifacts track leak-audit diagnostics and literature lessons from APV/DDGI-style systems, but they are not a public API contract and must not be read as production DDGI/APV parity.
 
 All seven packed SH sub-volumes are stored in a **single** RGBA `WebGL3DRenderTarget` using a texture-atlas layout along the Z axis. Each sub-volume occupies `( nz + 2 )` atlas slices: one padding slice at each end (a copy of the nearest edge data slice) to prevent color bleeding when the hardware trilinear filter reads across a sub-volume boundary.
 
