@@ -199,9 +199,14 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary.status === 'string' &&
 		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary.mode === 'offscreen-half-float-linear-target-contribution-isolation-neutral-receiver-albedo' &&
 		Array.isArray( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary.warnings ) &&
-		[ 'SUPPORTED', 'OPEN' ].includes( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.status ) &&
+		(
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.status === 'SUPPORTED' ||
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.status.startsWith( 'OPEN-' )
+		) &&
 		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.mode === 'proof-only-offscreen-scene-linear-contribution-gate' &&
 		Array.isArray( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.warnings ) &&
+		Array.isArray( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.blockers ) &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.dominantContributionSource === 'string' &&
 		(
 			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta === null ||
 			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta )

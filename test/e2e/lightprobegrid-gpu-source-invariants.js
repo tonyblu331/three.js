@@ -15,6 +15,16 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		shDiagnosticsSource,
 		receiverDiagnosticsSource,
 		oracleDiagnosticsSource,
+		proofReadbackSource,
+		gpuConstantsSource,
+		gpuAtlasSource,
+		cpuShMathSource,
+		gpuResourcesSource,
+		gpuProjectionSource,
+		gpuAtlasRepackSource,
+		gpuVisibilitySource,
+		gpuHelperSource,
+		gpuBakeSource,
 		smokeRunnerSource,
 		proofReportSource,
 		proofVisibilitySource,
@@ -26,6 +36,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		proofReceiverMarkdownSource,
 		proofResearchMarkdownSource,
 		artifactSource,
+		artifactPerformanceAssertionsSource,
 		imageMetricsSource,
 		proofValidationSource,
 		configSource,
@@ -51,6 +62,16 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUOracleDiagnostics.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProofReadback.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUResources.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlasRepack.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-report.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-visibility.js', 'utf8' ),
@@ -62,6 +83,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-receiver-markdown.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-research-markdown.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-artifacts.js', 'utf8' ),
+		fs.readFile( 'test/e2e/lightprobegrid-gpu-artifact-performance-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-image-metrics.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-validation.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke-config.js', 'utf8' ),
@@ -85,7 +107,8 @@ ${ browserHarnessSource }
 ${ visibilityStudySource }
 ${ shDiagnosticsSource }
 ${ receiverDiagnosticsSource }
-${ oracleDiagnosticsSource }`;
+${ oracleDiagnosticsSource }
+${ cpuShMathSource }`;
 	const e2eSource = `${ smokeRunnerSource }
 ${ proofReportSource }
 ${ proofVisibilitySource }
@@ -97,6 +120,7 @@ ${ proofProbeMarkdownSource }
 ${ proofReceiverMarkdownSource }
 ${ proofResearchMarkdownSource }
 ${ artifactSource }
+${ artifactPerformanceAssertionsSource }
 ${ imageMetricsSource }
 ${ proofValidationSource }
 ${ configSource }
@@ -194,17 +218,83 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		source.includes( 'this.projectionMesh.geometry.dispose()' ) &&
-			source.includes( 'this.repackMesh.geometry.dispose()' ) &&
+		gpuResourcesSource.includes( 'disposeLightProbeGridGPUFullscreenMesh' ) &&
+			gpuResourcesSource.includes( 'mesh.geometry.dispose()' ) &&
+			gpuResourcesSource.includes( 'helper.material.dispose()' ) &&
+			source.includes( 'disposeLightProbeGridGPUResource( this.atlasTarget )' ) &&
 			source.includes( 'this.texture = null' ),
 		'LightProbeGridGPU dispose() must release instance-owned GPU resources and clear the public texture reference.'
 	);
 
 	requireSource(
+		source.includes( 'createLightProbeGridGPUProjectionMaterial( this.cubeRenderTarget.texture, this.cubemapSize )' ) &&
+			source.includes( 'createLightProbeGridGPUComputeProjectionNode(' ) &&
+			source.includes( '_createProjectionMaterial()' ) === false &&
+			source.includes( '_createComputeProjectionNode()' ) === false &&
+			source.includes( 'Loop(' ) === false &&
+			gpuProjectionSource.includes( 'forEachLightProbeGridGPUCubeTexel' ) &&
+			gpuProjectionSource.includes( 'assignLightProbeGridGPUCubeDirection' ) &&
+			gpuProjectionSource.includes( 'getLightProbeGridGPUSHBasisTerms' ) &&
+			gpuProjectionSource.includes( 'createLightProbeGridGPUSHBasis' ) &&
+			gpuProjectionSource.includes( 'addLightProbeGridGPUSH' ),
+		'LightProbeGridGPU projection material/node construction must share cubemap traversal and SH projection helpers outside the runtime facade.'
+	);
+
+	requireSource(
+		source.includes( 'createLightProbeGridGPUAtlasRepackMaterial(' ) &&
+			source.includes( '_createRepackMaterial( coefficientTexture )' ) === false &&
+			gpuAtlasRepackSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT' ) &&
+			gpuAtlasRepackSource.includes( 'createLightProbeGridGPUPackedSHVector' ) &&
+			gpuAtlasRepackSource.includes( 'getLightProbeGridGPUPackedSource' ),
+		'LightProbeGridGPU atlas repack material construction must use the shared packed SH coefficient layout outside the runtime facade.'
+	);
+
+	requireSource(
+		source.includes( 'createLightProbeGridGPUVisibilityDistanceMaterial(' ) &&
+			source.includes( 'createLightProbeGridGPUVisibilityRepackMaterial(' ) &&
+			source.includes( 'getLightProbeGridGPUVisibilityLoadCoord(' ) &&
+			source.includes( '_createVisibilityDistanceMaterial()' ) === false &&
+			source.includes( '_createVisibilityRepackMaterial()' ) === false &&
+			source.includes( 'sampleRadialDistance' ) === false &&
+			gpuVisibilitySource.includes( 'getLightProbeGridGPUVisibilityLoadCoord' ) &&
+			gpuVisibilitySource.includes( 'getLightProbeGridGPUOctahedralDirection' ) &&
+			gpuVisibilitySource.includes( 'createLightProbeGridGPUVisibilityRepackMaterial' ) &&
+			gpuVisibilitySource.includes( 'sampleRadialDistance' ),
+		'LightProbeGridGPU visibility material construction and octahedral visibility lookup math must live outside the runtime facade.'
+	);
+
+	requireSource(
+		source.includes( 'createLightProbeGridGPUHelper(' ) &&
+			source.includes( 'applyLightProbeGridGPUHelperDepthMode(' ) &&
+			source.includes( '_createHelper()' ) === false &&
+			source.includes( 'new InstancedMesh' ) === false &&
+			source.includes( 'new SphereGeometry' ) === false &&
+			source.includes( 'instanceIndex' ) === false &&
+			gpuHelperSource.includes( 'createLightProbeGridGPUHelper' ) &&
+			gpuHelperSource.includes( 'applyLightProbeGridGPUHelperDepthMode' ) &&
+			gpuHelperSource.includes( 'new InstancedMesh' ) &&
+			gpuHelperSource.includes( 'instanceIndex' ),
+		'LightProbeGridGPU helper mesh/material/debug construction must live outside the runtime facade while runtime keeps public helper controls.'
+	);
+
+	requireSource(
+		source.includes( 'captureLightProbeGridGPUBakeState( renderer, scene, this )' ) &&
+			source.includes( 'restoreLightProbeGridGPUBakeState( renderer, scene, this, bakeState )' ) &&
+			source.includes( 'createLightProbeGridGPUBakeResult( this, renderer' ) &&
+			source.includes( 'currentRenderTarget' ) === false &&
+			source.includes( 'currentScissorTest' ) === false &&
+			gpuBakeSource.includes( 'renderer.getViewport( _bakeViewport )' ) &&
+			gpuBakeSource.includes( 'renderer.setViewport( _bakeViewport )' ) &&
+			gpuBakeSource.includes( 'const timingBuckets = {' ) &&
+			gpuBakeSource.includes( 'projectionTexelVisitReductionRatio' ),
+		'LightProbeGridGPU bake state restoration and timing result construction must be owned by focused bake helpers, not inline runtime boilerplate.'
+	);
+
+	requireSource(
 		source.includes( 'getMemoryInfo()' ) &&
-			source.includes( 'projection: \'fragment\'' ) &&
-			source.includes( 'atlas: \'render-pass\'' ) &&
-			source.includes( 'update: \'full\'' ),
+			gpuConstantsSource.includes( 'projection: \'fragment\'' ) &&
+			gpuConstantsSource.includes( 'atlas: \'render-pass\'' ) &&
+			gpuConstantsSource.includes( 'update: \'full\'' ),
 		'LightProbeGridGPU must expose benchmark memory metadata and current backend labels.'
 	);
 
@@ -228,8 +318,9 @@ ${ runnerRuntimeAssertionsSource }`;
 
 	requireSource(
 		source.includes( 'L2 spherical harmonics' ) &&
-			source.includes( 'const SH_COEFFICIENTS = 9' ) &&
-			source.includes( 'const PACKED_SH_TEXTURES = 7' ) &&
+			gpuConstantsSource.includes( 'export const SH_COEFFICIENTS = 9' ) &&
+			gpuConstantsSource.includes( 'export const PACKED_SH_TEXTURES = 7' ) &&
+			gpuConstantsSource.includes( 'export const PACKED_SH_COEFFICIENT_LAYOUT' ) &&
 			source.includes( 'ceil( 27 / 4 ) = 7' ) &&
 			source.includes( 'solid angle' ) &&
 			source.includes( 'trilinear' ) &&
@@ -241,10 +332,18 @@ ${ runnerRuntimeAssertionsSource }`;
 		/probesSH\.sample[\s\S]*_getPackedAtlasSampleZ/.test( source ) &&
 			/packedLoad\.load[\s\S]*_getPackedAtlasLoadCoord/.test( source ) &&
 			/setRenderTarget\( this\.atlasTarget, this\._getPackedAtlasLayer/.test( source ) &&
-			/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ) &&
-			source.includes( 'viewportCoordinate' ) &&
-			/const ix = int\( floor\( viewportCoordinate\.x \) \)/.test( source ) &&
-			/const iy = int\( floor\( viewportCoordinate\.y \) \)/.test( source ),
+			(
+				/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ) ||
+				/atlasLoad\.load\( getPackedAtlasLoadCoord/.test( gpuHelperSource )
+			) &&
+			gpuAtlasSource.includes( 'getLightProbeGridGPUPaddedAtlasSlices' ) &&
+			gpuAtlasSource.includes( 'getLightProbeGridGPUAtlasDepth' ) &&
+			gpuAtlasSource.includes( 'getLightProbeGridGPUPackedAtlasLayer' ) &&
+			gpuAtlasSource.includes( 'getLightProbeGridGPUProbeIndex' ) &&
+			source.includes( 'getLightProbeGridGPUAtlasDepth( this.resolution )' ) &&
+			gpuAtlasRepackSource.includes( 'viewportCoordinate' ) &&
+			/const ix = int\( floor\( viewportCoordinate\.x \) \)/.test( gpuAtlasRepackSource ) &&
+			/const iy = int\( floor\( viewportCoordinate\.y \) \)/.test( gpuAtlasRepackSource ),
 		'Atlas sample/load/repack/helper paths must use centralized atlas address helpers and WebGPU-native viewport coordinates for repack.'
 	);
 
@@ -281,8 +380,8 @@ ${ runnerRuntimeAssertionsSource }`;
 
 	requireSource(
 		exampleSource.includes( 'inspectProjectionParity' ) &&
-			exampleSource.includes( 'projectSyntheticCube' ) &&
-			exampleSource.includes( 'projectionConventionDirection' ) &&
+			cpuShMathSource.includes( 'export const projectSyntheticCube' ) &&
+			cpuShMathSource.includes( 'export const projectionConventionDirection' ) &&
 			exampleSource.includes( 'shader-webgpu' ) &&
 			exampleSource.includes( 'generator-render-target-webgpu' ) &&
 			exampleSource.includes( 'webgl-light-probe-grid' ) &&
@@ -323,7 +422,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'compute-adapter-fallback' ) &&
 			proofResearchSectionsSource.includes( 'compute-runtime-readback-parity' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Parity Evidence Plan' ) &&
-			artifactSource.includes( 'computeProjectionParityEvidencePlan' ),
+			artifactPerformanceAssertionsSource.includes( 'computeProjectionParityEvidencePlan' ),
 		'Proof report must specify compute projection parity evidence shape including runtime readback before full promotion.'
 	);
 
@@ -336,7 +435,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofReportSource.includes( 'getSmokeStep( smokeResults, \'atlas packing\' ).atlasPacking' ) &&
 			proofResearchSectionsSource.includes( 'computeProjectionCandidateOracle' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Candidate Oracle' ) &&
-			artifactSource.includes( 'proof-only compute projection candidate oracle' ),
+			artifactPerformanceAssertionsSource.includes( 'proof-only compute projection candidate oracle' ),
 		'Proof harness must include an executable compute candidate oracle/mock before full runtime parity promotion.'
 	);
 
@@ -348,7 +447,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'computeProjectionAtlasRepackOracle' ) &&
 			proofResearchSectionsSource.includes( 'CAPTURED-PROOF-ONLY-ATLAS-REPACK-PASSING' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Atlas Repack Oracle' ) &&
-			artifactSource.includes( 'proof-only compute atlas repack oracle' ),
+			artifactPerformanceAssertionsSource.includes( 'proof-only compute atlas repack oracle' ),
 		'Proof harness must capture compute atlas repack parity before adapter fallback is the only open compute projection evidence.'
 	);
 
@@ -362,15 +461,15 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofReportSource.includes( 'getSmokeStep( smokeResults, \'compute projection runtime parity\' ).computeProjectionRuntimeParity' ) &&
 			proofResearchSectionsSource.includes( 'computeProjectionRuntimeParityEvidence' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Runtime Readback Parity' ) &&
-			artifactSource.includes( 'computeProjectionRuntimeParityEvidence' ),
+			artifactPerformanceAssertionsSource.includes( 'computeProjectionRuntimeParityEvidence' ),
 		'Proof harness must include browser/runtime compute-vs-fragment coefficient, atlas repack, and tolerance validation evidence.'
 	);
 
 	requireSource(
-		source.includes( '_projectionBackendOverride' ) &&
+			source.includes( '_projectionBackendOverride' ) &&
 			source.includes( '_setProjectionBackendOverrideForProfiling' ) &&
 			source.includes( 'projectionBackendOverride' ) &&
-			source.includes( 'projectionTexelVisitReductionRatio' ) &&
+			gpuBakeSource.includes( 'projectionTexelVisitReductionRatio' ) &&
 			exampleSource.includes( 'inspectComputeProjectionProfiling' ) &&
 			exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PROFILE-CAPTURED' ) &&
 			exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' ) &&
@@ -380,7 +479,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofReportSource.includes( 'getSmokeStep( smokeResults, \'compute projection profiling\' ).computeProjectionProfiling' ) &&
 			proofResearchSectionsSource.includes( 'computeProjectionProfilingEvidence' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Diagnostic Profiling' ) &&
-			artifactSource.includes( 'computeProjectionProfilingEvidence' ),
+			artifactPerformanceAssertionsSource.includes( 'computeProjectionProfilingEvidence' ),
 		'Compute projection profiling must expose a private force-fragment/force-compute diagnostic selector, static 9x work evidence, and non-gated timing artifacts.'
 	);
 
@@ -403,7 +502,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'computeProjectionAdapterFallbackOracle' ) &&
 			proofResearchSectionsSource.includes( 'CAPTURED-RUNTIME-GUARDED-ADAPTER-FALLBACK-PASSING' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Adapter Fallback Oracle' ) &&
-			artifactSource.includes( 'guarded compute adapter fallback oracle' ),
+			artifactPerformanceAssertionsSource.includes( 'guarded compute adapter fallback oracle' ),
 		'Proof harness must capture guarded runtime adapter fallback evidence before full parity promotion.'
 	);
 
@@ -417,7 +516,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ) &&
 			proofResearchSectionsSource.includes( 'runtimeMarkersAllowed: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Status Transition Guard' ) &&
-			artifactSource.includes( 'computeProjectionStatusTransitionGuard' ),
+			artifactPerformanceAssertionsSource.includes( 'computeProjectionStatusTransitionGuard' ),
 		'Proof report must include a compute projection status transition guard for guarded runtime implementation and pending parity readback.'
 	);
 
@@ -430,7 +529,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'compute-atlas-repack-parity' ) &&
 			proofResearchSectionsSource.includes( 'compute-adapter-fallback' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Candidate Implementation Design' ) &&
-			artifactSource.includes( 'computeProjectionCandidateImplementationDesign' ),
+			artifactPerformanceAssertionsSource.includes( 'computeProjectionCandidateImplementationDesign' ),
 		'Proof report must include a compute projection candidate implementation design note.'
 	);
 
@@ -447,7 +546,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'capability-guarded-runtime-branch' ) &&
 			proofResearchSectionsSource.includes( 'public-api-compatibility' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Implementation Readiness Checklist' ) &&
-			artifactSource.includes( 'computeProjectionImplementationReadinessChecklist' ),
+			artifactPerformanceAssertionsSource.includes( 'computeProjectionImplementationReadinessChecklist' ),
 		'Proof report must close compute projection implementation readiness with runtime code done and browser parity readback tracked.'
 	);
 
@@ -499,14 +598,15 @@ ${ runnerRuntimeAssertionsSource }`;
 			source.includes( 'computeProjectionFallbackReason' ) &&
 			source.includes( '_activeProjectionBackend' ) &&
 			source.includes( 'renderer.compute( this.computeProjectionNode )' ) &&
-			source.includes( 'textureStore( this.computeProjectionTexture' ) &&
+			gpuProjectionSource.includes( 'textureStore( computeProjectionTexture' ) &&
 			source.includes( 'fragment-coefficient-projection' ),
 		'LightProbeGridGPU guarded compute projection runtime must include storage texture output, renderer.compute dispatch, explicit fragment fallback, and fallback reason telemetry.'
 	);
 
 	requireSource(
 		exampleSource.includes( 'inspectSHMathContract' ) &&
-			exampleSource.includes( 'evaluateIrradianceContract' ) &&
+			cpuShMathSource.includes( 'export const evaluateIrradianceContract' ) &&
+			cpuShMathSource.includes( 'sphericalHarmonics3Basis' ) &&
 			exampleSource.includes( 'THREE.SphericalHarmonics3' ) &&
 			exampleSource.includes( 'constantRadiance' ) &&
 			exampleSource.includes( 'axisDominance' ) &&
@@ -516,7 +616,7 @@ ${ runnerRuntimeAssertionsSource }`;
 
 	requireSource(
 		exampleSource.includes( 'inspectAtlasPacking' ) &&
-			exampleSource.includes( 'readRenderTargetPixelsAsync' ) &&
+			proofReadbackSource.includes( 'readLightProbeGridGPUDecodedPackedAtlasPixel' ) &&
 			exampleSource.includes( 'coefficientPacking' ) &&
 			exampleSource.includes( 'leading-padding-validity-t6' ) &&
 			exampleSource.includes( 'gridProbeIndexFormula' ) &&
@@ -532,8 +632,21 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'info.mode !== \'moments\'' ) &&
 			exampleSource.includes( 'meanDistance' ) &&
 			exampleSource.includes( 'variance' ) &&
+			proofReadbackSource.includes( 'readLightProbeGridGPUVisibilityMomentPixel' ) &&
+			proofReadbackSource.includes( 'decodeLightProbeGridGPUVisibilityMoment' ) &&
 			exampleSource.includes( 'readback-only verifier for private DDGI-lite visibility/depth moments' ),
 		'Cornell harness must directly inspect the private visibilityDepthTarget and call probeGrid.getVisibilityDepthInfo() for moment-backed proof gates.'
+	);
+
+	requireSource(
+		browserHarnessSource.includes( 'readRenderTargetPixelsAsync' ) === false &&
+			visibilityStudySource.includes( 'readRenderTargetPixelsAsync' ) === false &&
+			receiverDiagnosticsSource.includes( 'readRenderTargetPixelsAsync' ) === false &&
+			proofReadbackSource.includes( 'readRenderTargetPixelsAsync' ) &&
+			proofReadbackSource.includes( 'readLightProbeGridGPURenderTargetRegion' ) &&
+			proofReadbackSource.includes( 'readLightProbeGridGPURenderedTargetRegion' ) &&
+			proofReadbackSource.includes( 'readLightProbeGridGPURenderTargetPixel' ),
+		'LightProbeGridGPU proof, harness, and receiver diagnostics must centralize CPU readback behind the proof readback operations module.'
 	);
 
 	requireSource(
@@ -830,8 +943,8 @@ ${ runnerRuntimeAssertionsSource }`;
 	requireSource(
 		source.includes( 'scene.updateMatrixWorld( true )' ) &&
 			source.includes( 'scene.matrixWorldAutoUpdate = false' ) &&
-			source.includes( 'renderer.shadowMap.autoUpdate = false' ) &&
-			source.includes( 'renderer.shadowMap.needsUpdate = true' ),
+			source.includes( 'bakeState.shadowMap.autoUpdate = false' ) &&
+			source.includes( 'bakeState.shadowMap.needsUpdate = true' ),
 		'WebGPU probe baking must freeze scene transforms and shadow updates like the WebGL baseline.'
 	);
 
@@ -861,7 +974,8 @@ ${ runnerRuntimeAssertionsSource }`;
 			source.includes( 'wrapShading' ) &&
 			source.includes( 'validityWeight' ) &&
 			source.includes( 'textureLoad( this.probeValidityTexture' ) &&
-			source.includes( 'packed.assign( vec4( c8.x, c8.y, c8.z, validity.x ) )' ) &&
+			gpuAtlasRepackSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT[ 6 ]' ) &&
+			gpuAtlasRepackSource.includes( 'validity.x' ) &&
 			source.includes( 'c0Luminance' ) === false &&
 			exampleSource.includes( 'createProbeValidityData' ) &&
 			exampleSource.includes( 'leakReductionMode: \'off\'' ),

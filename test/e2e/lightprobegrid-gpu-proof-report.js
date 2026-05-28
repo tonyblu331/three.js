@@ -1,8 +1,12 @@
 import { createLightProbeResearchReportSections } from './lightprobegrid-gpu-proof-research-sections.js';
+import { createLightProbeProofOracleStudies } from './lightprobegrid-gpu-proof-oracle-studies.js';
+import { roundMetric } from './lightprobegrid-gpu-report-metrics.js';
+import {
+	createSurfaceContentAttributionFollowupStudy,
+	createSurfaceContentAttributionSplitStudy
+} from './lightprobegrid-gpu-proof-surface-studies.js';
 import { deriveVisibilityProofStatus } from './lightprobegrid-gpu-proof-visibility.js';
 import { lightProbeWebGLReferenceLabel } from './lightprobegrid-gpu-smoke-config.js';
-
-const roundMetric = value => Number( value.toFixed( 4 ) );
 
 const getSmokeStep = ( smokeResults, step ) => {
 
@@ -231,24 +235,101 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				'Runtime-equivalent probe-indirect scene-linear aggregate remains open because projected CPU quadrature samples do not match the same visible GPU receiver fragments; the next closure step is a CPU mirror driven by GPU-read receiver pixel positions.' :
 				sealedPresentationStudy.summary.sceneLinearMismatchClassifier.diagnosticConclusion
 	};
+	const sealedWallComparison = leakMatrix.comparisons.sealedWall;
+	const sealedWallPromotionMetricRows = [
+		{
+			key: 'wrongSide',
+			value: sealedWallComparison.visibility.wrongSide.improvement,
+			requirement: '> 0.05',
+			pass: sealedWallComparison.visibility.wrongSide.improvement > 0.05,
+			promotionEligible: true
+		},
+		{
+			key: 'maskedWrongSide',
+			value: sealedWallComparison.visibility.maskedWrongSide.improvement,
+			requirement: '> 0.05',
+			pass: sealedWallComparison.visibility.maskedWrongSide.improvement > 0.05,
+			promotionEligible: true
+		},
+		{
+			key: 'correctBounce',
+			value: sealedWallComparison.visibility.correctBounce.preservation,
+			requirement: '>= 0.9',
+			pass: sealedWallComparison.visibility.correctBounce.preservation >= 0.9,
+			promotionEligible: true
+		}
+	].map( row => ( {
+		...row,
+		value: Number.isFinite( row.value ) ? roundMetric( row.value ) : row.value
+	} ) );
+	const sealedWallDiagnosticMetricRows = [
+		{
+			key: 'surfaceWrongSide',
+			value: sealedWallComparison.visibility.surfaceWrongSide?.improvement ?? null,
+			reference: '> 0.05',
+			pass: ( sealedWallComparison.visibility.surfaceWrongSide?.improvement ?? - Infinity ) > 0.05,
+			promotionEligible: false
+		},
+		{
+			key: 'preToneMaskedWrongSide',
+			value: sealedWallComparison.visibility.preToneMaskedWrongSide?.improvement ?? null,
+			reference: '> 0.05',
+			pass: ( sealedWallComparison.visibility.preToneMaskedWrongSide?.improvement ?? - Infinity ) > 0.05,
+			promotionEligible: false
+		},
+		{
+			key: 'maskedCorrectBounce',
+			value: sealedWallComparison.visibility.maskedCorrectBounce?.preservation ?? null,
+			reference: '>= 0.9',
+			pass: ( sealedWallComparison.visibility.maskedCorrectBounce?.preservation ?? - Infinity ) >= 0.9,
+			promotionEligible: false
+		},
+		{
+			key: 'preToneMaskedCorrectBounce',
+			value: sealedWallComparison.visibility.preToneMaskedCorrectBounce?.preservation ?? null,
+			reference: '>= 0.9',
+			pass: ( sealedWallComparison.visibility.preToneMaskedCorrectBounce?.preservation ?? - Infinity ) >= 0.9,
+			promotionEligible: false
+		}
+	].map( row => ( {
+		...row,
+		value: Number.isFinite( row.value ) ? roundMetric( row.value ) : row.value
+	} ) );
+	const sealedWallFailedPromotionMetrics = sealedWallPromotionMetricRows.filter( row => row.pass === false );
+	const sealedWallPassingDiagnosticMetrics = sealedWallDiagnosticMetricRows.filter( row => row.pass === true );
+	const sealedWallMetricAlignment = {
+		status: sealedWallFailedPromotionMetrics.length === 0 ?
+			'SUPPORTED-PROMOTION-METRICS-ALIGNED' :
+			'OPEN-PROMOTION-METRIC-FAILURE',
+		proofBoundary: 'Report-only sealed-wall metric alignment; diagnostic-only surface/pre-tone rows cannot promote sealed-wall status while canonical wrong-side and masked wrong-side promotion metrics fail.',
+		promotionMetrics: sealedWallPromotionMetricRows,
+		diagnosticOnlyMetrics: sealedWallDiagnosticMetricRows,
+		failedPromotionMetrics: sealedWallFailedPromotionMetrics.map( row => row.key ),
+		passingDiagnosticMetrics: sealedWallPassingDiagnosticMetrics.map( row => row.key ),
+		dominantPromotionBlocker: sealedWallFailedPromotionMetrics[ 0 ]?.key ?? null,
+		diagnosticConclusion: sealedWallFailedPromotionMetrics.length === 0 ?
+			'Sealed-wall canonical promotion metrics are aligned and pass.' :
+			'Sealed-wall remains open because canonical wrong-side promotion metrics fail; passing surface/pre-tone diagnostics are useful pressure signals but cannot promote the gate.'
+	};
 	const gatedLeakComparisons = {
 		...leakMatrix.comparisons,
 		sealedWall: {
-			...leakMatrix.comparisons.sealedWall,
+			...sealedWallComparison,
 			status: visibilityProofStatus.visibilityStatus === 'SUPPORTED' &&
 				probeIndirectGate === 'SUPPORTED' &&
-				leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement > 0.05 &&
-				leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement > 0.05 &&
-				leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation >= 0.9 ?
+				sealedWallComparison.visibility.wrongSide.improvement > 0.05 &&
+				sealedWallComparison.visibility.maskedWrongSide.improvement > 0.05 &&
+				sealedWallComparison.visibility.correctBounce.preservation >= 0.9 ?
 				'SUPPORTED' :
 				'OPEN',
 			promotionBlockers: [
 				visibilityProofStatus.visibilityStatus === 'SUPPORTED' ? null : 'moment-backed visibility is not supported',
 				probeIndirectGate === 'SUPPORTED' ? null : 'probe-indirect CPU/GPU agreement is not supported',
-				leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement > 0.05 ? null : 'wrong-side improvement <= 0.05',
-				leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement > 0.05 ? null : 'masked wrong-side improvement <= 0.05',
-				leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation >= 0.9 ? null : 'correct-bounce preservation < 0.9'
+				sealedWallComparison.visibility.wrongSide.improvement > 0.05 ? null : 'wrong-side improvement <= 0.05',
+				sealedWallComparison.visibility.maskedWrongSide.improvement > 0.05 ? null : 'masked wrong-side improvement <= 0.05',
+				sealedWallComparison.visibility.correctBounce.preservation >= 0.9 ? null : 'correct-bounce preservation < 0.9'
 			].filter( Boolean ),
+			metricAlignment: sealedWallMetricAlignment,
 			promotionRequirements: {
 				momentBackedVisibility: 'SUPPORTED',
 				probeIndirectGate: 'SUPPORTED',
@@ -360,8 +441,11 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				toneMappingMasked: sealedPresentationStudy.summary.toneMappingMaskedDelta,
 				outputColorSpaceMasked: sealedPresentationStudy.summary.outputColorSpaceMaskedDelta,
 				exposureMasked: sealedPresentationStudy.summary.exposureMaskedDelta,
-				lambertVsStandardLinearMasked: sealedPresentationStudy.summary.lambertVsStandardLinearMaskedDelta
+				lambertVsStandardLinearMasked: sealedPresentationStudy.summary.lambertVsStandardLinearMaskedDelta,
+				standardLinearVsProbeOnlyLambertMasked: sealedPresentationStudy.summary.standardLinearVsProbeOnlyLambertMaskedDelta ?? null,
+				probeMaterialPath: sealedPresentationStudy.summary.probeMaterialPathDelta ?? null
 			},
+			colorMappingDiagnostic: sealedPresentationStudy.summary.colorMappingDiagnostic ?? null,
 			exposureSweep: sealedPresentationStudy.summary.exposureSweep,
 			offscreen: {
 				target: sealedPresentationStudy.summary.offscreenSceneLinearTarget,
@@ -1131,1463 +1215,32 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 	};
 
 	const surfaceSampleCoefficientAttributionStudy = createSurfaceSampleCoefficientAttributionStudy();
-	const createSurfaceContentAttributionSplitStudy = () => {
-
-		const surfaceContentRowsBySample = new Map( surfaceShContentStudy.receiverRows.flatMap( receiver =>
-			receiver.samples.map( sample => [ `${ receiver.receiver }/${ sample.sampleLabel }`, sample ] )
-		) );
-		const leakingSamples = surfaceSampleCoefficientAttributionStudy.receivers.flatMap( receiver =>
-			receiver.samples
-				.filter( sample => sample.leakSample )
-				.map( sample => ( { receiver: receiver.receiver, sample } ) )
-		);
-		const leakRows = leakingSamples
-			.filter( ( { sample } ) =>
-				Array.isArray( sample.attributionRows ) &&
-				sample.attributionRows.length > 0 &&
-				Number.isInteger( sample.dominantProbeIndex )
-			)
-			.map( ( { receiver, sample } ) => {
-
-				const contentSample = surfaceContentRowsBySample.get( `${ receiver }/${ sample.sampleLabel }` ) ?? null;
-				const mappedToContentPressure = contentSample?.contentPressureSample === true;
-				const dominantAttributionRow = sample.attributionRows.find( row =>
-					row.probeIndex === sample.dominantProbeIndex
-				) ?? null;
-
-				return {
-					receiver,
-					sampleLabel: sample.sampleLabel,
-					runtimeWrongOverCorrect: sample.runtimeWrongOverCorrect,
-					mappedToContentPressure,
-					contentPressureAttributionRowCount: contentSample?.contentPressureAttributionRowCount ?? 0,
-					contentDominantProbeIndex: contentSample?.dominantProbeIndex ?? null,
-					contentDominantBand: contentSample?.dominantProbeBandResponsibility ?? 'none',
-					contentDominantPressure: contentSample?.dominantProbeContentPressure ?? 0,
-					contentDominantWeightedPressure: contentSample?.dominantProbeWeightedContentPressure ?? 0,
-					attributionDominantProbeIndex: sample.dominantProbeIndex,
-					attributionDominantSourceProbeIndex: sample.dominantSourceProbeIndex,
-					attributionProbeRelationToReceiver: sample.dominantProbeRelationToReceiver,
-					attributionSourceRelationToReceiver: sample.dominantSourceRelationToReceiver,
-					attributionSourceSide: dominantAttributionRow?.sourceSide ?? 'unknown',
-					attributionDilationSourceDiffers: dominantAttributionRow?.dilationSourceDiffers ?? false,
-					attributionSourceValidity: dominantAttributionRow?.sourceValidity ?? 0,
-					attributionRuntimeFinalWeight: dominantAttributionRow?.runtimeFinalWeight ?? 0,
-					attributionDominantBand: sample.dominantWeightedBand,
-					attributionDominantCoefficient: sample.dominantWeightedCoefficient,
-					attributionDominantCoefficientBand: sample.dominantWeightedCoefficientBand,
-					attributionDominantCoefficientWrongMinusCorrect: dominantAttributionRow?.dominantWeightedCoefficientWrongMinusCorrect ?? 0,
-					attributionDominantDilatedCoefficient: sample.dominantDilatedWeightedCoefficient,
-					attributionDominantDilatedCoefficientBand: dominantAttributionRow?.dominantDilatedWeightedCoefficientBand ?? 'none',
-					attributionDominantDilatedCoefficientWrongMinusCorrect: dominantAttributionRow?.dominantDilatedWeightedCoefficientWrongMinusCorrect ?? 0,
-					attributionWrongChannelPressure: sample.dominantWrongChannelPressure,
-					attributionCorrectChannelPreservation: sample.dominantCorrectChannelPreservation,
-					sourcePressureAttributionRowCount: sample.sourcePressureAttributionRowCount,
-					sourcePressureProbeIndex: sample.sourcePressureProbeIndex,
-					sourcePressureSourceProbeIndex: sample.sourcePressureSourceProbeIndex,
-					sourcePressureWrongChannelPressure: sample.sourcePressureWrongChannelPressure,
-					sourcePressureDilatedWrongChannelPressure: sample.sourcePressureDilatedWrongChannelPressure,
-					sourcePressureDilatedSourceWrongPressureDelta: sample.sourcePressureDilatedSourceWrongPressureDelta
-				};
-
-			} );
-		const mappedRows = leakRows.filter( row => row.mappedToContentPressure );
-		const unmappedRows = leakRows.filter( row => row.mappedToContentPressure === false );
-		const histogram = ( rows, key ) => rows.reduce( ( result, row ) => {
-
-			const value = String( row[ key ] ?? 'none' );
-			result[ value ] = ( result[ value ] ?? 0 ) + 1;
-			return result;
-
-		}, {} );
-		const weightedWrongPressure = rows => roundMetric( rows.reduce(
-			( total, row ) => total + row.attributionWrongChannelPressure,
-			0
-		) );
-
-		return {
-			status: leakingSamples.length === 0 ?
-				'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED' :
-				leakRows.length === 0 ?
-					'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED' :
-					mappedRows.length > 0 && unmappedRows.length > 0 ?
-						'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' :
-						mappedRows.length > 0 ?
-							'OPEN-SURFACE-CONTENT-ATTRIBUTION-MAPPED' :
-							'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNMAPPED',
-			proofBoundary: 'Report-only split of canonical leaking surface attribution rows into bake-content-mapped and unmapped coefficient-attribution buckets; does not change bake capture, runtime sampling, public API, or Chebyshev thresholds.',
-			rows: leakRows,
-			summary: {
-				leakSampleCount: leakingSamples.length,
-				attributedLeakSampleCount: leakRows.length,
-				unattributedLeakSampleCount: leakingSamples.length - leakRows.length,
-				mappedLeakSampleCount: mappedRows.length,
-				unmappedLeakSampleCount: unmappedRows.length,
-				mappedCoverageRatio: leakingSamples.length > 0 ?
-					roundMetric( mappedRows.length / leakingSamples.length ) :
-					1,
-				mappedDominantProbeHistogram: histogram( mappedRows, 'attributionDominantProbeIndex' ),
-				unmappedDominantProbeHistogram: histogram( unmappedRows, 'attributionDominantProbeIndex' ),
-				mappedDominantBandHistogram: histogram( mappedRows, 'attributionDominantBand' ),
-				unmappedDominantBandHistogram: histogram( unmappedRows, 'attributionDominantBand' ),
-				mappedDominantCoefficientHistogram: histogram( mappedRows, 'attributionDominantCoefficient' ),
-				unmappedDominantCoefficientHistogram: histogram( unmappedRows, 'attributionDominantCoefficient' ),
-				mappedWrongChannelPressure: weightedWrongPressure( mappedRows ),
-				unmappedWrongChannelPressure: weightedWrongPressure( unmappedRows ),
-				interpretation: leakingSamples.length > 0 && leakRows.length === 0 ?
-					'Canonical leaking surface rows are under-instrumented for content attribution; expand coefficient/source instrumentation before bake or runtime changes.' :
-					mappedRows.length > 0 && unmappedRows.length > 0 ?
-						'Canonical leaking surface rows split between bake-content-mapped pressure and unmapped coefficient-attribution pressure; do not promote a single bake, density, SDF, or Chebyshev fix without a follow-up that handles both buckets.' :
-						mappedRows.length > 0 ?
-							'Canonical leaking surface rows all map to current bake-content pressure; a bake-content oracle can be evaluated proof-only before runtime changes.' :
-							unmappedRows.length > 0 ?
-								'Canonical leaking surface rows do not map to current bake-content pressure; expand coefficient/source instrumentation before bake or runtime changes.' :
-								'No leaking surface rows require split attribution.'
-			}
-		};
-
-	};
-
-	const surfaceContentAttributionSplitStudy = createSurfaceContentAttributionSplitStudy();
-	const createSurfaceContentAttributionFollowupStudy = () => {
-
-		const rows = surfaceContentAttributionSplitStudy.rows;
-		const mappedRows = rows.filter( row => row.mappedToContentPressure );
-		const unmappedRows = rows.filter( row => row.mappedToContentPressure === false );
-		const histogram = ( bucketRows, key ) => bucketRows.reduce( ( result, row ) => {
-
-			const value = String( row[ key ] ?? 'none' );
-			result[ value ] = ( result[ value ] ?? 0 ) + 1;
-			return result;
-
-		}, {} );
-		const sumMetric = ( bucketRows, key ) => roundMetric( bucketRows.reduce(
-			( total, row ) => total + row[ key ],
-			0
-		) );
-		const maxMetric = ( bucketRows, key ) => bucketRows.length > 0 ?
-			roundMetric( Math.max( ...bucketRows.map( row => row[ key ] ) ) ) :
-			0;
-		const createBucket = ( id, bucketRows, proofOnlyQuestion, recommendedFollowup, interpretation ) => ( {
-			id,
-			sampleCount: bucketRows.length,
-			receiverHistogram: histogram( bucketRows, 'receiver' ),
-			contentProbeHistogram: histogram( bucketRows, 'contentDominantProbeIndex' ),
-			contentBandHistogram: histogram( bucketRows, 'contentDominantBand' ),
-			attributionProbeHistogram: histogram( bucketRows, 'attributionDominantProbeIndex' ),
-			attributionBandHistogram: histogram( bucketRows, 'attributionDominantBand' ),
-			attributionCoefficientHistogram: histogram( bucketRows, 'attributionDominantCoefficient' ),
-			wrongChannelPressure: sumMetric( bucketRows, 'attributionWrongChannelPressure' ),
-			correctChannelPreservation: sumMetric( bucketRows, 'attributionCorrectChannelPreservation' ),
-			maxRuntimeWrongOverCorrect: maxMetric( bucketRows, 'runtimeWrongOverCorrect' ),
-			maxContentDominantPressure: maxMetric( bucketRows, 'contentDominantPressure' ),
-			proofOnlyQuestion,
-			recommendedFollowup,
-			interpretation
-		} );
-		const buckets = [
-			...( mappedRows.length > 0 ? [
-				createBucket(
-					'mapped-bake-content',
-					mappedRows,
-					'Does a CPU/report-only bake-content oracle reduce the mapped probe-50 surface leaks without reducing correct-bounce preservation?',
-					'Evaluate a proof-only bake-content/source-policy oracle on the mapped rows; keep runtime sampling, public API, and Chebyshev thresholds unchanged.',
-					'Mapped rows have strong baked content pressure and need a bake-content oracle, but their runtime dominant coefficient is still L10, so the oracle must report coefficient-level effects.'
-				)
-			] : [] ),
-			...( unmappedRows.length > 0 ? [
-				createBucket(
-					'unmapped-coefficient-attribution',
-					unmappedRows,
-					'Why do probe-52 L10 coefficient-attribution rows leak when the current bake-content pressure classifier marks the content bounded?',
-					'Expand proof-only coefficient/source instrumentation for the unmapped rows before trying a bake, density, SDF, or Chebyshev runtime fix.',
-					'Unmapped rows are coefficient-attribution leaks that do not clear the current bake-content pressure gate, so a single bake-content fix would leave part of the observed surface leak unexplained.'
-				)
-			] : [] )
-		];
-		const status = surfaceContentAttributionSplitStudy.status === 'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED' ?
-			'SUPPORTED-SURFACE-CONTENT-FOLLOWUP-BOUNDED' :
-			surfaceContentAttributionSplitStudy.status === 'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED' ?
-				'OPEN-SURFACE-CONTENT-FOLLOWUP-UNDER-INSTRUMENTED' :
-				mappedRows.length > 0 && unmappedRows.length > 0 ?
-					'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' :
-					mappedRows.length > 0 ?
-						'OPEN-SURFACE-CONTENT-MAPPED-BUCKET-FOLLOWUP' :
-						'OPEN-SURFACE-CONTENT-UNMAPPED-BUCKET-FOLLOWUP';
-
-		return {
-			status,
-			proofBoundary: 'Report-only follow-up prioritization over surfaceContentAttributionSplitStudy buckets; does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds.',
-			rows: buckets,
-			summary: {
-				bucketCount: buckets.length,
-				attributedLeakSampleCount: surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount,
-				unattributedLeakSampleCount: surfaceContentAttributionSplitStudy.summary.unattributedLeakSampleCount,
-				totalBucketSampleCount: buckets.reduce( ( total, bucket ) => total + bucket.sampleCount, 0 ),
-				mappedBucketSampleCount: mappedRows.length,
-				unmappedBucketSampleCount: unmappedRows.length,
-				hasMappedBucket: mappedRows.length > 0,
-				hasUnmappedBucket: unmappedRows.length > 0,
-				noRuntimePromotion: true,
-				nextProofOnlyAction: mappedRows.length > 0 && unmappedRows.length > 0 ?
-					'Run a dual proof-only follow-up: a mapped bake-content/source-policy oracle for probe-50 rows and an unmapped coefficient-attribution instrumentation pass for probe-52 L10 rows.' :
-					mappedRows.length > 0 ?
-						'Run a proof-only mapped bake-content/source-policy oracle before runtime changes.' :
-						unmappedRows.length > 0 ?
-							'Run a proof-only unmapped coefficient-attribution instrumentation pass before runtime changes.' :
-							'No leaking attributed surface rows require a content follow-up.'
-			}
-		};
-
-	};
-
-	const surfaceContentAttributionFollowupStudy = createSurfaceContentAttributionFollowupStudy();
-	const createMappedBakeContentSourcePolicyOracleStudy = () => {
-
-		const rows = surfaceContentAttributionSplitStudy.rows
-			.filter( row => row.mappedToContentPressure === true );
-		const histogram = ( bucketRows, key ) => bucketRows.reduce( ( result, row ) => {
-
-			const value = String( row[ key ] ?? 'none' );
-			result[ value ] = ( result[ value ] ?? 0 ) + 1;
-			return result;
-
-		}, {} );
-		const sumMetric = ( bucketRows, key ) => roundMetric( bucketRows.reduce(
-			( total, row ) => total + row[ key ],
-			0
-		) );
-		const maxMetric = ( bucketRows, key ) => bucketRows.length > 0 ?
-			roundMetric( Math.max( ...bucketRows.map( row => row[ key ] ) ) ) :
-			0;
-		const meanMetric = ( bucketRows, key ) => bucketRows.length > 0 ?
-			roundMetric( bucketRows.reduce( ( total, row ) => total + row[ key ], 0 ) / bucketRows.length ) :
-			0;
-		const bandMismatchCount = rows.filter( row =>
-			row.contentDominantBand !== row.attributionDominantBand
-		).length;
-
-		return {
-			status: rows.length > 0 ?
-				'OPEN-MAPPED-BAKE-CONTENT-SOURCE-POLICY-ORACLE' :
-				'SUPPORTED-MAPPED-BAKE-CONTENT-SOURCE-POLICY-BOUNDED',
-			proofBoundary: 'CPU/report-only mapped bake-content/source-policy oracle over surfaceContentAttributionSplitStudy mapped rows; does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows: rows.map( row => ( {
-				receiver: row.receiver,
-				sampleLabel: row.sampleLabel,
-				mappedToContentPressure: row.mappedToContentPressure,
-				contentProbeIndex: row.contentDominantProbeIndex,
-				contentDominantBand: row.contentDominantBand,
-				contentDominantPressure: row.contentDominantPressure,
-				contentDominantWeightedPressure: row.contentDominantWeightedPressure,
-				contentPressureAttributionRowCount: row.contentPressureAttributionRowCount,
-				attributionProbeIndex: row.attributionDominantProbeIndex,
-				attributionSourceProbeIndex: row.attributionDominantSourceProbeIndex,
-				attributionProbeRelationToReceiver: row.attributionProbeRelationToReceiver,
-				attributionSourceRelationToReceiver: row.attributionSourceRelationToReceiver,
-				attributionSourceSide: row.attributionSourceSide,
-				attributionDilationSourceDiffers: row.attributionDilationSourceDiffers,
-				attributionSourceValidity: row.attributionSourceValidity,
-				attributionRuntimeFinalWeight: row.attributionRuntimeFinalWeight,
-				attributionDominantBand: row.attributionDominantBand,
-				attributionDominantCoefficient: row.attributionDominantCoefficient,
-				attributionDominantCoefficientBand: row.attributionDominantCoefficientBand,
-				attributionDominantCoefficientWrongMinusCorrect: row.attributionDominantCoefficientWrongMinusCorrect,
-				attributionWrongChannelPressure: row.attributionWrongChannelPressure,
-				attributionCorrectChannelPreservation: row.attributionCorrectChannelPreservation,
-				runtimeWrongOverCorrect: row.runtimeWrongOverCorrect,
-				contentAttributionBandMismatch: row.contentDominantBand !== row.attributionDominantBand
-			} ) ),
-			summary: {
-				sampleCount: rows.length,
-				receiverHistogram: histogram( rows, 'receiver' ),
-				contentProbeHistogram: histogram( rows, 'contentDominantProbeIndex' ),
-				contentBandHistogram: histogram( rows, 'contentDominantBand' ),
-				attributionProbeHistogram: histogram( rows, 'attributionDominantProbeIndex' ),
-				attributionSourceProbeHistogram: histogram( rows, 'attributionDominantSourceProbeIndex' ),
-				attributionSourceRelationHistogram: histogram( rows, 'attributionSourceRelationToReceiver' ),
-				attributionBandHistogram: histogram( rows, 'attributionDominantBand' ),
-				attributionCoefficientHistogram: histogram( rows, 'attributionDominantCoefficient' ),
-				contentDominantPressureSum: sumMetric( rows, 'contentDominantPressure' ),
-				contentDominantPressureMean: meanMetric( rows, 'contentDominantPressure' ),
-				maxContentDominantPressure: maxMetric( rows, 'contentDominantPressure' ),
-				contentDominantWeightedPressureSum: sumMetric( rows, 'contentDominantWeightedPressure' ),
-				attributionWrongChannelPressureSum: sumMetric( rows, 'attributionWrongChannelPressure' ),
-				attributionCorrectChannelPreservationSum: sumMetric( rows, 'attributionCorrectChannelPreservation' ),
-				maxRuntimeWrongOverCorrect: maxMetric( rows, 'runtimeWrongOverCorrect' ),
-				bandMismatchCount,
-				allMappedRowsHaveBandMismatch: rows.length > 0 && bandMismatchCount === rows.length,
-				noRuntimePromotion: true,
-				nextProofOnlyAction: rows.length > 0 ?
-					'Evaluate a proof-only CPU/report-only mapped bake-content/source-policy oracle for probe-50 rows while retaining coefficient-level L10 attribution output.' :
-					'No mapped bake-content/source-policy rows require a proof-only oracle.',
-				interpretation: rows.length > 0 && bandMismatchCount > 0 ?
-					'Mapped rows carry bake-content pressure, but content band and runtime attribution band disagree while the dominant runtime coefficient is L10; a source-policy oracle must report coefficient-level effects instead of assuming a simple bake-L2 fix.' :
-					'No mapped bake-content/source-policy mismatch is present in the current attributed surface rows.'
-			}
-		};
-
-	};
-
-	const mappedBakeContentSourcePolicyOracleStudy = createMappedBakeContentSourcePolicyOracleStudy();
-	const createUnmappedCoefficientAttributionInstrumentationStudy = () => {
-
-		const rows = surfaceContentAttributionSplitStudy.rows
-			.filter( row => row.mappedToContentPressure === false );
-		const histogram = ( bucketRows, key ) => bucketRows.reduce( ( result, row ) => {
-
-			const value = String( row[ key ] ?? 'none' );
-			result[ value ] = ( result[ value ] ?? 0 ) + 1;
-			return result;
-
-		}, {} );
-		const sumMetric = ( bucketRows, key ) => roundMetric( bucketRows.reduce(
-			( total, row ) => total + row[ key ],
-			0
-		) );
-		const maxMetric = ( bucketRows, key ) => bucketRows.length > 0 ?
-			roundMetric( Math.max( ...bucketRows.map( row => row[ key ] ) ) ) :
-			0;
-
-		return {
-			status: rows.length > 0 ?
-				'OPEN-UNMAPPED-COEFFICIENT-ATTRIBUTION-INSTRUMENTATION' :
-				'SUPPORTED-UNMAPPED-COEFFICIENT-ATTRIBUTION-BOUNDED',
-			proofBoundary: 'CPU/report-only unmapped coefficient-attribution instrumentation over surfaceContentAttributionSplitStudy unmapped rows; does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows: rows.map( row => ( {
-				receiver: row.receiver,
-				sampleLabel: row.sampleLabel,
-				mappedToContentPressure: row.mappedToContentPressure,
-				contentProbeIndex: row.contentDominantProbeIndex,
-				contentDominantBand: row.contentDominantBand,
-				contentDominantPressure: row.contentDominantPressure,
-				contentPressureAttributionRowCount: row.contentPressureAttributionRowCount,
-				attributionProbeIndex: row.attributionDominantProbeIndex,
-				attributionSourceProbeIndex: row.attributionDominantSourceProbeIndex,
-				attributionProbeRelationToReceiver: row.attributionProbeRelationToReceiver,
-				attributionSourceRelationToReceiver: row.attributionSourceRelationToReceiver,
-				attributionSourceSide: row.attributionSourceSide,
-				attributionDilationSourceDiffers: row.attributionDilationSourceDiffers,
-				attributionSourceValidity: row.attributionSourceValidity,
-				attributionRuntimeFinalWeight: row.attributionRuntimeFinalWeight,
-				attributionDominantBand: row.attributionDominantBand,
-				attributionDominantCoefficient: row.attributionDominantCoefficient,
-				attributionDominantCoefficientBand: row.attributionDominantCoefficientBand,
-				attributionDominantCoefficientWrongMinusCorrect: row.attributionDominantCoefficientWrongMinusCorrect,
-				attributionDominantDilatedCoefficient: row.attributionDominantDilatedCoefficient,
-				attributionDominantDilatedCoefficientBand: row.attributionDominantDilatedCoefficientBand,
-				attributionDominantDilatedCoefficientWrongMinusCorrect: row.attributionDominantDilatedCoefficientWrongMinusCorrect,
-				attributionWrongChannelPressure: row.attributionWrongChannelPressure,
-				attributionCorrectChannelPreservation: row.attributionCorrectChannelPreservation,
-				runtimeWrongOverCorrect: row.runtimeWrongOverCorrect,
-				sourcePressureAttributionRowCount: row.sourcePressureAttributionRowCount,
-				sourcePressureProbeIndex: row.sourcePressureProbeIndex,
-				sourcePressureSourceProbeIndex: row.sourcePressureSourceProbeIndex,
-				sourcePressureWrongChannelPressure: row.sourcePressureWrongChannelPressure,
-				sourcePressureDilatedWrongChannelPressure: row.sourcePressureDilatedWrongChannelPressure,
-				sourcePressureDilatedSourceWrongPressureDelta: row.sourcePressureDilatedSourceWrongPressureDelta,
-				coefficientSourceInstrumentationVerdict: row.attributionDominantSourceProbeIndex !== null ?
-					'AVAILABLE-COEFFICIENT-SOURCE-TRACE' :
-					'MISSING-COEFFICIENT-SOURCE-TRACE',
-				needsCoefficientSourceInstrumentation: true
-			} ) ),
-			summary: {
-				sampleCount: rows.length,
-				receiverHistogram: histogram( rows, 'receiver' ),
-				contentProbeHistogram: histogram( rows, 'contentDominantProbeIndex' ),
-				contentBandHistogram: histogram( rows, 'contentDominantBand' ),
-				attributionProbeHistogram: histogram( rows, 'attributionDominantProbeIndex' ),
-				attributionSourceProbeHistogram: histogram( rows, 'attributionDominantSourceProbeIndex' ),
-				attributionSourceRelationHistogram: histogram( rows, 'attributionSourceRelationToReceiver' ),
-				attributionBandHistogram: histogram( rows, 'attributionDominantBand' ),
-				attributionCoefficientHistogram: histogram( rows, 'attributionDominantCoefficient' ),
-				probe52L10SampleCount: rows.filter( row =>
-					row.attributionDominantProbeIndex === 52 &&
-					row.attributionDominantCoefficient === 'L10'
-				).length,
-				sourceTraceComplete: rows.every( row => row.attributionDominantSourceProbeIndex !== null ),
-				contentPressureAttributionRowCountSum: sumMetric( rows, 'contentPressureAttributionRowCount' ),
-				maxContentDominantPressure: maxMetric( rows, 'contentDominantPressure' ),
-				attributionWrongChannelPressureSum: sumMetric( rows, 'attributionWrongChannelPressure' ),
-				attributionCorrectChannelPreservationSum: sumMetric( rows, 'attributionCorrectChannelPreservation' ),
-				maxRuntimeWrongOverCorrect: maxMetric( rows, 'runtimeWrongOverCorrect' ),
-				needsCoefficientSourceInstrumentation: rows.length > 0,
-				noRuntimePromotion: true,
-				nextProofOnlyAction: rows.length > 0 ?
-					'Add proof-only CPU/report-only coefficient/source instrumentation for probe-52 L10 rows before bake, density, SDF, Chebyshev, runtime, or public API fixes.' :
-					'No unmapped coefficient-attribution rows require additional proof-only instrumentation.',
-				interpretation: rows.length > 0 ?
-					'Unmapped rows leak through L10 coefficient attribution while bake-content pressure attribution remains empty, so they are not explained by the mapped bake-content/source-policy bucket.' :
-					'No unmapped coefficient-attribution rows are present in the current attributed surface rows.'
-			}
-		};
-
-	};
-
-	const unmappedCoefficientAttributionInstrumentationStudy = createUnmappedCoefficientAttributionInstrumentationStudy();
-	const createAggregateExplanationComparisonStudy = () => {
-
-		const mappedRows = mappedBakeContentSourcePolicyOracleStudy.rows;
-		const unmappedRows = unmappedCoefficientAttributionInstrumentationStudy.rows;
-		const allRows = [ ...mappedRows, ...unmappedRows ];
-		const histogram = ( rows, key ) => rows.reduce( ( result, row ) => {
-
-			const value = String( row[ key ] ?? 'none' );
-			result[ value ] = ( result[ value ] ?? 0 ) + 1;
-			return result;
-
-		}, {} );
-		const sumMetric = ( rows, key ) => roundMetric( rows.reduce(
-			( total, row ) => total + row[ key ],
-			0
-		) );
-		const l10Rows = allRows.filter( row =>
-			row.attributionDominantCoefficient === 'L10' &&
-			row.attributionDominantCoefficientBand === 'l1'
-		);
-		const contentPressureRows = allRows.filter( row =>
-			row.mappedToContentPressure === true &&
-			row.contentPressureAttributionRowCount > 0
-		);
-		const sourceTraceRows = allRows.filter( row =>
-			Number.isInteger( row.attributionSourceProbeIndex ) &&
-			typeof row.attributionSourceRelationToReceiver === 'string'
-		);
-		const coefficientHypothesisCoversAll = allRows.length > 0 && l10Rows.length === allRows.length;
-		const bakeContentHypothesisCoversAll = allRows.length > 0 && contentPressureRows.length === allRows.length;
-		const sourceTraceComplete = allRows.length > 0 && sourceTraceRows.length === allRows.length;
-		const status = allRows.length === 0 ?
-			'SUPPORTED-AGGREGATE-EXPLANATION-BOUNDED' :
-			coefficientHypothesisCoversAll && bakeContentHypothesisCoversAll === false ?
-				'OPEN-AGGREGATE-L10-COEFFICIENT-EXPLANATION' :
-				'OPEN-AGGREGATE-EXPLANATION-SPLIT';
-
-		return {
-			status,
-			proofBoundary: 'CPU/report-only aggregate explanation comparison across mapped bake-content/source-policy rows and unmapped coefficient/source rows; does not change bake capture, runtime sampling, public API, docs, bake policy, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows: [
-				{
-					id: 'mapped-bake-content-source-policy',
-					sampleCount: mappedRows.length,
-					contentPressureSampleCount: contentPressureRows.filter( row => row.mappedToContentPressure === true ).length,
-					coefficientL10SampleCount: mappedRows.filter( row => row.attributionDominantCoefficient === 'L10' ).length,
-					contentProbeHistogram: histogram( mappedRows, 'contentProbeIndex' ),
-					attributionProbeHistogram: histogram( mappedRows, 'attributionProbeIndex' ),
-					attributionSourceProbeHistogram: histogram( mappedRows, 'attributionSourceProbeIndex' ),
-					attributionSourceRelationHistogram: histogram( mappedRows, 'attributionSourceRelationToReceiver' ),
-					attributionCoefficientHistogram: histogram( mappedRows, 'attributionDominantCoefficient' ),
-					attributionCoefficientBandHistogram: histogram( mappedRows, 'attributionDominantCoefficientBand' ),
-					attributionWrongChannelPressure: sumMetric( mappedRows, 'attributionWrongChannelPressure' ),
-					interpretation: 'Mapped rows have bake-content pressure, but their shared runtime attribution remains L10/l1; source-policy work must be measured as a coefficient-level oracle, not promoted as a bake-content fix.'
-				},
-				{
-					id: 'unmapped-coefficient-source-trace',
-					sampleCount: unmappedRows.length,
-					contentPressureSampleCount: unmappedRows.filter( row => row.contentPressureAttributionRowCount > 0 ).length,
-					coefficientL10SampleCount: unmappedRows.filter( row => row.attributionDominantCoefficient === 'L10' ).length,
-					contentProbeHistogram: histogram( unmappedRows, 'contentProbeIndex' ),
-					attributionProbeHistogram: histogram( unmappedRows, 'attributionProbeIndex' ),
-					attributionSourceProbeHistogram: histogram( unmappedRows, 'attributionSourceProbeIndex' ),
-					attributionSourceRelationHistogram: histogram( unmappedRows, 'attributionSourceRelationToReceiver' ),
-					attributionCoefficientHistogram: histogram( unmappedRows, 'attributionDominantCoefficient' ),
-					attributionCoefficientBandHistogram: histogram( unmappedRows, 'attributionDominantCoefficientBand' ),
-					attributionWrongChannelPressure: sumMetric( unmappedRows, 'attributionWrongChannelPressure' ),
-					interpretation: 'Unmapped rows have complete source trace but zero content-pressure attribution, so bake-content/source-policy alone cannot explain the aggregate leak.'
-				}
-			],
-			summary: {
-				sampleCount: allRows.length,
-				mappedSampleCount: mappedRows.length,
-				unmappedSampleCount: unmappedRows.length,
-				contentPressureSampleCount: contentPressureRows.length,
-				coefficientL10SampleCount: l10Rows.length,
-				sourceTraceSampleCount: sourceTraceRows.length,
-				bakeContentHypothesisCoversAll,
-				coefficientHypothesisCoversAll,
-				sourceTraceComplete,
-				attributionCoefficientHistogram: histogram( allRows, 'attributionDominantCoefficient' ),
-				attributionCoefficientBandHistogram: histogram( allRows, 'attributionDominantCoefficientBand' ),
-				attributionSourceProbeHistogram: histogram( allRows, 'attributionSourceProbeIndex' ),
-				attributionSourceRelationHistogram: histogram( allRows, 'attributionSourceRelationToReceiver' ),
-				attributionWrongChannelPressureSum: sumMetric( allRows, 'attributionWrongChannelPressure' ),
-				contentDominantPressureSum: sumMetric( allRows, 'contentDominantPressure' ),
-				noRuntimePromotion: true,
-				recommendedContinuation: coefficientHypothesisCoversAll && bakeContentHypothesisCoversAll === false ?
-					'proof-7b-coefficient-L10-oracle' :
-					'proof-7d-under-instrumented-aggregate',
-				nextProofOnlyAction: coefficientHypothesisCoversAll && bakeContentHypothesisCoversAll === false ?
-					'Run a proof-only aggregate L10/l1 coefficient oracle before proof-7a source-policy, Chebyshev, runtime, public API, docs, or bake-policy changes.' :
-					'Keep aggregate comparison proof-only and add missing attribution rows before choosing proof-7a, proof-7b, or proof-7d.',
-				interpretation: coefficientHypothesisCoversAll && bakeContentHypothesisCoversAll === false ?
-					'The aggregate common denominator is L10/l1 coefficient attribution across both mapped and unmapped buckets; bake-content/source-policy evidence covers only the mapped subset, so runtime and bake-policy promotion remain blocked.' :
-					'No single aggregate explanation covers the current mapped and unmapped buckets; more proof-only instrumentation is required.'
-			}
-		};
-
-	};
-
-	const aggregateExplanationComparisonStudy = createAggregateExplanationComparisonStudy();
-	const createProof7bCoefficientL10OracleStudy = () => {
-
-		const allRows = [
-			...mappedBakeContentSourcePolicyOracleStudy.rows,
-			...unmappedCoefficientAttributionInstrumentationStudy.rows
-		];
-		const l10Rows = allRows.filter( row =>
-			row.attributionDominantCoefficient === 'L10' &&
-			row.attributionDominantCoefficientBand === 'l1'
-		);
-		const sumMetric = ( rows, key ) => roundMetric( rows.reduce(
-			( total, row ) => total + row[ key ],
-			0
-		) );
-		const maxMetric = ( rows, key ) => rows.length > 0 ?
-			roundMetric( Math.max( ...rows.map( row => row[ key ] ) ) ) :
-			0;
-		const rowsBySourceProbe = [ ...l10Rows.reduce( ( buckets, row ) => {
-
-			const key = `${ row.attributionSourceProbeIndex }/${ row.receiver }`;
-			const bucket = buckets.get( key ) ?? [];
-			bucket.push( row );
-			buckets.set( key, bucket );
-			return buckets;
-
-		}, new Map() ) ].map( ( [ key, bucketRows ] ) => {
-
-			const [ sourceProbeIndex, receiver ] = key.split( '/' );
-			return {
-				id: `probe-${ sourceProbeIndex }-${ receiver }-L10-l1`,
-				sourceProbeIndex: Number( sourceProbeIndex ),
-				receiver,
-				sampleCount: bucketRows.length,
-				mappedSampleCount: bucketRows.filter( row => row.mappedToContentPressure === true ).length,
-				unmappedSampleCount: bucketRows.filter( row => row.mappedToContentPressure === false ).length,
-				wrongChannelPressure: sumMetric( bucketRows, 'attributionWrongChannelPressure' ),
-				correctChannelPreservation: sumMetric( bucketRows, 'attributionCorrectChannelPreservation' ),
-				contentDominantPressure: sumMetric( bucketRows, 'contentDominantPressure' ),
-				maxRuntimeWrongOverCorrect: maxMetric( bucketRows, 'runtimeWrongOverCorrect' ),
-				maxCoefficientWrongMinusCorrect: maxMetric( bucketRows, 'attributionDominantCoefficientWrongMinusCorrect' ),
-				sourceRelationHistogram: bucketRows.reduce( ( result, row ) => {
-
-					const value = String( row.attributionSourceRelationToReceiver ?? 'none' );
-					result[ value ] = ( result[ value ] ?? 0 ) + 1;
-					return result;
-
-				}, {} ),
-				classification: ''
-			};
-
-		} ).sort( ( a, b ) => b.wrongChannelPressure - a.wrongChannelPressure );
-
-		const totalWrongChannelPressure = sumMetric( l10Rows, 'attributionWrongChannelPressure' );
-		const totalCorrectChannelPreservation = sumMetric( l10Rows, 'attributionCorrectChannelPreservation' );
-		const dominantRow = rowsBySourceProbe[ 0 ] ?? null;
-		const residualRows = rowsBySourceProbe.slice( 1 );
-		const dominantWrongPressureShare = dominantRow !== null && totalWrongChannelPressure > 0 ?
-			roundMetric( dominantRow.wrongChannelPressure / totalWrongChannelPressure ) :
-			0;
-		const residualWrongPressure = sumMetric( residualRows, 'wrongChannelPressure' );
-		const residualCorrectPreservation = sumMetric( residualRows, 'correctChannelPreservation' );
-		const allRowsAreL10L1 = allRows.length > 0 && l10Rows.length === allRows.length;
-		const sourceTraceComplete = allRows.length > 0 && allRows.every( row => Number.isInteger( row.attributionSourceProbeIndex ) );
-		const dominantProbeIdentified = allRowsAreL10L1 && sourceTraceComplete && dominantWrongPressureShare >= 0.9;
-		const globalCoefficientDampingSafe = dominantProbeIdentified &&
-			residualRows.length === 0 &&
-			totalCorrectChannelPreservation <= totalWrongChannelPressure;
-
-		for ( const row of rowsBySourceProbe ) {
-
-			row.wrongPressureShare = totalWrongChannelPressure > 0 ?
-				roundMetric( row.wrongChannelPressure / totalWrongChannelPressure ) :
-				0;
-			row.classification = row === dominantRow && dominantProbeIdentified ?
-				'PRIMARY-L10-COEFFICIENT-LEAK-DRIVER' :
-				'RESIDUAL-L10-COEFFICIENT-TRACE-NOT-A-GLOBAL-DAMPING-WIN';
-
-		}
-
-		return {
-			status: allRows.length === 0 ?
-				'SUPPORTED-PROOF-7B-L10-COEFFICIENT-BOUNDED' :
-				dominantProbeIdentified ?
-					'IDENTIFIED-PROOF-7B-L10-PROBE50-DOMINANT-RESIDUAL-BOUNDED' :
-					'OPEN-PROOF-7B-L10-COEFFICIENT-NO-DOMINANT-SOURCE',
-			proofBoundary: 'CPU/report-only proof-7b L10/l1 coefficient oracle over aggregate mapped and unmapped rows; identifies source-probe pressure only and does not change runtime sampling, bake policy, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows: rowsBySourceProbe,
-			summary: {
-				sampleCount: allRows.length,
-				l10SampleCount: l10Rows.length,
-				allRowsAreL10L1,
-				sourceTraceComplete,
-				sourceProbeBucketCount: rowsBySourceProbe.length,
-				totalWrongChannelPressure,
-				totalCorrectChannelPreservation,
-				dominantSourceProbeIndex: dominantRow?.sourceProbeIndex ?? null,
-				dominantReceiver: dominantRow?.receiver ?? null,
-				dominantSampleCount: dominantRow?.sampleCount ?? 0,
-				dominantWrongChannelPressure: dominantRow?.wrongChannelPressure ?? 0,
-				dominantWrongPressureShare,
-				residualWrongChannelPressure: residualWrongPressure,
-				residualCorrectChannelPreservation: residualCorrectPreservation,
-				globalCoefficientDampingSafe,
-				runtimePromotionAllowed: false,
-				identifiedCause: dominantProbeIdentified ?
-					'Probe-50/rightReceiver L10/l1 is the dominant wrong-channel pressure source; probe-52/leftReceiver is a low-pressure residual trace, so global L10 damping is not a safe runtime conclusion.' :
-					'L10/l1 coefficient attribution is present, but no single source-probe bucket dominates enough for identification.',
-				nextProofOnlyAction: dominantProbeIdentified ?
-					'Run a proof-only probe-50 L10 sign/source-isolation oracle before proof-7a source-policy, Chebyshev, runtime, public API, docs, or bake-policy changes.' :
-					'Keep proof-7b proof-only and add source-probe coefficient rows before choosing a runtime-facing design.',
-				interpretation: dominantProbeIdentified ?
-					'The coefficient oracle identifies L10/l1 as the aggregate family and probe-50/rightReceiver as the pressure-dominant subset, while probe-52 residual preservation blocks a global L10 damping fix.' :
-					'The coefficient oracle does not yet identify a pressure-dominant L10 source bucket.'
-			}
-		};
-
-	};
-
-	const proof7bCoefficientL10OracleStudy = createProof7bCoefficientL10OracleStudy();
-	const createProbe50L10SignSourceIsolationOracleStudy = () => {
-
-		const allRows = [
-			...mappedBakeContentSourcePolicyOracleStudy.rows,
-			...unmappedCoefficientAttributionInstrumentationStudy.rows
-		];
-		const dominantSourceProbeIndex = proof7bCoefficientL10OracleStudy.summary.dominantSourceProbeIndex;
-		const dominantRows = allRows.filter( row =>
-			row.attributionSourceProbeIndex === dominantSourceProbeIndex &&
-			row.attributionDominantCoefficient === 'L10' &&
-			row.attributionDominantCoefficientBand === 'l1'
-		);
-		const residualRows = allRows.filter( row =>
-			row.attributionSourceProbeIndex !== dominantSourceProbeIndex &&
-			row.attributionDominantCoefficient === 'L10' &&
-			row.attributionDominantCoefficientBand === 'l1'
-		);
-		const sumMetric = ( rows, key ) => roundMetric( rows.reduce(
-			( total, row ) => total + ( row[ key ] ?? 0 ),
-			0
-		) );
-		const minMetric = ( rows, key ) => rows.length > 0 ?
-			roundMetric( Math.min( ...rows.map( row => row[ key ] ?? 0 ) ) ) :
-			0;
-		const maxMetric = ( rows, key ) => rows.length > 0 ?
-			roundMetric( Math.max( ...rows.map( row => row[ key ] ?? 0 ) ) ) :
-			0;
-		const histogram = ( rows, key ) => rows.reduce( ( result, row ) => {
-
-			const value = String( row[ key ] ?? 'none' );
-			result[ value ] = ( result[ value ] ?? 0 ) + 1;
-			return result;
-
-		}, {} );
-		const allDominantRowsPositiveL10 = dominantRows.length > 0 && dominantRows.every( row =>
-			row.attributionDominantCoefficientWrongMinusCorrect > 0
-		);
-		const allDominantRowsCorrectSideSource = dominantRows.length > 0 && dominantRows.every( row =>
-			row.attributionSourceRelationToReceiver === 'correct-side'
-		);
-		const allDominantRowsMappedContentPressure = dominantRows.length > 0 && dominantRows.every( row =>
-			row.mappedToContentPressure === true &&
-			row.contentPressureAttributionRowCount > 0
-		);
-		const wrongSideSourcePressureRows = dominantRows.filter( row =>
-			( row.sourcePressureAttributionRowCount ?? 0 ) > 0 ||
-			( row.sourcePressureWrongChannelPressure ?? 0 ) > 0 ||
-			( row.sourcePressureDilatedSourceWrongPressureDelta ?? 0 ) > 0
-		);
-		const dominantWrongPressure = sumMetric( dominantRows, 'attributionWrongChannelPressure' );
-		const residualWrongPressure = sumMetric( residualRows, 'attributionWrongChannelPressure' );
-		const dominantContentPressure = sumMetric( dominantRows, 'contentDominantPressure' );
-		const dominantCoefficientDelta = sumMetric( dominantRows, 'attributionDominantCoefficientWrongMinusCorrect' );
-		const residualCorrectPreservation = sumMetric( residualRows, 'attributionCorrectChannelPreservation' );
-		const pressureLocalized = proof7bCoefficientL10OracleStudy.summary.dominantWrongPressureShare >= 0.9;
-		const sourcePolicyBlocked = allDominantRowsCorrectSideSource && wrongSideSourcePressureRows.length === 0;
-		const signSourceIsolated = pressureLocalized &&
-			allDominantRowsPositiveL10 &&
-			allDominantRowsMappedContentPressure &&
-			sourcePolicyBlocked;
-
-		return {
-			status: dominantRows.length === 0 ?
-				'SUPPORTED-PROBE50-L10-SIGN-SOURCE-BOUNDED' :
-				signSourceIsolated ?
-					'IDENTIFIED-PROBE50-L10-POSITIVE-SOURCE-LOCALIZED' :
-					'OPEN-PROBE50-L10-SIGN-SOURCE-AMBIGUOUS',
-			proofBoundary: 'CPU/report-only probe-50 L10 sign/source-isolation oracle; classifies dominant coefficient polarity and source locality only and does not change runtime sampling, bake policy, source policy, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows: dominantRows.map( row => ( {
-				receiver: row.receiver,
-				sampleLabel: row.sampleLabel,
-				sourceProbeIndex: row.attributionSourceProbeIndex,
-				sourceRelationToReceiver: row.attributionSourceRelationToReceiver,
-				mappedToContentPressure: row.mappedToContentPressure,
-				contentPressureAttributionRowCount: row.contentPressureAttributionRowCount,
-				contentDominantPressure: row.contentDominantPressure,
-				coefficient: row.attributionDominantCoefficient,
-				coefficientBand: row.attributionDominantCoefficientBand,
-				coefficientWrongMinusCorrect: row.attributionDominantCoefficientWrongMinusCorrect,
-				coefficientDeltaSign: row.attributionDominantCoefficientWrongMinusCorrect > 0 ?
-					'positive-wrong-minus-correct' :
-					row.attributionDominantCoefficientWrongMinusCorrect < 0 ?
-						'negative-wrong-minus-correct' :
-						'zero',
-				wrongChannelPressure: row.attributionWrongChannelPressure,
-				correctChannelPreservation: row.attributionCorrectChannelPreservation,
-				runtimeWrongOverCorrect: row.runtimeWrongOverCorrect,
-				sourcePressureAttributionRowCount: row.sourcePressureAttributionRowCount ?? 0,
-				sourcePressureWrongChannelPressure: row.sourcePressureWrongChannelPressure ?? 0,
-				sourcePressureDilatedSourceWrongPressureDelta: row.sourcePressureDilatedSourceWrongPressureDelta ?? 0,
-				classification: signSourceIsolated ?
-					'POSITIVE-L10-CORRECT-SIDE-SOURCE-LOCALIZED-LEAK' :
-					'PROBE50-L10-SIGN-SOURCE-NEEDS-MORE-PROOF'
-			} ) ),
-			summary: {
-				sampleCount: dominantRows.length,
-				residualSampleCount: residualRows.length,
-				dominantSourceProbeIndex,
-				dominantReceiver: proof7bCoefficientL10OracleStudy.summary.dominantReceiver,
-				coefficient: 'L10',
-				coefficientBand: 'l1',
-				allDominantRowsPositiveL10,
-				allDominantRowsCorrectSideSource,
-				allDominantRowsMappedContentPressure,
-				wrongSideSourcePressureRowCount: wrongSideSourcePressureRows.length,
-				sourcePolicyBlocked,
-				pressureLocalized,
-				dominantWrongPressure,
-				residualWrongPressure,
-				dominantWrongPressureShare: proof7bCoefficientL10OracleStudy.summary.dominantWrongPressureShare,
-				dominantContentPressure,
-				dominantCoefficientDelta,
-				minCoefficientWrongMinusCorrect: minMetric( dominantRows, 'attributionDominantCoefficientWrongMinusCorrect' ),
-				maxCoefficientWrongMinusCorrect: maxMetric( dominantRows, 'attributionDominantCoefficientWrongMinusCorrect' ),
-				residualCorrectPreservation,
-				sourceRelationHistogram: histogram( dominantRows, 'attributionSourceRelationToReceiver' ),
-				contentProbeHistogram: histogram( dominantRows, 'contentProbeIndex' ),
-				runtimePromotionAllowed: false,
-				globalCoefficientDampingSafe: false,
-				identifiedCause: signSourceIsolated ?
-					'Probe-50 L10/l1 leak is positive wrong-minus-correct, mapped to bake-content pressure, and localized to a correct-side source trace; this identifies a probe-local coefficient/content polarity problem, not a wrong-side source-policy or global L10 damping fix.' :
-					'Probe-50 L10/l1 remains dominant, but sign/source isolation is not yet complete.',
-				nextProofOnlyAction: signSourceIsolated ?
-					'Run a proof-only probe-50 L10 content-basis/polarity oracle before proof-7a source-policy, Chebyshev, runtime, public API, docs, or bake-policy changes.' :
-					'Add proof-only sign/source rows for probe-50 L10 before choosing any runtime-facing design.',
-				interpretation: signSourceIsolated ?
-					'The dominant leak is localized to positive L10/l1 content from probe-50 on rightReceiver; source-policy is blocked because the source trace is correct-side and wrong-side source pressure is absent.' :
-					'The oracle cannot yet separate coefficient polarity from source-policy pressure.'
-			}
-		};
-
-	};
-
-	const probe50L10SignSourceIsolationOracleStudy = createProbe50L10SignSourceIsolationOracleStudy();
-	const createProbe50L10ContentBasisPolarityOracleStudy = () => {
-
-		const dominantRows = probe50L10SignSourceIsolationOracleStudy.rows;
-		const findSample = row => surfaceSampleCoefficientAttributionStudy.receivers
-			.flatMap( receiver => receiver.samples )
-			.find( sample =>
-				sample.receiver === row.receiver &&
-				sample.sampleLabel === row.sampleLabel
-			);
-		const findAttributionRow = row => {
-
-			const sample = findSample( row );
-			return sample?.attributionRows.find( attributionRow =>
-				attributionRow.sourceProbeIndex === 50 &&
-				attributionRow.dominantWeightedCoefficient === 'L10'
-			) ?? sample?.attributionRows.find( attributionRow =>
-				attributionRow.probeIndex === 50 &&
-				attributionRow.dominantWeightedCoefficient === 'L10'
-			) ?? null;
-
-		};
-
-		const sumValues = values => roundMetric( values.reduce( ( total, value ) => total + ( value ?? 0 ), 0 ) );
-		const rows = dominantRows.map( row => {
-
-			const attributionRow = findAttributionRow( row );
-			const coefficientRows = attributionRow?.runtimeWeightedCoefficientContributions ?? [];
-			const l10 = coefficientRows.find( coefficient => coefficient.name === 'L10' ) ?? null;
-			const l00 = coefficientRows.find( coefficient => coefficient.name === 'L00' ) ?? null;
-			const l11 = coefficientRows.find( coefficient => coefficient.name === 'L11' ) ?? null;
-			const negativeCorrectDominance = l10 !== null &&
-				l10.contribution.g < 0 &&
-				l10.contribution.r < 0 &&
-				l10.contribution.g < l10.contribution.r &&
-				l10.wrongMinusCorrect > 0;
-
-			return {
-				receiver: row.receiver,
-				sampleLabel: row.sampleLabel,
-				sourceProbeIndex: row.sourceProbeIndex,
-				coefficient: 'L10',
-				coefficientBand: 'l1',
-				basis: l10?.basis ?? 'unknown',
-				basisScale: l10?.basisScale ?? 0,
-				rawCoefficient: l10?.rawCoefficient ?? null,
-				contribution: l10?.contribution ?? null,
-				weightedContribution: l10?.weightedContribution ?? null,
-				wrongMinusCorrect: l10?.wrongMinusCorrect ?? 0,
-				weightedWrongMinusCorrect: l10?.weightedWrongMinusCorrect ?? 0,
-				negativeEnergy: l10?.negativeEnergy ?? 0,
-				weightedNegativeEnergy: l10?.weightedNegativeEnergy ?? 0,
-				l00WrongMinusCorrect: l00?.wrongMinusCorrect ?? 0,
-				l11WrongMinusCorrect: l11?.wrongMinusCorrect ?? 0,
-				l10CorrectContribution: l10?.correctContribution ?? 0,
-				l10WrongContribution: l10?.wrongContribution ?? 0,
-				l10RawCorrect: l10?.rawCoefficient?.g ?? 0,
-				l10RawWrong: l10?.rawCoefficient?.r ?? 0,
-				negativeCorrectDominance,
-				classification: negativeCorrectDominance ?
-					'POSITIVE-DELTA-FROM-NEGATIVE-CORRECT-CHANNEL-L10-Z-BASIS' :
-					'PROBE50-L10-BASIS-POLARITY-AMBIGUOUS'
-			};
-
-		} );
-		const allRowsHaveBasis = rows.length > 0 && rows.every( row => row.basis === 'z' );
-		const allRowsPositiveBasisScale = rows.length > 0 && rows.every( row => row.basisScale > 0 );
-		const allRowsNegativeCorrectDominance = rows.length > 0 && rows.every( row => row.negativeCorrectDominance );
-		const l10WrongMinusCorrectSum = sumValues( rows.map( row => row.wrongMinusCorrect ) );
-		const l10WeightedWrongMinusCorrectSum = sumValues( rows.map( row => row.weightedWrongMinusCorrect ) );
-		const l10NegativeEnergySum = sumValues( rows.map( row => row.negativeEnergy ) );
-		const l10WeightedNegativeEnergySum = sumValues( rows.map( row => row.weightedNegativeEnergy ) );
-		const l00WrongMinusCorrectSum = sumValues( rows.map( row => row.l00WrongMinusCorrect ) );
-		const l11WrongMinusCorrectSum = sumValues( rows.map( row => row.l11WrongMinusCorrect ) );
-		const polarityIsolated = allRowsHaveBasis &&
-			allRowsPositiveBasisScale &&
-			allRowsNegativeCorrectDominance &&
-			l10WrongMinusCorrectSum > 0 &&
-			l00WrongMinusCorrectSum < 0 &&
-			l11WrongMinusCorrectSum < 0;
-
-		return {
-			status: rows.length === 0 ?
-				'SUPPORTED-PROBE50-L10-CONTENT-BASIS-POLARITY-BOUNDED' :
-				polarityIsolated ?
-					'IDENTIFIED-PROBE50-L10-Z-BASIS-NEGATIVE-CORRECT-POLARITY' :
-					'OPEN-PROBE50-L10-CONTENT-BASIS-POLARITY-AMBIGUOUS',
-			proofBoundary: 'CPU/report-only probe-50 L10 content-basis/polarity oracle over existing coefficient contribution rows; does not change runtime sampling, bake policy, source policy, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows,
-			summary: {
-				sampleCount: rows.length,
-				coefficient: 'L10',
-				coefficientBand: 'l1',
-				basis: 'z',
-				allRowsHaveBasis,
-				allRowsPositiveBasisScale,
-				allRowsNegativeCorrectDominance,
-				l10WrongMinusCorrectSum,
-				l10WeightedWrongMinusCorrectSum,
-				l10NegativeEnergySum,
-				l10WeightedNegativeEnergySum,
-				l00WrongMinusCorrectSum,
-				l11WrongMinusCorrectSum,
-				polarityIsolated,
-				runtimePromotionAllowed: false,
-				bakePolicyPromotionAllowed: false,
-				sourcePolicyPromotionAllowed: false,
-				globalCoefficientDampingSafe: false,
-				identifiedCause: polarityIsolated ?
-					'Probe-50 L10/l1 is a z-basis polarity leak: the correct green channel is driven more negative than the wrong red channel, making wrong-minus-correct positive while L00 and L11 remain corrective.' :
-					'Probe-50 L10/l1 basis polarity is not yet isolated from other coefficient contributions.',
-				nextProofOnlyAction: polarityIsolated ?
-					'Run a proof-only probe-50 coefficient-local correction oracle that isolates L10/z contribution effects while preserving L00/L11 correct-channel bounce; do not promote runtime, bake policy, source policy, Chebyshev, public API, or docs.' :
-					'Add proof-only coefficient contribution rows before choosing any runtime-facing design.',
-				interpretation: polarityIsolated ?
-					'The leak is now narrowed from source policy to coefficient content polarity: L10/z contributes positive wrong-minus-correct by over-negating the correct channel, so a broad source-policy or global damping fix would be the wrong abstraction.' :
-					'Basis/polarity evidence is incomplete.'
-			}
-		};
-
-	};
-
-	const probe50L10ContentBasisPolarityOracleStudy = createProbe50L10ContentBasisPolarityOracleStudy();
-	const createProbe50CoefficientLocalCorrectionOracleStudy = () => {
-
-		const polarityRows = probe50L10ContentBasisPolarityOracleStudy.rows;
-		const rows = polarityRows.map( row => {
-
-			const currentL10WrongMinusCorrect = row.weightedWrongMinusCorrect;
-			const correctedL10WrongMinusCorrect = 0;
-			const estimatedWrongPressureReduction = Math.max( 0, currentL10WrongMinusCorrect );
-			return {
-				receiver: row.receiver,
-				sampleLabel: row.sampleLabel,
-				sourceProbeIndex: row.sourceProbeIndex,
-				coefficient: row.coefficient,
-				coefficientBand: row.coefficientBand,
-				basis: row.basis,
-				currentWeightedWrongMinusCorrect: currentL10WrongMinusCorrect,
-				correctedWeightedWrongMinusCorrect: correctedL10WrongMinusCorrect,
-				estimatedWrongPressureReduction: roundMetric( estimatedWrongPressureReduction ),
-				estimatedNegativeEnergyReduction: row.weightedNegativeEnergy,
-				preservesL00: row.l00WrongMinusCorrect < 0,
-				preservesL11: row.l11WrongMinusCorrect < 0,
-				preservesOtherCoefficientRows: true,
-				correctionScope: 'probe-50/L10/z-only',
-				classification: 'COEFFICIENT-LOCAL-CORRECTION-CANDIDATE'
-			};
-
-		} );
-		const sumMetric = ( key ) => roundMetric( rows.reduce(
-			( total, row ) => total + ( row[ key ] ?? 0 ),
-			0
-		) );
-		const allRowsCorrectable = rows.length > 0 && rows.every( row =>
-			row.currentWeightedWrongMinusCorrect > 0 &&
-			row.correctedWeightedWrongMinusCorrect === 0 &&
-			row.estimatedWrongPressureReduction > 0
-		);
-		const preservesCorrectiveCoefficients = rows.length > 0 && rows.every( row =>
-			row.preservesL00 &&
-			row.preservesL11 &&
-			row.preservesOtherCoefficientRows
-		);
-		const estimatedWrongPressureReductionSum = sumMetric( 'estimatedWrongPressureReduction' );
-		const estimatedNegativeEnergyReductionSum = sumMetric( 'estimatedNegativeEnergyReduction' );
-		const dominantWrongPressure = probe50L10SignSourceIsolationOracleStudy.summary.dominantWrongPressure;
-		const estimatedDominantWrongPressureAfterCorrection = roundMetric( Math.max(
-			0,
-			dominantWrongPressure - estimatedWrongPressureReductionSum
-		) );
-		const localCorrectionWins = allRowsCorrectable &&
-			preservesCorrectiveCoefficients &&
-			estimatedWrongPressureReductionSum >= dominantWrongPressure * 0.9 &&
-			estimatedDominantWrongPressureAfterCorrection <= 0.001;
-
-		return {
-			status: rows.length === 0 ?
-				'SUPPORTED-PROBE50-COEFFICIENT-LOCAL-CORRECTION-BOUNDED' :
-				localCorrectionWins ?
-					'SUPPORTED-PROBE50-COEFFICIENT-LOCAL-CORRECTION-ORACLE-WIN' :
-					'OPEN-PROBE50-COEFFICIENT-LOCAL-CORRECTION-NO-SAFE-WIN',
-			proofBoundary: 'CPU/report-only probe-50 coefficient-local correction oracle; estimates L10/z-only correction from existing coefficient contribution rows and does not change runtime sampling, bake policy, source policy, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows,
-			summary: {
-				sampleCount: rows.length,
-				correctionScope: 'probe-50/L10/z-only',
-				allRowsCorrectable,
-				preservesCorrectiveCoefficients,
-				estimatedWrongPressureReductionSum,
-				estimatedNegativeEnergyReductionSum,
-				dominantWrongPressureBeforeCorrection: dominantWrongPressure,
-				estimatedDominantWrongPressureAfterCorrection,
-				localCorrectionWins,
-				runtimePromotionAllowed: false,
-				bakePolicyPromotionAllowed: false,
-				sourcePolicyPromotionAllowed: false,
-				chebyshevTuningAllowed: false,
-				publicApiDocsPromotionAllowed: false,
-				identifiedCause: localCorrectionWins ?
-					'A coefficient-local probe-50/L10/z correction explains the dominant wrong-channel pressure while preserving L00/L11 corrective rows; the remaining work is design-bounding, not runtime promotion.' :
-					'The coefficient-local correction oracle does not yet produce a safe aggregate proof-only win.',
-				nextProofOnlyAction: localCorrectionWins ?
-					'Run a proof-only aggregate residual guard for the probe-50/L10/z local-correction candidate across mapped and unmapped rows before any runtime, bake policy, source policy, Chebyshev, public API, or docs promotion.' :
-					'Add proof-only correction candidate rows before considering any runtime-facing design.',
-				interpretation: localCorrectionWins ?
-					'The proof-only local correction removes the isolated L10/z wrong-minus-correct pressure without touching L00/L11, so broad L1 damping and source-policy remain the wrong abstractions.' :
-					'The local correction candidate is not yet aggregate-safe.'
-			}
-		};
-
-	};
-
-	const probe50CoefficientLocalCorrectionOracleStudy = createProbe50CoefficientLocalCorrectionOracleStudy();
-	const createProbe50LocalCorrectionAggregateResidualGuardStudy = () => {
-
-		const mappedDominantRows = mappedBakeContentSourcePolicyOracleStudy.rows.filter( row =>
-			row.attributionSourceProbeIndex === proof7bCoefficientL10OracleStudy.summary.dominantSourceProbeIndex
-		);
-		const unmappedResidualRows = unmappedCoefficientAttributionInstrumentationStudy.rows.filter( row =>
-			row.attributionSourceProbeIndex !== proof7bCoefficientL10OracleStudy.summary.dominantSourceProbeIndex
-		);
-		const sumRows = ( rows, key ) => roundMetric( rows.reduce(
-			( total, row ) => total + ( row[ key ] ?? 0 ),
-			0
-		) );
-		const aggregateWrongBefore = proof7bCoefficientL10OracleStudy.summary.totalWrongChannelPressure;
-		const mappedDominantWrongBefore = probe50CoefficientLocalCorrectionOracleStudy.summary.dominantWrongPressureBeforeCorrection;
-		const mappedDominantReduction = probe50CoefficientLocalCorrectionOracleStudy.summary.estimatedWrongPressureReductionSum;
-		const mappedDominantWrongAfter = probe50CoefficientLocalCorrectionOracleStudy.summary.estimatedDominantWrongPressureAfterCorrection;
-		const unmappedResidualWrong = proof7bCoefficientL10OracleStudy.summary.residualWrongChannelPressure;
-		const unmappedResidualCorrectPreservation = proof7bCoefficientL10OracleStudy.summary.residualCorrectChannelPreservation;
-		const aggregateEstimatedWrongAfter = roundMetric( mappedDominantWrongAfter + unmappedResidualWrong );
-		const aggregateReduction = roundMetric( aggregateWrongBefore - aggregateEstimatedWrongAfter );
-		const aggregateReductionRatio = aggregateWrongBefore > 0 ?
-			roundMetric( aggregateReduction / aggregateWrongBefore ) :
-			1;
-		const residualCorrectToWrongRatio = unmappedResidualWrong > 0 ?
-			roundMetric( unmappedResidualCorrectPreservation / unmappedResidualWrong ) :
-			1;
-		const residualAbsoluteBound = 0.001;
-		const residualGuardPasses = probe50CoefficientLocalCorrectionOracleStudy.summary.localCorrectionWins === true &&
-			aggregateReductionRatio >= 0.95 &&
-			aggregateEstimatedWrongAfter <= residualAbsoluteBound &&
-			unmappedResidualWrong <= residualAbsoluteBound &&
-			unmappedResidualCorrectPreservation > unmappedResidualWrong;
-		const rows = [
-			{
-				id: 'mapped-probe-50-local-correction',
-				bucket: 'mapped-dominant',
-				sourceProbeIndex: proof7bCoefficientL10OracleStudy.summary.dominantSourceProbeIndex,
-				receiver: proof7bCoefficientL10OracleStudy.summary.dominantReceiver,
-				sampleCount: mappedDominantRows.length,
-				wrongPressureBefore: mappedDominantWrongBefore,
-				estimatedWrongPressureReduction: mappedDominantReduction,
-				estimatedWrongPressureAfter: mappedDominantWrongAfter,
-				correctPreservation: sumRows( mappedDominantRows, 'attributionCorrectChannelPreservation' ),
-				classification: 'SUPPORTED-MAPPED-DOMINANT-REDUCED'
-			},
-			{
-				id: 'unmapped-probe-52-residual-guard',
-				bucket: 'unmapped-residual',
-				sourceProbeIndex: 52,
-				receiver: 'leftReceiver',
-				sampleCount: unmappedResidualRows.length,
-				wrongPressureBefore: unmappedResidualWrong,
-				estimatedWrongPressureReduction: 0,
-				estimatedWrongPressureAfter: unmappedResidualWrong,
-				correctPreservation: unmappedResidualCorrectPreservation,
-				classification: 'SUPPORTED-UNMAPPED-RESIDUAL-BOUNDED'
-			}
-		];
-
-		return {
-			status: residualGuardPasses ?
-				'SUPPORTED-PROBE50-LOCAL-CORRECTION-AGGREGATE-RESIDUAL-GUARD' :
-				'OPEN-PROBE50-LOCAL-CORRECTION-AGGREGATE-RESIDUAL-GUARD',
-			proofBoundary: 'CPU/report-only aggregate residual guard for the probe-50/L10/z local-correction candidate; estimates mapped dominant reduction and unmapped residual bounds without changing runtime sampling, bake policy, source policy, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows,
-			summary: {
-				sampleCount: mappedDominantRows.length + unmappedResidualRows.length,
-				mappedDominantSampleCount: mappedDominantRows.length,
-				unmappedResidualSampleCount: unmappedResidualRows.length,
-				aggregateWrongBefore,
-				aggregateEstimatedWrongAfter,
-				aggregateReduction,
-				aggregateReductionRatio,
-				mappedDominantWrongBefore,
-				mappedDominantWrongAfter,
-				unmappedResidualWrong,
-				unmappedResidualCorrectPreservation,
-				residualCorrectToWrongRatio,
-				residualAbsoluteBound,
-				residualGuardPasses,
-				runtimePromotionAllowed: false,
-				bakePolicyPromotionAllowed: false,
-				sourcePolicyPromotionAllowed: false,
-				chebyshevTuningAllowed: false,
-				publicApiDocsPromotionAllowed: false,
-				identifiedCause: residualGuardPasses ?
-					'The probe-50/L10/z local-correction candidate removes the aggregate-dominant mapped wrong-channel pressure, leaving only a bounded probe-52 unmapped residual whose correct-channel preservation dominates its wrong pressure.' :
-					'The probe-50/L10/z local-correction candidate has not yet proven aggregate residual safety.',
-				nextProofOnlyAction: residualGuardPasses ?
-					'Run a proof-only design-bound/runtime-shape constraints review for a possible probe-local L10/z correction; do not implement runtime, bake policy, source policy, Chebyshev, public API, or docs changes yet.' :
-					'Add proof-only residual rows before considering any runtime-facing design.',
-				interpretation: residualGuardPasses ?
-					'The aggregate guard supports the local-correction abstraction: the mapped probe-50 pressure is reduced by about 96%, while probe-52 remains a small preserved-bounce residual rather than an aggregate blocker.' :
-					'The local correction candidate is still not aggregate-safe.'
-			}
-		};
-
-	};
-
-	const probe50LocalCorrectionAggregateResidualGuardStudy = createProbe50LocalCorrectionAggregateResidualGuardStudy();
-	const createProbe50L10ZDesignBoundConstraintsStudy = () => {
-
-		const guardSummary = probe50LocalCorrectionAggregateResidualGuardStudy.summary;
-		const correctionSummary = probe50CoefficientLocalCorrectionOracleStudy.summary;
-		const polaritySummary = probe50L10ContentBasisPolarityOracleStudy.summary;
-		const signSourceSummary = probe50L10SignSourceIsolationOracleStudy.summary;
-		const constraints = [
-			{
-				id: 'scope-probe-50-l10-z-only',
-				category: 'scope',
-				requirement: 'Any future candidate must be probe-local to probe 50, coefficient-local to L10/l1, and basis-local to z.',
-				evidence: 'Probe-50 L10/z explains the dominant mapped wrong-channel pressure.',
-				satisfied: signSourceSummary.dominantSourceProbeIndex === 50 &&
-					polaritySummary.coefficient === 'L10' &&
-					polaritySummary.coefficientBand === 'l1' &&
-					polaritySummary.basis === 'z'
-			},
-			{
-				id: 'preserve-corrective-coefficients',
-				category: 'preservation',
-				requirement: 'Any future candidate must preserve L00, L11, and non-target coefficient rows.',
-				evidence: 'Local correction rows preserve L00/L11 and mark other coefficient rows preserved.',
-				satisfied: correctionSummary.preservesCorrectiveCoefficients === true
-			},
-			{
-				id: 'bound-aggregate-residual',
-				category: 'aggregate-guard',
-				requirement: 'Any future candidate must keep aggregate estimated wrong-channel pressure within the residual guard bound.',
-				evidence: `Aggregate estimated wrong pressure is ${ guardSummary.aggregateEstimatedWrongAfter } with bound ${ guardSummary.residualAbsoluteBound }.`,
-				satisfied: guardSummary.residualGuardPasses === true &&
-					guardSummary.aggregateEstimatedWrongAfter <= guardSummary.residualAbsoluteBound
-			},
-			{
-				id: 'do-not-global-damp-l1',
-				category: 'rejection',
-				requirement: 'Do not use global L1/L10 damping as the next design shape.',
-				evidence: 'Probe-52 residual has correct-channel preservation that dominates its wrong pressure.',
-				satisfied: signSourceSummary.globalCoefficientDampingSafe === false &&
-					guardSummary.unmappedResidualCorrectPreservation > guardSummary.unmappedResidualWrong
-			},
-			{
-				id: 'do-not-source-or-bake-policy',
-				category: 'rejection',
-				requirement: 'Do not promote source-policy or bake-policy changes from this evidence.',
-				evidence: 'Dominant rows are correct-side sourced and the local coefficient guard wins without source/bake policy changes.',
-				satisfied: signSourceSummary.sourcePolicyBlocked === true &&
-					guardSummary.sourcePolicyPromotionAllowed === false &&
-					guardSummary.bakePolicyPromotionAllowed === false
-			},
-			{
-				id: 'keep-runtime-promotion-blocked',
-				category: 'promotion-gate',
-				requirement: 'Do not implement runtime, public API, docs, or Chebyshev changes in this phase.',
-				evidence: 'All current studies keep runtime-facing promotion gates false.',
-				satisfied: guardSummary.runtimePromotionAllowed === false &&
-					guardSummary.publicApiDocsPromotionAllowed === false &&
-					guardSummary.chebyshevTuningAllowed === false
-			}
-		];
-		const requiredConstraintCount = constraints.length;
-		const satisfiedConstraintCount = constraints.filter( constraint => constraint.satisfied ).length;
-		const allRequiredConstraintsSatisfied = requiredConstraintCount > 0 &&
-			satisfiedConstraintCount === requiredConstraintCount;
-
-		return {
-			status: allRequiredConstraintsSatisfied ?
-				'SUPPORTED-PROOF-ONLY-PROBE50-L10Z-DESIGN-BOUND-CONSTRAINTS' :
-				'OPEN-PROOF-ONLY-PROBE50-L10Z-DESIGN-BOUND-CONSTRAINTS',
-			proofBoundary: 'CPU/report-only design-bound constraints review for a possible probe-local L10/z correction; records constraints and rejected runtime shapes without changing runtime sampling, bake policy, source policy, public API, docs, or Chebyshev thresholds.',
-			noRuntimePromotion: true,
-			rows: constraints,
-			summary: {
-				requiredConstraintCount,
-				satisfiedConstraintCount,
-				allRequiredConstraintsSatisfied,
-				targetProbeIndex: 50,
-				targetCoefficient: 'L10',
-				targetCoefficientBand: 'l1',
-				targetBasis: 'z',
-				aggregateEstimatedWrongAfter: guardSummary.aggregateEstimatedWrongAfter,
-				aggregateReductionRatio: guardSummary.aggregateReductionRatio,
-				residualAbsoluteBound: guardSummary.residualAbsoluteBound,
-				unmappedResidualWrong: guardSummary.unmappedResidualWrong,
-				unmappedResidualCorrectPreservation: guardSummary.unmappedResidualCorrectPreservation,
-				globalCoefficientDampingRejected: true,
-				sourcePolicyRejected: true,
-				bakePolicyRejected: true,
-				runtimePromotionAllowed: false,
-				bakePolicyPromotionAllowed: false,
-				sourcePolicyPromotionAllowed: false,
-				chebyshevTuningAllowed: false,
-				publicApiDocsPromotionAllowed: false,
-				identifiedCause: allRequiredConstraintsSatisfied ?
-					'The proof-only design bounds identify a narrow probe-50/L10/z correction shape and reject global L1 damping, source-policy changes, bake-policy changes, Chebyshev tuning, and public API/docs promotion for this phase.' :
-					'The proof-only design bounds are not yet complete enough to describe a safe correction shape.',
-				nextProofOnlyAction: allRequiredConstraintsSatisfied ?
-					'Prepare a proof-only implementation-sketch review for the probe-50/L10/z constraint shape, still without runtime, bake policy, source policy, Chebyshev, public API, or docs changes.' :
-					'Add proof-only design-bound constraints before any runtime-facing implementation.',
-				interpretation: allRequiredConstraintsSatisfied ?
-					'The architecture shape is now constrained, not implemented: the only supported shape is narrow coefficient-local correction, while broad product-facing fixes remain unsupported by this proof.' :
-					'Design shape remains under-constrained.'
-			}
-		};
-
-	};
-
-	const probe50L10ZDesignBoundConstraintsStudy = createProbe50L10ZDesignBoundConstraintsStudy();
-	const createSurfaceAttributionBranchDecision = () => {
-
-		const summary = surfaceSampleCoefficientAttributionStudy.summary;
-		const leakSampleCount = summary.leakSampleCount;
-		const attributedLeakSampleCount = summary.attributedLeakSampleCount;
-		const sourcePressureCount = summary.sourcePressureLeakSampleCount;
-		const bandPressureCount = summary.l2DominantLeakSampleCount;
-		const blockerPressureCount = summary.correctSideDominantLeakSampleCount;
-		const candidates = [
-			{
-				branch: 'proof-7a',
-				oracleFamily: 'bake-repack-source-policy',
-				score: sourcePressureCount,
-				reason: 'independent wrong-side source-map pressure appears in the attributed surface leak samples'
-			},
-			{
-				branch: 'proof-7b',
-				oracleFamily: 'band-deringing-policy',
-				score: bandPressureCount,
-				reason: 'L2 band pressure dominates the attributed surface leak samples'
-			},
-			{
-				branch: 'proof-7c',
-				oracleFamily: 'cpu-static-blocker-sdf',
-				score: blockerPressureCount,
-				reason: 'correct-side selected/source paths dominate but still leak through the sealed wall'
-			}
-		].sort( ( a, b ) => b.score - a.score );
-		const topCandidate = candidates[ 0 ];
-		const topScoreTie = candidates.filter( candidate =>
-			candidate.score === topCandidate.score
-		);
-		const confidence = leakSampleCount > 0 ?
-			roundMetric( topCandidate.score / Math.max( leakSampleCount, 1 ) ) :
-			1;
-		const selected = leakSampleCount === 0 ? {
-			branch: 'none',
-			oracleFamily: 'no-leak',
-			score: 0,
-			reason: 'surface attribution found no leaking surface samples'
-		} :
-			attributedLeakSampleCount === 0 || topCandidate.score === 0 ? {
-				branch: 'proof-7d',
-				oracleFamily: 'instrumentation-fallback',
-				score: 0,
-				reason: 'leaking surface samples exist but no dominant probe/source/band/blocker branch is attributable yet'
-			} :
-				topScoreTie.length > 1 ? {
-					branch: 'proof-7d',
-					oracleFamily: 'ambiguous-attribution-fallback',
-					score: topCandidate.score,
-					reason: `surface attribution is ambiguous across ${ topScoreTie.map( candidate => candidate.branch ).join( ', ' ) }; expand or refine instrumentation before selecting an oracle`
-				} :
-					topCandidate;
-
-		return {
-			status: selected.branch === 'none' ?
-				'SUPPORTED-NO-SURFACE-LEAK-BRANCH' :
-				selected.branch === 'proof-7d' ?
-					'OPEN-ATTRIBUTION-UNDER-INSTRUMENTED' :
-					'OPEN-ATTRIBUTION-BRANCH-SELECTED',
-			proofBoundary: 'Report-only branch decision over surfaceSampleCoefficientAttributionStudy; selects the next proof oracle but does not authorize runtime, bake, public API, docs, or Chebyshev changes.',
-			selectedBranch: selected.branch,
-			selectedOracleFamily: selected.oracleFamily,
-			selectedReason: selected.reason,
-			confidence,
-			confidenceBasis: 'selected branch score divided by leak sample count; this is a routing score, not a correctness probability.',
-			candidates,
-			observedSignals: {
-				leakSampleCount,
-				attributedLeakSampleCount,
-				sourcePressureCount,
-				bandPressureCount,
-				blockerPressureCount,
-				topScoreTieBranches: topScoreTie.map( candidate => candidate.branch ),
-				weightedLeakWrongChannelPressure: summary.weightedLeakWrongChannelPressure,
-				weightedLeakCorrectChannelPreservation: summary.weightedLeakCorrectChannelPreservation,
-				dominantProbeHistogram: summary.dominantProbeHistogram,
-				dominantBandHistogram: summary.dominantBandHistogram,
-				dominantCoefficientHistogram: summary.dominantCoefficientHistogram
-			},
-			nextAction: selected.branch === 'proof-7a' ?
-				'Evaluate proof-7a as CPU/report-only bake/repack/source-policy oracle.' :
-				selected.branch === 'proof-7b' ?
-					'Evaluate proof-7b as CPU/report-only band/de-ringing oracle.' :
-					selected.branch === 'proof-7c' ?
-						'Evaluate proof-7c as CPU-only static-blocker/SDF oracle.' :
-						selected.branch === 'proof-7d' ?
-							'Expand surface attribution instrumentation before any fix branch.' :
-							'Keep current proof gates bounded; no leak-fix oracle is needed while surface leak samples remain absent.'
-		};
-
-	};
-
-	const surfaceAttributionBranchDecision = createSurfaceAttributionBranchDecision();
-	const createProof7cSurfaceStaticBlockerOracleStudy = () => {
-
-		const selected = surfaceAttributionBranchDecision.selectedBranch === 'proof-7c';
-		const leakSamples = surfaceSampleCoefficientAttributionStudy.receivers.flatMap( receiver =>
-			receiver.samples
-				.filter( sample => sample.leakSample )
-				.map( sample => ( {
-					...sample,
-					receiverCorrectSide: receiver.correctSide
-				} ) )
-		);
-		const attributedLeakSamples = leakSamples.filter( sample => sample.dominantProbeIndex !== null );
-		const proof7cEligibleSamples = attributedLeakSamples.filter( sample =>
-			sample.dominantProbeRelationToReceiver === 'correct-side'
-		);
-		const rows = proof7cEligibleSamples.map( sample => {
-
-			const dominantRow = sample.attributionRows.find( row =>
-				row.probeIndex === sample.dominantProbeIndex
-			) ?? null;
-			const surfaceSegmentDividerAudit = dominantRow?.surfaceSegmentDividerAudit ?? null;
-			const hasSurfacePathAudit = surfaceSegmentDividerAudit !== null &&
-				typeof surfaceSegmentDividerAudit.intersects === 'boolean';
-			const staticBlocked = hasSurfacePathAudit ?
-				surfaceSegmentDividerAudit.intersects :
-				null;
-
-			return {
-				receiver: sample.receiver,
-				sampleLabel: sample.sampleLabel,
-				quadratureWeight: sample.quadratureWeight,
-				samplePosition: sample.samplePosition,
-				runtimeWrongOverCorrect: sample.runtimeWrongOverCorrect,
-				dominantProbeIndex: sample.dominantProbeIndex,
-				dominantSourceProbeIndex: sample.dominantSourceProbeIndex,
-				dominantProbeRelationToReceiver: sample.dominantProbeRelationToReceiver,
-				dominantSourceRelationToReceiver: sample.dominantSourceRelationToReceiver,
-				dominantWeightedBand: sample.dominantWeightedBand,
-				dominantWeightedCoefficient: sample.dominantWeightedCoefficient,
-				dominantWrongChannelPressure: sample.dominantWrongChannelPressure,
-				dominantCorrectChannelPreservation: sample.dominantCorrectChannelPreservation,
-				proof7cEligible: true,
-				probePosition: dominantRow?.probePosition ?? null,
-				crossesDivider: dominantRow?.crossesDivider ?? null,
-				visibilitySegmentDividerAudit: dominantRow?.visibilitySegmentDividerAudit ?? null,
-				surfaceSegmentDividerAudit,
-				hasSurfacePathAudit,
-				staticBlocked,
-				blockerReason: hasSurfacePathAudit ?
-					staticBlocked ?
-						'dominant-probe-to-surface-path-crosses-static-divider' :
-						'dominant-probe-to-surface-path-clear-of-static-divider' :
-					'missing-dominant-probe-to-surface-path-audit'
-			};
-
-		} );
-		const missingAuditRows = rows.filter( row => row.hasSurfacePathAudit === false );
-		const blockedRows = rows.filter( row => row.staticBlocked === true );
-		const unblockedRows = rows.filter( row => row.staticBlocked === false );
-		const safeAggregateReceivers = sdfStaticBlockerOracleStudy.receiverRows.filter( row =>
-			row.bestCandidateLabel !== 'none' &&
-			row.bestCandidateCorrectChannelPreservation >= sdfStaticBlockerOracleStudy.thresholds.correctChannelPreservation &&
-			(
-				row.bestCandidateChromaImprovement >= sdfStaticBlockerOracleStudy.thresholds.chromaImprovement ||
-				row.bestCandidateWrongRatioImprovement >= sdfStaticBlockerOracleStudy.thresholds.wrongRatioImprovement
-			)
-		);
-		const blockedReceiverNames = new Set( blockedRows.map( row => row.receiver ) );
-		const overlappingSafeAggregateReceivers = safeAggregateReceivers.filter( row =>
-			blockedReceiverNames.has( row.receiver )
-		);
-		const receiverAggregateWin = sdfStaticBlockerOracleStudy.status ===
-			'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN';
-		const surfacePathAggregateWin = receiverAggregateWin &&
-			blockedRows.length > 0 &&
-			overlappingSafeAggregateReceivers.length > 0;
-		const weighted = ( sourceRows, key ) => roundMetric( sourceRows.reduce(
-			( total, row ) => total + row[ key ] * row.quadratureWeight,
-			0
-		) );
-		const weightedBlockedWrongChannelPressure = weighted( blockedRows, 'dominantWrongChannelPressure' );
-		const weightedUnblockedWrongChannelPressure = weighted( unblockedRows, 'dominantWrongChannelPressure' );
-		const weightedBlockedCorrectChannelPreservation = weighted( blockedRows, 'dominantCorrectChannelPreservation' );
-		const weightedUnblockedCorrectChannelPreservation = weighted( unblockedRows, 'dominantCorrectChannelPreservation' );
-
-		return {
-			status: selected === false ?
-				'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE' :
-				leakSamples.length === 0 ?
-					'SUPPORTED-PROOF-7C-NO-SURFACE-LEAK-SAMPLES' :
-					missingAuditRows.length > 0 ?
-						'OPEN-PROOF-7C-SURFACE-STATIC-BLOCKER-MISSING-PATH-AUDIT' :
-						surfacePathAggregateWin ?
-							'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN' :
-							blockedRows.length > 0 ?
-								receiverAggregateWin ?
-									'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-SAFE-RECEIVER-OVERLAP' :
-									'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-AGGREGATE-WIN' :
-								'OPEN-PROOF-7C-NO-BLOCKED-DOMINANT-SURFACE-PATHS',
-			proofBoundary: 'CPU/report-only proof-7c selected-oracle evaluation over dominant leaking probe-to-surface paths plus the receiver-aggregate SDF/static-blocker oracle; does not add runtime SDF, runtime visibility, public API, bake policy, docs promotion, or Chebyshev changes.',
-			receiverAggregateOracleStatus: sdfStaticBlockerOracleStudy.status,
-			receiverAggregateOracleSafeWinCount: sdfStaticBlockerOracleStudy.summary.safeReceiverWinCount,
-			rows,
-			summary: {
-				selected,
-				leakSampleCount: leakSamples.length,
-				attributedLeakSampleCount: attributedLeakSamples.length,
-				proof7cEligibleLeakSampleCount: proof7cEligibleSamples.length,
-				ineligibleAttributedLeakSampleCount: attributedLeakSamples.length - proof7cEligibleSamples.length,
-				evaluatedDominantPathCount: rows.length,
-				missingSurfacePathAuditCount: missingAuditRows.length,
-				blockedDominantPathCount: blockedRows.length,
-				unblockedDominantPathCount: unblockedRows.length,
-				correctSideDominantPathCount: rows.length,
-				wrongSideDominantPathCount: 0,
-				weightedBlockedWrongChannelPressure,
-				weightedUnblockedWrongChannelPressure,
-				weightedBlockedCorrectChannelPreservation,
-				weightedUnblockedCorrectChannelPreservation,
-				receiverAggregateOracleStatus: sdfStaticBlockerOracleStudy.status,
-				receiverAggregateOracleSafeWinCount: sdfStaticBlockerOracleStudy.summary.safeReceiverWinCount,
-				overlappingSafeReceiverCount: overlappingSafeAggregateReceivers.length,
-				overlappingSafeReceivers: overlappingSafeAggregateReceivers.map( row => row.receiver ),
-				interpretation: selected === false ?
-					'proof-7c is not the selected branch for this proof artifact.' :
-					missingAuditRows.length > 0 ?
-						'proof-7c cannot be evaluated yet because dominant surface attribution rows do not carry probe-to-surface static blocker audits.' :
-						surfacePathAggregateWin ?
-							'proof-7c CPU oracle has an aggregate win; runtime design is still blocked until this report is reviewed and promoted deliberately.' :
-							blockedRows.length > 0 ?
-								receiverAggregateWin ?
-									'proof-7c found blocked dominant surface paths and a receiver aggregate SDF/static-blocker safe win, but the safe receiver cohort does not overlap the blocked dominant surface-path receivers; do not promote runtime SDF yet.' :
-									'proof-7c found blocked dominant surface paths, but the receiver aggregate SDF/static-blocker oracle did not produce a safe win; do not promote runtime SDF yet.' :
-								'proof-7c found no blocked dominant surface paths for the leaking attribution rows; inspect bake content, probe density, or surface placement before runtime blocker work.'
-			}
-		};
-
-	};
-
-	const proof7cSurfaceStaticBlockerOracleStudy = createProof7cSurfaceStaticBlockerOracleStudy();
-	const createProof7cDispositionStudy = () => {
-
-		const status = proof7cSurfaceStaticBlockerOracleStudy.status;
-		const supported = status === 'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN';
-		const selected = proof7cSurfaceStaticBlockerOracleStudy.summary.selected;
-		const addressed = selected && proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount === 0;
-		const runtimePromotionAllowed = supported === true;
-		const dispositionStatus = selected === false ?
-			'NOT-SELECTED-PROOF-7C-DISPOSITION' :
-			supported ?
-				'SUPPORTED-PROOF-7C-DISPOSITION-REVIEW-RUNTIME-PROMOTION' :
-				addressed ?
-					'CLOSED-PROOF-7C-DISPOSITION-NO-RUNTIME-PROMOTION' :
-					'OPEN-PROOF-7C-DISPOSITION-MISSING-EVIDENCE';
-
-		return {
-			status: dispositionStatus,
-			proofBoundary: 'Report-only proof-7c disposition after CPU/static-blocker oracle evaluation; documents whether proof-7c is addressed and whether runtime SDF/blocker promotion is allowed, without changing runtime, public API, bake policy, docs, or Chebyshev thresholds.',
-			sourceStatus: status,
-			addressed,
-			runtimePromotionAllowed,
-			nextProofOnlyAction: runtimePromotionAllowed ?
-				'Review proof-7c aggregate support before any deliberate runtime SDF/blocker design promotion.' :
-				surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction,
-			summary: {
-				selected,
-				blockedDominantPathCount: proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount,
-				evaluatedDominantPathCount: proof7cSurfaceStaticBlockerOracleStudy.summary.evaluatedDominantPathCount,
-				missingSurfacePathAuditCount: proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount,
-				receiverAggregateOracleStatus: proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleStatus,
-				receiverAggregateOracleSafeWinCount: proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleSafeWinCount,
-				overlappingSafeReceiverCount: proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceiverCount,
-				reason: selected === false ?
-					'proof-7c was not selected by the surface attribution branch router.' :
-					supported ?
-						'proof-7c produced aggregate support and must be reviewed before any runtime promotion.' :
-						addressed ?
-							'proof-7c was evaluated and produced no runtime-promotable blocker evidence; continue with proof-only content/coefficient follow-up.' :
-							'proof-7c cannot be closed because selected dominant surface rows are missing required path-audit evidence.'
-			}
-		};
-
-	};
-
-	const proof7cDispositionStudy = createProof7cDispositionStudy();
+	const surfaceContentAttributionSplitStudy = createSurfaceContentAttributionSplitStudy( {
+		surfaceShContentStudy,
+		surfaceSampleCoefficientAttributionStudy
+	} );
+	const surfaceContentAttributionFollowupStudy = createSurfaceContentAttributionFollowupStudy(
+		surfaceContentAttributionSplitStudy
+	);
+	const {
+		mappedBakeContentSourcePolicyOracleStudy,
+		unmappedCoefficientAttributionInstrumentationStudy,
+		aggregateExplanationComparisonStudy,
+		proof7bCoefficientL10OracleStudy,
+		probe50L10SignSourceIsolationOracleStudy,
+		probe50L10ContentBasisPolarityOracleStudy,
+		probe50CoefficientLocalCorrectionOracleStudy,
+		probe50LocalCorrectionAggregateResidualGuardStudy,
+		probe50L10ZDesignBoundConstraintsStudy,
+		surfaceAttributionBranchDecision,
+		proof7cSurfaceStaticBlockerOracleStudy,
+		proof7cDispositionStudy
+	} = createLightProbeProofOracleStudies( {
+		surfaceContentAttributionSplitStudy,
+		surfaceContentAttributionFollowupStudy,
+		surfaceSampleCoefficientAttributionStudy,
+		sdfStaticBlockerOracleStudy
+	} );
 	const surfaceAttributionFollowupSpec = {
 		status: 'SPECIFIED-CAUSAL-ATTRIBUTION-FOLLOWUP',
 		mode: 'causal-attribution-before-fix',
@@ -2688,6 +1341,177 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 						'proof-7c CPU/static-blocker oracle did not produce an aggregate-safe runtime promotion case; inspect bake content, probe density, or surface placement next.' :
 			'Regenerate the proof artifact and use surfaceSampleCoefficientAttributionStudy to choose proof-7a, proof-7b, proof-7c, or proof-7d.'
 	};
+	const createProbeContentContributionAttribution = () => {
+
+		const contributionGate = sealedPresentationStudy.summary.offscreenSceneLinearContributionGate;
+		const contributionGateOpen = String( contributionGate.status ).startsWith( 'OPEN' );
+		const contributionBlockers = contributionGate.blockers ?? [];
+		const contributionBlockerKeys = new Set( contributionBlockers.map( blocker => blocker.key ) );
+		const sourceAttribution = contributionGate.sourceAttribution ?? {};
+		const receiverAlbedoCleared = sourceAttribution.receiverAlbedoBounded === true;
+		const directAmbientCleared = sourceAttribution.probeDominated === true &&
+			sourceAttribution.directAmbientSeparationWeak === true;
+		const neutralChromaticityBlocked = contributionBlockerKeys.has( 'neutralChromaticityWrongSidePressure' );
+		const neutralWrongSideBlocked = contributionBlockerKeys.has( 'neutralProbesOnlyWrongSide' );
+		const neutralCorrectBounceBlocked = contributionBlockerKeys.has( 'neutralProbesOnlyCorrectBounce' );
+		const probeContentOpen = String( probeContentChromaStudy.status ).startsWith( 'OPEN' );
+		const bakeContentOpen = String( probeBakeContaminationMap.status ).startsWith( 'OPEN' );
+		const surfaceContentOpen = String( surfaceShContentStudy.status ).startsWith( 'OPEN' );
+		const coefficientAttributionOpen = String( surfaceSampleCoefficientAttributionStudy.status ).startsWith( 'OPEN' );
+		const surfaceSplitOpen = String( surfaceContentAttributionSplitStudy.status ).startsWith( 'OPEN' );
+		const contentEvidenceOpen = probeContentOpen ||
+			bakeContentOpen ||
+			surfaceContentOpen ||
+			coefficientAttributionOpen ||
+			surfaceSplitOpen;
+		const surfaceLeakSampleCount = surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount;
+		const attributedLeakSampleCount = surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount;
+		const coefficientAttributionCoverageRatio = surfaceLeakSampleCount > 0 ?
+			roundMetric( attributedLeakSampleCount / surfaceLeakSampleCount ) :
+			1;
+		const surfaceContentCoverageRatio = surfaceShContentStudy.summary.leakContentPressureCoverageRatio;
+		const surfaceLeakContentMapped = surfaceLeakSampleCount === 0 ||
+			surfaceContentCoverageRatio > 0 ||
+			coefficientAttributionCoverageRatio > 0;
+		const probeContentExplainsContribution = contributionGateOpen &&
+			contributionGate.dominantContributionSource === 'probe-content-or-visibility-shaping' &&
+			receiverAlbedoCleared &&
+			directAmbientCleared &&
+			contentEvidenceOpen;
+		const strongProbeContentAttribution = probeContentExplainsContribution &&
+			probeContentOpen &&
+			bakeContentOpen &&
+			surfaceLeakContentMapped &&
+			( surfaceContentOpen || coefficientAttributionOpen || surfaceSplitOpen );
+		const attributionStrength = contributionGate.status === 'SUPPORTED' ?
+			'bounded' :
+			strongProbeContentAttribution ?
+				'strong' :
+				probeContentExplainsContribution ?
+					'partial' :
+					'under-instrumented';
+
+		return {
+			status: contributionGate.status === 'SUPPORTED' ?
+				'SUPPORTED-CONTRIBUTION-GATE-BOUNDED' :
+				strongProbeContentAttribution ?
+					'OPEN-PROBE-CONTENT-BOUNCED-CHROMA-ATTRIBUTED' :
+					probeContentExplainsContribution ?
+						'OPEN-PROBE-CONTENT-BOUNCED-CHROMA-PARTIAL' :
+						'OPEN-CONTRIBUTION-ATTRIBUTION-UNDER-INSTRUMENTED',
+			mode: 'report-only-probe-content-contribution-attribution',
+			proofBoundary: 'Report-only attribution that joins the offscreen scene-linear contribution gate to probe-content chroma, bake-contamination, surface SH content, and coefficient-attribution evidence; it does not change bake capture, runtime sampling, visibility moments, public API, docs, or Chebyshev thresholds.',
+			runtimePromotionAllowed: false,
+			currentGate: {
+				status: contributionGate.status,
+				dominantContributionSource: contributionGate.dominantContributionSource,
+				dominantBlocker: contributionGate.dominantBlocker?.key ?? null,
+				blockerKeys: contributionBlockers.map( blocker => blocker.key ),
+				neutralProbesOnly: contributionGate.neutralProbesOnly,
+				neutralChromaticityBlocked,
+				neutralWrongSideBlocked,
+				neutralCorrectBounceBlocked
+			},
+			clearedNonContentSources: {
+				receiverAlbedoCleared,
+				directAmbientCleared,
+				receiverAlbedoBounded: sourceAttribution.receiverAlbedoBounded === true,
+				probeDominated: sourceAttribution.probeDominated === true,
+				directAmbientSeparationWeak: sourceAttribution.directAmbientSeparationWeak === true,
+				neutralVsOriginalProbeDelta: sourceAttribution.neutralVsOriginalProbeDelta ?? null,
+				probesDirectPlusMaskedDelta: sourceAttribution.probesDirectPlusMaskedDelta ?? null,
+				directAmbientMaskedDelta: sourceAttribution.directAmbientMaskedDelta ?? null
+			},
+			contentEvidence: {
+				probeContentChromaStatus: probeContentChromaStudy.status,
+				maxCorrectSideChromaPressure: probeContentChromaStudy.summary.maxCorrectSideChromaPressure,
+				maxRuntimeFinalChromaPressure: probeContentChromaStudy.summary.maxRuntimeFinalChromaPressure,
+				weightedCorrectSideChromaPressureMean: probeContentChromaStudy.summary.weightedCorrectSideChromaPressureMean,
+				probeBakeContaminationStatus: probeBakeContaminationMap.status,
+				probeBakeDominantProbeIndex: probeBakeContaminationMap.summary.dominantProbeIndex,
+				probeBakeDominantClassification: probeBakeContaminationMap.summary.dominantProbeClassification,
+				probeBakeDominantBandResponsibility: probeBakeContaminationMap.summary.dominantProbeBandResponsibility,
+				probeBakeDominantCoefficientName: probeBakeContaminationMap.summary.dominantCoefficientName,
+				probeBakeDominantCoefficientBand: probeBakeContaminationMap.summary.dominantCoefficientBand,
+				probeBakeDominantCoefficientWrongMinusCorrect: probeBakeContaminationMap.summary.dominantCoefficientWrongMinusCorrect,
+				surfaceShContentStatus: surfaceShContentStudy.status,
+				surfaceLeakSampleCount,
+				surfaceContentPressureSampleCount: surfaceShContentStudy.summary.contentPressureSampleCount,
+				surfaceLeakContentPressureCoverageRatio: surfaceContentCoverageRatio,
+				surfaceCoefficientAttributionStatus: surfaceSampleCoefficientAttributionStudy.status,
+				attributedLeakSampleCount,
+				coefficientAttributionCoverageRatio,
+				dominantProbeHistogram: surfaceSampleCoefficientAttributionStudy.summary.dominantProbeHistogram,
+				dominantBandHistogram: surfaceSampleCoefficientAttributionStudy.summary.dominantBandHistogram,
+				dominantCoefficientHistogram: surfaceSampleCoefficientAttributionStudy.summary.dominantCoefficientHistogram,
+				surfaceContentAttributionSplitStatus: surfaceContentAttributionSplitStudy.status,
+				mappedLeakSampleCount: surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount,
+				unmappedLeakSampleCount: surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount,
+				mappedCoverageRatio: surfaceContentAttributionSplitStudy.summary.mappedCoverageRatio,
+				surfaceContentFollowupStatus: surfaceContentAttributionFollowupStudy.status,
+				nextProofOnlyAction: surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction,
+				surfaceAttributionBranchStatus: surfaceAttributionBranchDecision.status,
+				selectedBranch: surfaceAttributionBranchDecision.selectedBranch,
+				selectedOracleFamily: surfaceAttributionBranchDecision.selectedOracleFamily,
+				proof7cDispositionStatus: proof7cDispositionStudy.status,
+				proof7cRuntimePromotionAllowed: proof7cDispositionStudy.runtimePromotionAllowed
+			},
+			openItems: [
+				...( contributionGateOpen ? [ {
+					gate: 'offscreenSceneLinearContributionGate',
+					status: contributionGate.status,
+					dominantBlocker: contributionGate.dominantBlocker?.key ?? null
+				} ] : [] ),
+				...( probeContentOpen ? [ {
+					gate: 'probeContentChromaStudy',
+					status: probeContentChromaStudy.status,
+					maxCorrectSideChromaPressure: probeContentChromaStudy.summary.maxCorrectSideChromaPressure,
+					maxRuntimeFinalChromaPressure: probeContentChromaStudy.summary.maxRuntimeFinalChromaPressure
+				} ] : [] ),
+				...( bakeContentOpen ? [ {
+					gate: 'probeBakeContaminationMap',
+					status: probeBakeContaminationMap.status,
+					dominantProbeIndex: probeBakeContaminationMap.summary.dominantProbeIndex,
+					dominantBand: probeBakeContaminationMap.summary.dominantProbeBandResponsibility,
+					dominantCoefficient: probeBakeContaminationMap.summary.dominantCoefficientName
+				} ] : [] ),
+				...( surfaceContentOpen || coefficientAttributionOpen || surfaceSplitOpen ? [ {
+					gate: 'surfaceContentAttribution',
+					status: surfaceContentAttributionSplitStudy.status,
+					leakSampleCount: surfaceLeakSampleCount,
+					mappedLeakSampleCount: surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount,
+					unmappedLeakSampleCount: surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount
+				} ] : [] )
+			],
+			summary: {
+				contributionGateOpen,
+				contentEvidenceOpen,
+				probeContentExplainsContribution,
+				attributionStrength,
+				receiverAlbedoCleared,
+				directAmbientCleared,
+				surfaceLeakContentMapped,
+				dominantContributionBlocker: contributionGate.dominantBlocker?.key ?? null,
+				dominantExplainedSource: strongProbeContentAttribution || probeContentExplainsContribution ?
+					'probe-content/bounced-light-chroma' :
+					'under-instrumented-or-non-content',
+				remainingUnprovenSource: strongProbeContentAttribution || probeContentExplainsContribution ?
+					'visibility-shaping remains a possible follow-up, but this report does not tune visibility moments or Chebyshev thresholds' :
+					'expand contribution/source instrumentation before changing runtime or visibility thresholds',
+				nextProofOnlyAction: surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction,
+				runtimePromotionAllowed: false,
+				diagnosticConclusion: contributionGate.status === 'SUPPORTED' ?
+					'Contribution gate is bounded; no probe-content attribution blocker remains.' :
+					strongProbeContentAttribution ?
+						'The remaining scene-linear contribution gate is explained by probe-content/bounced-light chroma evidence after receiver albedo, direct, and ambient contribution controls are bounded; keep runtime/visibility/Chebyshev promotion closed until a proof-only content oracle wins.' :
+						probeContentExplainsContribution ?
+							'The remaining contribution gate points at probe content or visibility shaping, and probe-content evidence is present but not complete enough to claim a single fix family; continue proof-only attribution.' :
+							'The contribution gate remains open but current content evidence is not sufficient to attribute it; expand proof instrumentation before runtime changes.'
+			}
+		};
+
+	};
+	const probeContentContributionAttribution = createProbeContentContributionAttribution();
 	const wgpuLeakAuditStudy = {
 		status: leakMatrix.comparisons.sealedWall.linearPromotionStatus === 'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' &&
 			sealedRenderMetricMismatch.cpuRenderAgreementGate === 'SUPPORTED' &&
@@ -2743,6 +1567,9 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			aggregateBakePolicySafeReceiverWinCount: aggregateBakePolicyOracleStudy.summary.safeReceiverWinCount,
 			probeDensityMetricStatus: probeDensityMetricStudy.status,
 			probeDensityRiskReceiverCount: probeDensityMetricStudy.summary.riskReceiverCount,
+			probeContentContributionAttributionStatus: probeContentContributionAttribution.status,
+			probeContentContributionAttributionStrength: probeContentContributionAttribution.summary.attributionStrength,
+			probeContentContributionDominantExplainedSource: probeContentContributionAttribution.summary.dominantExplainedSource,
 			receiverSampleMetricAlignmentStatus: receiverSampleMetricAlignmentStudy.status,
 			surfaceAnchorPlacementStatus: surfaceAnchorPlacementStudy.status,
 			surfaceShContentStatus: surfaceShContentStudy.status,
@@ -2808,8 +1635,8 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				space: 'material response and renderer output',
 				source: 'Standard material, Lambert debug, tone mapping, output color-space, and ACES exposure sweep rows',
 				promotionEligible: false,
-				currentGate: sealedPresentationStudy.status,
-				notes: 'Identifies presentation pressure; current exposure delta makes it unsafe as a promotion metric.'
+				currentGate: sealedPresentationStudy.summary.colorMappingDiagnostic?.status ?? sealedPresentationStudy.status,
+				notes: 'Identifies presentation pressure; tone mapping / exposure / output color-space deltas are diagnostic-only and cannot block scene-linear material/probe promotion.'
 			},
 			{
 				key: 'presentationMaskedCanvasRatio',
@@ -2831,6 +1658,9 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			diagnosticOnlyMetricCount: 2,
 			sceneLinearTargetGate: sealedPresentationStudy.summary.offscreenSceneLinearTarget.status,
 			contributionGate: sealedPresentationStudy.summary.offscreenSceneLinearContributionGate.status,
+			probeContentContributionAttributionGate: probeContentContributionAttribution.status,
+			materialPathGate: sealedPresentationStudy.status,
+			colorMappingDiagnosticGate: sealedPresentationStudy.summary.colorMappingDiagnostic?.status ?? 'UNAVAILABLE',
 			presentationGateUse: 'DIAGNOSTIC-ONLY',
 			chebyshevTuning: 'UNCHANGED'
 		}
@@ -3006,6 +1836,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			sealedShContributionDiagnostic,
 			probeContentChromaStudy,
 			probeBakeContaminationMap,
+			probeContentContributionAttribution,
 			probeDensityMetricStudy,
 			sealedReceiverSurfaceQuadratureDiagnostic,
 			sealedReceiverGpuDebugDiagnostic,

@@ -2,6 +2,11 @@ import * as THREE from 'three/webgpu';
 import { createLightProbeGridGPUOracleDiagnostics } from './LightProbeGridGPUOracleDiagnostics.js';
 import { createLightProbeGridGPUReceiverDiagnostics } from './LightProbeGridGPUReceiverDiagnostics.js';
 import { createLightProbeGridGPUShDiagnostics } from './LightProbeGridGPUShDiagnostics.js';
+import {
+	readLightProbeGridGPUProbeCoefficients,
+	readLightProbeGridGPUVisibilityMoment
+} from './lightprobegridgpu/LightProbeGridGPUProofReadback.js';
+import { getLightProbeGridGPUProbeIndex } from './lightprobegridgpu/LightProbeGridGPUAtlas.js';
 
 export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) {
 
@@ -42,83 +47,10 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			threshold: hitConfidenceThreshold
 		};
 		const dividerX = _lightProbeContext.leakFixture !== null ? _lightProbeContext.leakFixture.thinDivider.position.x : - 0.8667;
-		const componentNames = [ 'r', 'g', 'b', 'a' ];
 		const dividerBox = new THREE.Box3();
 		const dividerRay = new THREE.Ray();
 		const dividerRayDirection = new THREE.Vector3();
 		const dividerIntersectionPoint = new THREE.Vector3();
-		const decodeReadbackValue = ( value, data ) => data instanceof Uint16Array ?
-			THREE.DataUtils.fromHalfFloat( value ) :
-			value;
-		const octahedralUvFromDirection = ( direction ) => {
-
-			const denominator = Math.max(
-				Math.abs( direction.x ) + Math.abs( direction.y ) + Math.abs( direction.z ),
-				0.0001
-			);
-			let x = direction.x / denominator;
-			let y = direction.y / denominator;
-
-			if ( direction.z < 0 ) {
-
-				const foldedX = ( 1 - Math.abs( y ) ) * ( x >= 0 ? 1 : - 1 );
-				const foldedY = ( 1 - Math.abs( x ) ) * ( y >= 0 ? 1 : - 1 );
-				x = foldedX;
-				y = foldedY;
-
-			}
-
-			return {
-				x: x * 0.5 + 0.5,
-				y: y * 0.5 + 0.5
-			};
-
-		};
-
-		const readVisibilityMoment = async ( direction, probeIndex ) => {
-
-			const octUv = octahedralUvFromDirection( direction );
-			const visibilityResolution = _lightProbeContext.probeGrid.visibilityDepthResolution ?? 0;
-			const target = _lightProbeContext.probeGrid.visibilityDepthTarget ?? null;
-			const x = visibilityResolution > 0 ? Math.max( 0, Math.min( visibilityResolution - 1, Math.floor( octUv.x * visibilityResolution ) ) ) : 0;
-			const y = visibilityResolution > 0 ? Math.max( 0, Math.min( visibilityResolution - 1, Math.floor( octUv.y * visibilityResolution ) ) ) : 0;
-
-			if ( target === null || visibilityResolution <= 0 ) {
-
-				return {
-					x,
-					y,
-					meanDistance: Number.POSITIVE_INFINITY,
-					meanSquaredDistance: Number.POSITIVE_INFINITY,
-					variance: minVariance,
-					hitConfidence: 0,
-					validity: 1,
-					backfaceConfidence: 0,
-					momentEncoding: 'unavailable'
-				};
-
-			}
-
-			const data = await _lightProbeContext.renderer.readRenderTargetPixelsAsync( target, x, y, 1, 1, 0, probeIndex );
-			const values = componentNames.map( ( _, index ) => decodeReadbackValue( data[ index ], data ) );
-			const meanDistance = values[ 0 ];
-			const meanSquaredDistance = values[ 1 ];
-			const variance = Math.max( meanSquaredDistance - meanDistance * meanDistance, minVariance );
-
-			return {
-				x,
-				y,
-				meanDistance,
-				meanSquaredDistance,
-				variance,
-				hitConfidence: values[ 2 ],
-				validity: 1,
-				backfaceConfidence: values[ 3 ],
-				momentEncoding: 'radial-distance'
-			};
-
-		};
-
 		const probeCoefficientCache = new Map();
 		let probeValidity = null;
 		let probeSourceMap = null;
@@ -423,41 +355,12 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 			if ( probeCoefficientCache.has( probeIndex ) ) return probeCoefficientCache.get( probeIndex );
 
-			const x = probeIndex % resolution;
-			const y = Math.floor( probeIndex / resolution ) % resolution;
-			const z = Math.floor( probeIndex / ( resolution * resolution ) );
-			const samples = [];
-
-			for ( let textureIndex = 0; textureIndex < 7; textureIndex ++ ) {
-
-				const layer = _lightProbeContext.probeGrid._getPackedAtlasLayer( textureIndex, z );
-				const data = await _lightProbeContext.renderer.readRenderTargetPixelsAsync( _lightProbeContext.probeGrid.atlasTarget, x, y, 1, 1, 0, layer );
-				samples.push( componentNames.map( ( _, index ) => decodeReadbackValue( data[ index ], data ) ) );
-
-			}
-
-			const coefficients = [
-				{ r: samples[ 0 ][ 0 ], g: samples[ 0 ][ 1 ], b: samples[ 0 ][ 2 ] },
-				{ r: samples[ 0 ][ 3 ], g: samples[ 1 ][ 0 ], b: samples[ 1 ][ 1 ] },
-				{ r: samples[ 1 ][ 2 ], g: samples[ 1 ][ 3 ], b: samples[ 2 ][ 0 ] },
-				{ r: samples[ 2 ][ 1 ], g: samples[ 2 ][ 2 ], b: samples[ 2 ][ 3 ] },
-				{ r: samples[ 3 ][ 0 ], g: samples[ 3 ][ 1 ], b: samples[ 3 ][ 2 ] },
-				{ r: samples[ 3 ][ 3 ], g: samples[ 4 ][ 0 ], b: samples[ 4 ][ 1 ] },
-				{ r: samples[ 4 ][ 2 ], g: samples[ 4 ][ 3 ], b: samples[ 5 ][ 0 ] },
-				{ r: samples[ 5 ][ 1 ], g: samples[ 5 ][ 2 ], b: samples[ 5 ][ 3 ] },
-				{ r: samples[ 6 ][ 0 ], g: samples[ 6 ][ 1 ], b: samples[ 6 ][ 2 ] }
-			];
-			const result = {
+			const result = await readLightProbeGridGPUProbeCoefficients(
+				_lightProbeContext.renderer,
+				_lightProbeContext.probeGrid,
 				probeIndex,
-				coord: { x, y, z },
-				coefficients,
-				validity: samples[ 6 ][ 3 ],
-				l0Irradiance: {
-					r: coefficients[ 0 ].r * 0.886227,
-					g: coefficients[ 0 ].g * 0.886227,
-					b: coefficients[ 0 ].b * 0.886227
-				}
-			};
+				resolution
+			);
 
 			probeCoefficientCache.set( probeIndex, result );
 
@@ -721,14 +624,20 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				for ( const neighbor of neighbors ) {
 
 					const [ x, y, z ] = neighbor.coord;
-					const probeIndex = x + y * resolution + z * resolution * resolution;
+					const probeIndex = getLightProbeGridGPUProbeIndex( x, y, z, resolution );
 					_lightProbeContext.getGridProbePosition( probeIndex, resolution, probePosition );
 					probeDirection.subVectors( probePosition, receiverPosition ).normalize();
 					receiverVector.subVectors( runtimeVisibilityReceiverPosition, probePosition );
 
 					const receiverDistance = receiverVector.length();
 					const receiverDirection = receiverVector.clone().normalize();
-					const moment = await readVisibilityMoment( receiverDirection, probeIndex );
+					const moment = await readLightProbeGridGPUVisibilityMoment(
+						_lightProbeContext.renderer,
+						_lightProbeContext.probeGrid,
+						receiverDirection,
+						probeIndex,
+						minVariance
+					);
 					const delta = Math.max( receiverDistance - moment.meanDistance - runtimeVisibilityDistanceBias, 0 );
 					const chebyshevVisibility = moment.variance / ( moment.variance + delta * delta );
 					const momentVisibility = chebyshevVisibility;

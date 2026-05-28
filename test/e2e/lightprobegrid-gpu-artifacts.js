@@ -1,7 +1,22 @@
 import { Image } from './image.js';
+import {
+	hasBatch,
+	hasFiniteCountHistograms,
+	hasUniqueExactIds,
+	isFiniteCountHistogram,
+	matchesMappedBakeContentOracleRows,
+	matchesUnmappedCoefficientInstrumentationRows,
+	sameCountHistogramBy,
+	studyRows
+} from './lightprobegrid-gpu-artifact-assertion-helpers.js';
+import { assertLightProbePerformanceEvidenceContract } from './lightprobegrid-gpu-artifact-performance-assertions.js';
 import { createLightProbeImageArtifactPressure, captureLightProbeImageRegions } from './lightprobegrid-gpu-image-metrics.js';
 import { createLightProbeProofMarkdown } from './lightprobegrid-gpu-proof-markdown.js';
 import { createLightProbeProofReport } from './lightprobegrid-gpu-proof-report.js';
+import {
+	roundMetric,
+	sumRequiredMetricBy as roundedRowSum
+} from './lightprobegrid-gpu-report-metrics.js';
 import { deriveVisibilityProofStatus, isMomentBackedVisibility } from './lightprobegrid-gpu-proof-visibility.js';
 import {
 	assertLightProbeProof,
@@ -16,139 +31,6 @@ import {
 } from './lightprobegrid-gpu-smoke-config.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-
-const isPlainFiniteHistogram = histogram =>
-	histogram !== null &&
-	Array.isArray( histogram ) === false &&
-	typeof histogram === 'object' &&
-	Object.values( histogram ).every( value => Number.isFinite( value ) );
-
-const histogramSum = histogram =>
-	Object.values( histogram ).reduce( ( sum, value ) => sum + value, 0 );
-
-const countHistogram = ( rows, key ) => rows.reduce( ( histogram, row ) => {
-
-	const value = String( row[ key ] ?? 'none' );
-	histogram[ value ] = ( histogram[ value ] ?? 0 ) + 1;
-	return histogram;
-
-}, {} );
-
-const sameCountHistogram = ( actual, expected ) =>
-	isPlainFiniteHistogram( actual ) &&
-	Object.keys( actual ).length === Object.keys( expected ).length &&
-	Object.entries( expected ).every( ( [ key, value ] ) => actual[ key ] === value );
-
-const roundMetric = value => Number( value.toFixed( 4 ) );
-
-const roundedRowSum = ( rows, key ) =>
-	roundMetric( rows.reduce( ( total, row ) => total + row[ key ], 0 ) );
-
-const isFiniteCountHistogram = ( histogram, expectedSum ) =>
-	isPlainFiniteHistogram( histogram ) &&
-	( expectedSum === 0 || Object.keys( histogram ).length > 0 ) &&
-	Object.values( histogram ).every( value => Number.isInteger( value ) && value >= 0 ) &&
-	histogramSum( histogram ) === expectedSum;
-
-const hasUniqueExactIds = ( rows, ids ) =>
-	Array.isArray( rows ) &&
-	rows.length === ids.length &&
-	new Set( rows.map( row => row.id ?? row.branch ) ).size === ids.length &&
-	ids.every( id => rows.some( row => ( row.id ?? row.branch ) === id ) );
-
-const hasBatch = ( spec, id ) => spec.batches.some( batch => batch.id === id );
-
-const sameUniqueRowKeys = ( actualRows, expectedRows ) => {
-
-	const actualKeys = actualRows.map( row => `${ row.receiver }/${ row.sampleLabel }` );
-	const expectedKeys = expectedRows.map( row => `${ row.receiver }/${ row.sampleLabel }` );
-	if ( new Set( actualKeys ).size !== actualKeys.length ) return false;
-	if ( new Set( expectedKeys ).size !== expectedKeys.length ) return false;
-	if ( actualKeys.length !== expectedKeys.length ) return false;
-	const expectedKeySet = new Set( expectedKeys );
-	return actualKeys.every( key => expectedKeySet.has( key ) );
-
-};
-
-const matchesMappedBakeContentOracleRows = ( oracleRows, splitRows ) => {
-
-	if ( oracleRows.length !== splitRows.length ) return false;
-	if ( sameUniqueRowKeys( oracleRows, splitRows ) === false ) return false;
-
-	const splitRowsBySample = new Map( splitRows.map( row => [ `${ row.receiver }/${ row.sampleLabel }`, row ] ) );
-	return oracleRows.every( row => {
-
-		const splitRow = splitRowsBySample.get( `${ row.receiver }/${ row.sampleLabel }` );
-		return splitRow !== undefined &&
-			row.mappedToContentPressure === splitRow.mappedToContentPressure &&
-			row.contentProbeIndex === splitRow.contentDominantProbeIndex &&
-			row.contentDominantBand === splitRow.contentDominantBand &&
-			row.contentDominantPressure === splitRow.contentDominantPressure &&
-			row.contentDominantWeightedPressure === splitRow.contentDominantWeightedPressure &&
-			row.contentPressureAttributionRowCount === splitRow.contentPressureAttributionRowCount &&
-			row.attributionProbeIndex === splitRow.attributionDominantProbeIndex &&
-			row.attributionSourceProbeIndex === splitRow.attributionDominantSourceProbeIndex &&
-			row.attributionProbeRelationToReceiver === splitRow.attributionProbeRelationToReceiver &&
-			row.attributionSourceRelationToReceiver === splitRow.attributionSourceRelationToReceiver &&
-			row.attributionSourceSide === splitRow.attributionSourceSide &&
-			row.attributionDilationSourceDiffers === splitRow.attributionDilationSourceDiffers &&
-			row.attributionSourceValidity === splitRow.attributionSourceValidity &&
-			row.attributionRuntimeFinalWeight === splitRow.attributionRuntimeFinalWeight &&
-			row.attributionDominantBand === splitRow.attributionDominantBand &&
-			row.attributionDominantCoefficient === splitRow.attributionDominantCoefficient &&
-			row.attributionDominantCoefficientBand === splitRow.attributionDominantCoefficientBand &&
-			row.attributionDominantCoefficientWrongMinusCorrect === splitRow.attributionDominantCoefficientWrongMinusCorrect &&
-			row.attributionWrongChannelPressure === splitRow.attributionWrongChannelPressure &&
-			row.attributionCorrectChannelPreservation === splitRow.attributionCorrectChannelPreservation &&
-			row.runtimeWrongOverCorrect === splitRow.runtimeWrongOverCorrect;
-
-	} );
-
-};
-
-const matchesUnmappedCoefficientInstrumentationRows = ( instrumentationRows, splitRows ) => {
-
-	if ( instrumentationRows.length !== splitRows.length ) return false;
-	if ( sameUniqueRowKeys( instrumentationRows, splitRows ) === false ) return false;
-
-	const splitRowsBySample = new Map( splitRows.map( row => [ `${ row.receiver }/${ row.sampleLabel }`, row ] ) );
-	return instrumentationRows.every( row => {
-
-		const splitRow = splitRowsBySample.get( `${ row.receiver }/${ row.sampleLabel }` );
-		return splitRow !== undefined &&
-			row.mappedToContentPressure === splitRow.mappedToContentPressure &&
-			row.contentProbeIndex === splitRow.contentDominantProbeIndex &&
-			row.contentDominantBand === splitRow.contentDominantBand &&
-			row.contentDominantPressure === splitRow.contentDominantPressure &&
-			row.contentPressureAttributionRowCount === splitRow.contentPressureAttributionRowCount &&
-			row.attributionProbeIndex === splitRow.attributionDominantProbeIndex &&
-			row.attributionSourceProbeIndex === splitRow.attributionDominantSourceProbeIndex &&
-			row.attributionProbeRelationToReceiver === splitRow.attributionProbeRelationToReceiver &&
-			row.attributionSourceRelationToReceiver === splitRow.attributionSourceRelationToReceiver &&
-			row.attributionSourceSide === splitRow.attributionSourceSide &&
-			row.attributionDilationSourceDiffers === splitRow.attributionDilationSourceDiffers &&
-			row.attributionSourceValidity === splitRow.attributionSourceValidity &&
-			row.attributionRuntimeFinalWeight === splitRow.attributionRuntimeFinalWeight &&
-			row.attributionDominantBand === splitRow.attributionDominantBand &&
-			row.attributionDominantCoefficient === splitRow.attributionDominantCoefficient &&
-			row.attributionDominantCoefficientBand === splitRow.attributionDominantCoefficientBand &&
-			row.attributionDominantCoefficientWrongMinusCorrect === splitRow.attributionDominantCoefficientWrongMinusCorrect &&
-			row.attributionDominantDilatedCoefficient === splitRow.attributionDominantDilatedCoefficient &&
-			row.attributionDominantDilatedCoefficientBand === splitRow.attributionDominantDilatedCoefficientBand &&
-			row.attributionDominantDilatedCoefficientWrongMinusCorrect === splitRow.attributionDominantDilatedCoefficientWrongMinusCorrect &&
-			row.attributionWrongChannelPressure === splitRow.attributionWrongChannelPressure &&
-			row.attributionCorrectChannelPreservation === splitRow.attributionCorrectChannelPreservation &&
-			row.sourcePressureAttributionRowCount === splitRow.sourcePressureAttributionRowCount &&
-			row.sourcePressureProbeIndex === splitRow.sourcePressureProbeIndex &&
-			row.sourcePressureSourceProbeIndex === splitRow.sourcePressureSourceProbeIndex &&
-			row.sourcePressureWrongChannelPressure === splitRow.sourcePressureWrongChannelPressure &&
-			row.sourcePressureDilatedWrongChannelPressure === splitRow.sourcePressureDilatedWrongChannelPressure &&
-			row.sourcePressureDilatedSourceWrongPressureDelta === splitRow.sourcePressureDilatedSourceWrongPressureDelta &&
-			row.runtimeWrongOverCorrect === splitRow.runtimeWrongOverCorrect;
-
-	} );
-
-};
 
 export async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness, smokeResults, options = {} ) {
 
@@ -201,13 +83,14 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 	validateLightProbeWebGLReference( file, webglReference );
 
 	const report = createLightProbeProofReport( file, smokeResults, snapshots, restored, webglReference );
-	const proof7cStudy = report.currentEvidence?.proof7cSurfaceStaticBlockerOracleStudy;
+	const currentEvidence = report.currentEvidence;
+	const proof7cStudy = currentEvidence?.proof7cSurfaceStaticBlockerOracleStudy;
 	const proof7cRows = proof7cStudy?.rows ?? [];
 	const proof7cBlockedReceivers = new Set( proof7cRows
 		.filter( row => row.staticBlocked === true )
 		.map( row => row.receiver )
 	);
-	const sdfStaticBlockerOracleStudy = report.currentEvidence?.probeBakeContaminationMap?.sdfStaticBlockerOracleStudy;
+	const sdfStaticBlockerOracleStudy = currentEvidence?.probeBakeContaminationMap?.sdfStaticBlockerOracleStudy;
 	const safeSdfAggregateReceivers = sdfStaticBlockerOracleStudy?.receiverRows
 		.filter( row =>
 			row.bestCandidateLabel !== 'none' &&
@@ -222,15 +105,12 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		proof7cBlockedReceivers.has( receiver )
 	) ) ].sort();
 	const reportedProof7cOverlapReceivers = [ ...( proof7cStudy?.summary?.overlappingSafeReceivers ?? [] ) ].sort();
-	const sameStringList = ( a, b ) =>
-		a.length === b.length &&
-		a.every( ( value, index ) => value === b[ index ] );
 	const proof7cStatus = proof7cStudy?.status;
 	const proof7cMissingAuditCount = proof7cStudy?.summary?.missingSurfacePathAuditCount;
 	const proof7cMissingAuditStatus = proof7cStatus === 'OPEN-PROOF-7C-SURFACE-STATIC-BLOCKER-MISSING-PATH-AUDIT';
-	const surfaceContentSplitStudy = report.currentEvidence.surfaceContentAttributionSplitStudy;
+	const surfaceContentSplitStudy = surfaceContentSplitStudy;
 	const surfaceContentSplitSummary = surfaceContentSplitStudy?.summary ?? {};
-	const surfaceContentSplitRows = Array.isArray( surfaceContentSplitStudy?.rows ) ? surfaceContentSplitStudy.rows : [];
+	const surfaceContentSplitRows = studyRows( surfaceContentSplitStudy );
 	const surfaceContentMappedRows = surfaceContentSplitRows.filter( row => row.mappedToContentPressure === true );
 	const surfaceContentUnmappedRows = surfaceContentSplitRows.filter( row => row.mappedToContentPressure === false );
 	const expectedSurfaceContentSplitStatus = surfaceContentSplitSummary.leakSampleCount === 0 ?
@@ -245,49 +125,31 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 	const expectedSurfaceContentMappedCoverage = surfaceContentSplitSummary.leakSampleCount > 0 ?
 		roundMetric( surfaceContentMappedRows.length / surfaceContentSplitSummary.leakSampleCount ) :
 		1;
-	const surfaceContentFollowupStudy = report.currentEvidence.surfaceContentAttributionFollowupStudy;
-	const surfaceContentFollowupRows = Array.isArray( surfaceContentFollowupStudy?.rows ) ? surfaceContentFollowupStudy.rows : [];
-	const mappedBakeContentSourcePolicyOracleStudy = report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy;
-	const mappedBakeContentSourcePolicyOracleRows = Array.isArray( mappedBakeContentSourcePolicyOracleStudy?.rows ) ?
-		mappedBakeContentSourcePolicyOracleStudy.rows :
-		[];
-	const unmappedCoefficientAttributionInstrumentationStudy = report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy;
-	const unmappedCoefficientAttributionInstrumentationRows = Array.isArray( unmappedCoefficientAttributionInstrumentationStudy?.rows ) ?
-		unmappedCoefficientAttributionInstrumentationStudy.rows :
-		[];
-	const aggregateExplanationComparisonStudy = report.currentEvidence.aggregateExplanationComparisonStudy;
-	const aggregateExplanationComparisonRows = Array.isArray( aggregateExplanationComparisonStudy?.rows ) ?
-		aggregateExplanationComparisonStudy.rows :
-		[];
-	const proof7bCoefficientL10OracleStudy = report.currentEvidence.proof7bCoefficientL10OracleStudy;
-	const proof7bCoefficientL10OracleRows = Array.isArray( proof7bCoefficientL10OracleStudy?.rows ) ?
-		proof7bCoefficientL10OracleStudy.rows :
-		[];
+	const surfaceContentFollowupStudy = surfaceContentFollowupStudy;
+	const surfaceContentFollowupRows = studyRows( surfaceContentFollowupStudy );
+	const mappedBakeContentSourcePolicyOracleStudy = mappedBakeContentSourcePolicyOracleStudy;
+	const mappedBakeContentSourcePolicyOracleRows = studyRows( mappedBakeContentSourcePolicyOracleStudy );
+	const unmappedCoefficientAttributionInstrumentationStudy = unmappedCoefficientAttributionInstrumentationStudy;
+	const unmappedCoefficientAttributionInstrumentationRows = studyRows( unmappedCoefficientAttributionInstrumentationStudy );
+	const aggregateExplanationComparisonStudy = aggregateExplanationComparisonStudy;
+	const aggregateExplanationComparisonRows = studyRows( aggregateExplanationComparisonStudy );
+	const proof7bCoefficientL10OracleStudy = proof7bCoefficientL10OracleStudy;
+	const proof7bCoefficientL10OracleRows = studyRows( proof7bCoefficientL10OracleStudy );
 	const probe50L10SignSourceIsolationOracleStudy =
-		report.currentEvidence.probe50L10SignSourceIsolationOracleStudy;
-	const probe50L10SignSourceIsolationRows = Array.isArray( probe50L10SignSourceIsolationOracleStudy?.rows ) ?
-		probe50L10SignSourceIsolationOracleStudy.rows :
-		[];
+		probe50L10SignSourceIsolationOracleStudy;
+	const probe50L10SignSourceIsolationRows = studyRows( probe50L10SignSourceIsolationOracleStudy );
 	const probe50L10ContentBasisPolarityOracleStudy =
-		report.currentEvidence.probe50L10ContentBasisPolarityOracleStudy;
-	const probe50L10ContentBasisPolarityRows = Array.isArray( probe50L10ContentBasisPolarityOracleStudy?.rows ) ?
-		probe50L10ContentBasisPolarityOracleStudy.rows :
-		[];
+		probe50L10ContentBasisPolarityOracleStudy;
+	const probe50L10ContentBasisPolarityRows = studyRows( probe50L10ContentBasisPolarityOracleStudy );
 	const probe50CoefficientLocalCorrectionOracleStudy =
-		report.currentEvidence.probe50CoefficientLocalCorrectionOracleStudy;
-	const probe50CoefficientLocalCorrectionRows = Array.isArray( probe50CoefficientLocalCorrectionOracleStudy?.rows ) ?
-		probe50CoefficientLocalCorrectionOracleStudy.rows :
-		[];
+		probe50CoefficientLocalCorrectionOracleStudy;
+	const probe50CoefficientLocalCorrectionRows = studyRows( probe50CoefficientLocalCorrectionOracleStudy );
 	const probe50LocalCorrectionAggregateResidualGuardStudy =
-		report.currentEvidence.probe50LocalCorrectionAggregateResidualGuardStudy;
-	const probe50LocalCorrectionAggregateResidualGuardRows = Array.isArray( probe50LocalCorrectionAggregateResidualGuardStudy?.rows ) ?
-		probe50LocalCorrectionAggregateResidualGuardStudy.rows :
-		[];
+		probe50LocalCorrectionAggregateResidualGuardStudy;
+	const probe50LocalCorrectionAggregateResidualGuardRows = studyRows( probe50LocalCorrectionAggregateResidualGuardStudy );
 	const probe50L10ZDesignBoundConstraintsStudy =
-		report.currentEvidence.probe50L10ZDesignBoundConstraintsStudy;
-	const probe50L10ZDesignBoundConstraintRows = Array.isArray( probe50L10ZDesignBoundConstraintsStudy?.rows ) ?
-		probe50L10ZDesignBoundConstraintsStudy.rows :
-		[];
+		probe50L10ZDesignBoundConstraintsStudy;
+	const probe50L10ZDesignBoundConstraintRows = studyRows( probe50L10ZDesignBoundConstraintsStudy );
 	const allAggregateExplanationRows = [
 		...mappedBakeContentSourcePolicyOracleRows,
 		...unmappedCoefficientAttributionInstrumentationRows
@@ -338,469 +200,302 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 				'CLOSED-PROOF-7C-DISPOSITION-NO-RUNTIME-PROMOTION' :
 				'OPEN-PROOF-7C-DISPOSITION-MISSING-EVIDENCE';
 	const expectedSurfaceContentFollowupStatus =
-		report.currentEvidence.surfaceContentAttributionSplitStudy?.status === 'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED' ?
+		surfaceContentSplitStudy?.status === 'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED' ?
 			'SUPPORTED-SURFACE-CONTENT-FOLLOWUP-BOUNDED' :
-			report.currentEvidence.surfaceContentAttributionSplitStudy?.status === 'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED' ?
+			surfaceContentSplitStudy?.status === 'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED' ?
 				'OPEN-SURFACE-CONTENT-FOLLOWUP-UNDER-INSTRUMENTED' :
 				surfaceContentMappedRows.length > 0 && surfaceContentUnmappedRows.length > 0 ?
 					'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' :
 					surfaceContentMappedRows.length > 0 ?
 						'OPEN-SURFACE-CONTENT-MAPPED-BUCKET-FOLLOWUP' :
 						'OPEN-SURFACE-CONTENT-UNMAPPED-BUCKET-FOLLOWUP';
+	const probeContentContributionAttribution = currentEvidence.probeContentContributionAttribution;
 	assertLightProbeProof( file, Array.isArray( report.artifactMatrix.rows ) &&
 		Array.isArray( report.regionMatrix.rows ) &&
 		report.artifactMatrix.rows.length > 0 &&
 		report.regionMatrix.rows.length > 0,
 	'grounding parity artifact: proof report must persist raw artifact and region matrices for auditability.' );
+	assertLightProbePerformanceEvidenceContract( file, currentEvidence, lightProbeWebGLReferenceLabel );
 	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.bakeTexelBudgetStatus === 'asserted' &&
-		report.currentEvidence.performanceEvidence.measuredTimingStatus === 'reported-not-gated' &&
-		report.currentEvidence.performanceEvidence.projectionShapeProfile?.status === 'OPEN-FRAGMENT-COEFFICIENT-PROJECTION-REDUNDANCY' &&
-		report.currentEvidence.performanceEvidence.projectionShapeProfile.coefficientPixelsPerProbe === 9 &&
-		report.currentEvidence.performanceEvidence.projectionShapeProfile.cubemapSweepsPerProbe === 9 &&
-		report.currentEvidence.performanceEvidence.projectionShapeProfile.computeCubemapSweepsPerProbe === 1 &&
-		report.currentEvidence.performanceEvidence.projectionShapeProfile.staticWorkReductionPercent === 88.8889 &&
-		report.currentEvidence.performanceEvidence.projectionShapeProfile.duplicatedCubemapIntegrationFactor === 9 &&
-		report.currentEvidence.performanceEvidence.snapshotBakeTimings.every( timing => timing > 0 ) &&
-		report.currentEvidence.webglReference?.label === lightProbeWebGLReferenceLabel,
-		'grounding parity artifact: proof report must keep cubemap texel budget as the performance gate, profile projection-shape redundancy, report positive non-gated bake timings, and persist the WebGL reference.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionDesignSketch?.status === 'DESIGN-SKETCH-IMPLEMENTED-AS-GUARDED-RUNTIME' &&
-		/guarded TSL compute node/i.test( report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.nonGoal ) &&
-		/current atlas repack input contract/i.test( report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.storageLayout.output ) &&
-		/one cubemap sweep per probe/i.test( report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.reductionContract.sweepCount ) &&
-		/current SH basis constants/i.test( report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.reductionContract.basisContract ) &&
-		/_repackAtlas/i.test( report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.outputPackingContract.coefficientRows ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.parityTolerance.maxCoefficientDelta === 0.0001 &&
-		report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.parityTolerance.fixtures.includes( 'face-asymmetric' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.fallbackBehavior.defaultPath === 'fragment-coefficient-projection' &&
-		report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.architectureDiagram.includes( 'flowchart LR' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionDesignSketch.architectureDiagram.some( line => /fragment fallback remains active/.test( line ) ),
-		'grounding parity artifact: compute projection design sketch must cover guarded runtime status, storage layout, reduction, packing, parity tolerance, architecture diagram, and fragment fallback.' );
-	assertLightProbeProof( file,
-		[ 'CAPTURED-RUNTIME-PARITY-EVIDENCE', 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ].includes( report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan?.status ) &&
-		/runtime/i.test( report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.runtimeBoundary ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.capturedEvidence.includes( 'compute-fixture-parity' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.capturedEvidence.includes( 'compute-atlas-repack-parity' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.capturedEvidence.includes( 'compute-adapter-fallback' ) &&
-		( report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.capturedEvidence.includes( 'compute-runtime-readback-parity' ) ||
-			report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.openEvidence.includes( 'compute-runtime-readback-parity' ) ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.requiredEvidence.length === 4 &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.requiredEvidence.some( evidence =>
-			evidence.id === 'compute-fixture-parity' &&
-			evidence.captureStatus === 'CAPTURED-PROOF-ONLY-MOCK-PASSING' &&
-			evidence.baseline === 'fragment-coefficient-projection' &&
-			evidence.candidate === 'compute-probe-reduction' &&
-			evidence.requiredFixtures.includes( 'face-asymmetric' ) &&
-			/0\.0001/.test( evidence.passCondition ) &&
-			evidence.actualMaxDelta <= 0.0001
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.requiredEvidence.some( evidence =>
-			evidence.id === 'compute-atlas-repack-parity' &&
-			evidence.captureStatus === 'CAPTURED-PROOF-ONLY-ATLAS-REPACK-PASSING' &&
-			/_repackAtlas/.test( evidence.baseline ) &&
-			/padding\/validity contracts/.test( evidence.passCondition ) &&
-			evidence.actualMaxDelta <= 0.008
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.requiredEvidence.some( evidence =>
-			evidence.id === 'compute-adapter-fallback' &&
-			evidence.captureStatus === 'CAPTURED-RUNTIME-GUARDED-ADAPTER-FALLBACK-PASSING' &&
-			evidence.baseline === 'fragment-coefficient-projection' &&
-			/unsupported adapters keep fragment-coefficient-projection/.test( evidence.passCondition ) &&
-			evidence.actualScenarioCount >= 4
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.requiredEvidence.some( evidence =>
-			evidence.id === 'compute-runtime-readback-parity' &&
-			[ 'CAPTURED-RUNTIME-READBACK-PASSING', 'OPEN-NOT-CAPTURED' ].includes( evidence.captureStatus ) &&
-			evidence.baseline === 'fragment-coefficient-projection' &&
-			evidence.candidate === 'compute-probe-reduction' &&
-			/runtime-low-res-cornell-coefficients/.test( evidence.requiredFixtures.join( ' ' ) ) &&
-			( evidence.captureStatus === 'OPEN-NOT-CAPTURED' ||
-				( evidence.actualCoefficientMaxDelta <= report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.coefficientTolerance &&
-					evidence.actualAtlasMaxDelta <= report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.atlasTolerance ) )
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.statusTransition.previous === 'PARITY-CANDIDATE-NOT-RUNTIME' &&
-		[ 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY', 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ].includes( report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.statusTransition.current ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.statusTransition.nextRuntime === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-		report.currentEvidence.performanceEvidence.computeProjectionParityEvidencePlan.statusTransition.promoted === 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
-		'grounding parity artifact: compute projection parity evidence plan must specify fixture parity, atlas repack parity, adapter fallback, runtime readback, and status transition.' );
-	assertLightProbeProof( file,
-		[ 'RUNTIME-PARITY-EVIDENCE-CAPTURED', 'GUARDED-RUNTIME-IMPLEMENTED-PARITY-PENDING' ].includes( report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard?.status ) &&
-		[ 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY', 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ].includes( report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.currentContractStatus ) &&
-		[ 'CAPTURED-RUNTIME-PARITY-EVIDENCE', 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ].includes( report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.evidencePlanStatus ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.allowedNextContractStatus === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-		report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.runtimeStatusRequired === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-		report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.runtimeMarkersAllowed === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.publicApiChangeAllowed === false &&
-		report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.blockedRuntimeMarkers.includes( 'computeProjectionPipeline' ) &&
-		/IMPLEMENTED-WITH-PARITY-EVIDENCE|IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY/.test( report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.guardRule ) &&
-		/runtime parity readback|coefficients and atlas repack/.test( report.currentEvidence.performanceEvidence.computeProjectionStatusTransitionGuard.promotionBoundary ),
-		'grounding parity artifact: compute projection transition guard must record runtime parity evidence while retaining fallback boundaries.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign?.status === 'CANDIDATE-DESIGN-NOTE-PROOF-ONLY' &&
-		/does not introduce hand-written WGSL/.test( report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.nonGoal ) &&
-		/one logical dispatch group per probe/.test( report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.dispatchShape.unit ) &&
-		/c0\.\.c8 RGB/.test( report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.dispatchShape.work ) &&
-		/_repackAtlas/.test( report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.storageLayout.output ) &&
-		/4π \/ totalWeight/.test( report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.workgroupStrategy.phase3 ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.outputContract.parityInputs.includes( 'compute-adapter-fallback' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.fallbackBranch.default === 'fragment-coefficient-projection' &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.fallbackBranch.candidate === 'compute-probe-reduction' &&
-		/IMPLEMENTED-WITH-PARITY-EVIDENCE/.test( report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.fallbackBranch.rule ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.precisionBehavior.coefficientTolerance === 0.0001 &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateImplementationDesign.precisionBehavior.atlasReadbackTolerance === 0.008,
-		'grounding parity artifact: compute projection candidate design note must specify dispatch, storage, workgroup, output, fallback, and precision behavior.' );
-	assertLightProbeProof( file,
-		[ 'RUNTIME-PARITY-READBACK-PASSING', 'RUNTIME-IMPLEMENTED-PARITY-READBACK-PENDING' ].includes( report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist?.status ) &&
-		/guarded compute projection runtime path|readback-validated/.test( report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.verdict ) &&
-		[ 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY', 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ].includes( report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.currentContractStatus ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.requiredRuntimeStatus === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.runtimeMarkersAllowed === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.publicApiChangeAllowed === false &&
-		typeof report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.proofOnlyDone === 'boolean' &&
-		typeof report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.runtimeDone === 'boolean' &&
-		typeof report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.runtimeParityReadbackDone === 'boolean' &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.completedPhases.some( phase => phase.id === 'contract-gate' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.completedPhases.some( phase => phase.id === 'atlas-repack-parity' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.blockersBeforeRuntime.some( blocker => blocker.id === 'wgsl-compute-entrypoint' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.blockersBeforeRuntime.some( blocker =>
-			blocker.id === 'actual-runtime-parity-readback' &&
-			[ 'PASSED-BROWSER-E2E', 'PENDING-BROWSER-E2E' ].includes( blocker.status ) &&
-			/actual compute output|read back/.test( blocker.reason )
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.completionDefinition.nextLegalState === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-		report.currentEvidence.performanceEvidence.computeProjectionImplementationReadinessChecklist.phaseDiagram.includes( 'flowchart TD' ),
-		'grounding parity artifact: compute projection implementation readiness checklist must record guarded runtime implementation and runtime parity readback state.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle?.status === 'PROOF-ONLY-MOCK-PARITY-PASSING' &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.runtimePathIntroduced === false &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.baselinePath === 'fragment-coefficient-projection' &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.candidatePath === 'compute-probe-reduction' &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.baselineCubemapSweepsPerProbe === 9 &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.candidateCubemapSweepsPerProbe === 1 &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.maxCandidateToFragmentDelta <=
-			report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.tolerance &&
-		report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.fixtures.every( fixture =>
-			fixture.candidateToFragmentDelta <= report.currentEvidence.performanceEvidence.computeProjectionCandidateOracle.tolerance ),
-		'grounding parity artifact: proof-only compute projection candidate oracle must pass synthetic fixture parity without introducing runtime.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle?.status === 'RUNTIME-GUARDED-ADAPTER-FALLBACK-SPEC-PASSING' &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.runtimePathIntroduced === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.publicApiChanged === false &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.defaultPath === 'fragment-coefficient-projection' &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.candidatePath === 'compute-probe-reduction' &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.scenarios.some( scenario =>
-			scenario.label === 'runtime-implemented-adapter-supported' &&
-			scenario.contractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' &&
-			scenario.selectedPath === 'compute-probe-reduction' &&
-			scenario.fallbackUsed === false
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.scenarios.some( scenario =>
-			scenario.label === 'unsupported-compute-capability' &&
-			scenario.selectedPath === 'fragment-coefficient-projection' &&
-			scenario.fallbackUsed === true
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.scenarios.some( scenario =>
-			scenario.label === 'unsupported-storage-texture-capability' &&
-			scenario.selectedPath === 'fragment-coefficient-projection' &&
-			scenario.fallbackUsed === true
-		) &&
-		report.currentEvidence.performanceEvidence.computeProjectionAdapterFallbackOracle.scenarios.some( scenario =>
-			scenario.label === 'promoted-supported-candidate' &&
-			scenario.selectedPath === 'compute-probe-reduction' &&
-			scenario.fallbackUsed === false
-		),
-		'grounding parity artifact: guarded compute adapter fallback oracle must select compute only when runtime is implemented and capabilities exist.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle?.status === 'PROOF-ONLY-ATLAS-REPACK-PARITY-PASSING' &&
-		report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle.runtimePathIntroduced === false &&
-		report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle.sourcePath === 'compute-written coefficientTarget-compatible rows' &&
-		report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle.repackPath === '_repackAtlas' &&
-		report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle.maxReadbackDelta <=
-			report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle.readbackTolerance &&
-		report.currentEvidence.performanceEvidence.computeProjectionAtlasRepackOracle.openEvidenceAfterPass.includes( 'compute-adapter-fallback' ),
-		'grounding parity artifact: proof-only compute atlas repack oracle must prove candidate rows survive existing atlas packing while adapter fallback remains open.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence?.status === 'RUNTIME-PARITY-READBACK-PASSING' &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.baselinePath === 'fragment-coefficient-projection' &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.candidatePath === 'compute-probe-reduction' &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.computeBackend === 'compute-probe-reduction' &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.computeFallbackReason === null &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.coefficientPass === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.atlasPass === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.tolerancePass === true &&
-		Number.isFinite( report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.coefficientTolerance ) &&
-		Number.isFinite( report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.atlasTolerance ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.coefficientMaxDelta <= report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.coefficientTolerance &&
-		report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.atlasMaxDelta <= report.currentEvidence.performanceEvidence.computeProjectionRuntimeParityEvidence.atlasTolerance,
-		'grounding parity artifact: runtime compute projection parity evidence must pass coefficients, atlas repack, and tolerance validation against fragment projection.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence?.status === 'DIAGNOSTIC-PROJECTION-PROFILE-CAPTURED' &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.timingPolicy === 'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.timingGated === false &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.gpuTimerQueryStatus === 'NOT-CAPTURED' &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.projectionPhaseTimingStatus === 'CAPTURED-NON-DETERMINISTIC-PERFORMANCE-NOW' &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.projectionTimingSources.includes( 'non-deterministic-performance-now' ) &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.staticWork.fragmentTexelVisits === 6912 &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.staticWork.computeTexelVisits === 768 &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.staticWork.savedTexelVisits === 6144 &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.staticWork.reductionPercent === 88.8889 &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.fragment.allRunsSelectedExpectedBackend === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.compute.allRunsSelectedExpectedBackend === true &&
-		report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.compute.fallbackReasons.length === 0 &&
-		Number.isFinite( report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.fragment.projectionMs.median ) &&
-		Number.isFinite( report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.compute.projectionMs.median ) &&
-		Number.isFinite( report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.fragment.totalBakeMs.median ) &&
-		Number.isFinite( report.currentEvidence.performanceEvidence.computeProjectionProfilingEvidence.compute.totalBakeMs.median ),
-		'grounding parity artifact: compute projection profiling evidence must capture forced fragment/compute diagnostic timing while preserving the no-GPU-timer claim boundary.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.revisionTaskBacklog.tasks.some( task =>
-			task.id === 'runtime-3' &&
-			task.status === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-			/compute projection/i.test( `${ task.title } ${ task.output } ${ task.gate }` ) &&
-			/browser\/runtime readback|browser readback/.test( `${ task.output } ${ task.gate }` )
-		),
-		'grounding parity artifact: compute projection runtime must be guarded and backed by actual parity readback, not an unverified full promotion.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.revisionTaskBacklog.tasks.some( task =>
-			task.id === 'runtime-4' &&
-			task.status === 'RUNTIME-PARITY-READBACK-PASSING' &&
-			/compute projection candidate readiness checklist/i.test( task.title ) &&
-			/guarded runtime implementation/.test( task.output ) &&
-			/passing actual runtime parity readback/.test( task.output ) &&
-			/fragment fallback/.test( task.gate )
-		),
-		'grounding parity artifact: compute projection runtime readiness must be implemented with passing parity readback and retained fragment fallback.' );
-	assertLightProbeProof( file,
-		report.currentEvidence.wgpuLeakAuditStudy !== undefined &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.wgpuLeakAuditStudy.status ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.variants.length === 4 &&
-		report.currentEvidence.wgpuLeakAuditStudy.receivers.length === 2 &&
-		report.currentEvidence.wgpuLeakAuditStudy.receivers.every( receiver => receiver.rows.length === 8 ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.receivers.every( receiver => Number.isFinite( receiver.maskedRegionWrongOverCorrect ) ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.receivers.every( receiver => receiver.rows.every( row =>
+		currentEvidence.wgpuLeakAuditStudy !== undefined &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.wgpuLeakAuditStudy.status ) &&
+		currentEvidence.wgpuLeakAuditStudy.variants.length === 4 &&
+		currentEvidence.wgpuLeakAuditStudy.receivers.length === 2 &&
+		currentEvidence.wgpuLeakAuditStudy.receivers.every( receiver => receiver.rows.length === 8 ) &&
+		currentEvidence.wgpuLeakAuditStudy.receivers.every( receiver => Number.isFinite( receiver.maskedRegionWrongOverCorrect ) ) &&
+		currentEvidence.wgpuLeakAuditStudy.receivers.every( receiver => receiver.rows.every( row =>
 			Number.isFinite( row.cpuChromaWrongMinusCorrect ) &&
 			Number.isFinite( row.cpuL0ChromaWrongMinusCorrect ) &&
 			typeof row.sourceRelationToReceiver === 'string' &&
 			Number.isFinite( row.sourceValidity ) ) ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.variants.every( variant => Number.isFinite( variant.maskedWrongSideColorRatio ) ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.variants.some( variant => variant.role === 'validity-only' ) &&
+		currentEvidence.wgpuLeakAuditStudy.variants.every( variant => Number.isFinite( variant.maskedWrongSideColorRatio ) ) &&
+		currentEvidence.wgpuLeakAuditStudy.variants.some( variant => variant.role === 'validity-only' ) &&
 
-		report.currentEvidence.wgpuLeakAuditStudy.variants.some( variant => variant.role === 'visibility-scaffold-disabled' ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.variants.some( variant => variant.role === 'zero-thickness-control' ) &&
-		report.currentEvidence.wgpuLeakAuditStudy.verdict.chebyshevTuning === 'UNCHANGED' &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.wgpuLeakAuditStudy.verdict.cpuGpuLinearGate ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.wgpuLeakAuditStudy.verdict.weightTermGate ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.wgpuLeakAuditStudy.verdict.cpuRenderAgreementGate ),
+		currentEvidence.wgpuLeakAuditStudy.variants.some( variant => variant.role === 'visibility-scaffold-disabled' ) &&
+		currentEvidence.wgpuLeakAuditStudy.variants.some( variant => variant.role === 'zero-thickness-control' ) &&
+		currentEvidence.wgpuLeakAuditStudy.verdict.chebyshevTuning === 'UNCHANGED' &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.wgpuLeakAuditStudy.verdict.cpuGpuLinearGate ) &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.wgpuLeakAuditStudy.verdict.weightTermGate ) &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.wgpuLeakAuditStudy.verdict.cpuRenderAgreementGate ),
 		'grounding parity artifact: proof report must persist the WebGPU leak audit study with all required leak variants and per-neighbor rows.' );
-	const momentBackedVisibility = isMomentBackedVisibility( report.currentEvidence.visibilityMomentInspection );
+	const momentBackedVisibility = isMomentBackedVisibility( currentEvidence.visibilityMomentInspection );
 	const derivedVisibilityStatus = deriveVisibilityProofStatus(
-		report.currentEvidence.visibilityMomentInspection,
-		report.currentEvidence.visibilityMomentInspection.evidenceStatus
+		currentEvidence.visibilityMomentInspection,
+		currentEvidence.visibilityMomentInspection.evidenceStatus
 	);
 	assertLightProbeProof( file,
-		report.currentEvidence.ddgiVisibilityDepthSpec !== undefined &&
-		report.currentEvidence.ddgiVisibilityDepthSpec.momentBacked === momentBackedVisibility &&
-		report.currentEvidence.ddgiVisibilityDepthSpec.status === derivedVisibilityStatus.ddgiStatus &&
-		report.currentEvidence.visibilityLabel === derivedVisibilityStatus.visibilityLabel &&
-		report.currentEvidence.visibilityStatus === derivedVisibilityStatus.visibilityStatus,
+		currentEvidence.ddgiVisibilityDepthSpec !== undefined &&
+		currentEvidence.ddgiVisibilityDepthSpec.momentBacked === momentBackedVisibility &&
+		currentEvidence.ddgiVisibilityDepthSpec.status === derivedVisibilityStatus.ddgiStatus &&
+		currentEvidence.visibilityLabel === derivedVisibilityStatus.visibilityLabel &&
+		currentEvidence.visibilityStatus === derivedVisibilityStatus.visibilityStatus,
 		'grounding parity artifact: proof report must not claim implemented DDGI-lite moments unless visibility readback is moment-backed.' );
 	assertLightProbeProof( file,
 		report.buildExecuted === false &&
 		typeof report.buildNotExecutedReason === 'string' &&
 		Array.isArray( report.testsExecuted ) &&
 		report.testsExecuted.includes( 'visibility moment inspection' ) &&
-		report.currentEvidence.finalColorDebugTargets?.directOnly === true &&
-		report.currentEvidence.finalColorDebugTargets?.indirectOnlySceneLinear === true &&
-		report.currentEvidence.finalColorDebugTargets?.indirectAfterAlbedo === true &&
-		report.currentEvidence.finalColorDebugTargets?.finalBeforeToneMapping === true &&
-		report.currentEvidence.finalColorDebugTargets?.finalAfterToneMapping === true &&
-		report.currentEvidence.finalColorDebugTargets?.receiverMaskOverlay === true &&
-		report.currentEvidence.projectionPath?.oldPathDescription === '9 coefficient pixels x cubemap sweep' &&
-		typeof report.currentEvidence.shGuard?.enabled === 'boolean',
+		currentEvidence.finalColorDebugTargets?.directOnly === true &&
+		currentEvidence.finalColorDebugTargets?.indirectOnlySceneLinear === true &&
+		currentEvidence.finalColorDebugTargets?.indirectAfterAlbedo === true &&
+		currentEvidence.finalColorDebugTargets?.finalBeforeToneMapping === true &&
+		currentEvidence.finalColorDebugTargets?.finalAfterToneMapping === true &&
+		currentEvidence.finalColorDebugTargets?.receiverMaskOverlay === true &&
+		currentEvidence.projectionPath?.oldPathDescription === '9 coefficient pixels x cubemap sweep' &&
+		typeof currentEvidence.shGuard?.enabled === 'boolean',
 		'grounding parity artifact: proof report must persist no-build policy, executed proof steps, presentation debug targets, projection path, and SH guard metadata.' );
 	assertLightProbeProof( file,
-		report.currentEvidence.metricTaxonomyStudy?.status === 'DEFINED-PROMOTION-METRIC-SPLIT' &&
-		report.currentEvidence.metricTaxonomyStudy.metrics.length >= 6 &&
-		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'cpuGpuLinearIrradiance' && metric.promotionEligible === true ) &&
-		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'offscreenSceneLinearTarget' && metric.promotionEligible === true ) &&
-		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'preToneMaskedVisiblePixels' && metric.promotionEligible === 'provisional' ) &&
-		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'presentationMaskedCanvasRatio' && metric.promotionEligible === false ) &&
-		typeof report.currentEvidence.metricTaxonomyStudy.gates.sceneLinearTargetGate === 'string' &&
-		typeof report.currentEvidence.metricTaxonomyStudy.gates.contributionGate === 'string' &&
-		report.currentEvidence.metricTaxonomyStudy.gates.presentationGateUse === 'DIAGNOSTIC-ONLY' &&
-		report.currentEvidence.metricTaxonomyStudy.gates.chebyshevTuning === 'UNCHANGED',
+		currentEvidence.metricTaxonomyStudy?.status === 'DEFINED-PROMOTION-METRIC-SPLIT' &&
+		currentEvidence.metricTaxonomyStudy.metrics.length >= 6 &&
+		currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'cpuGpuLinearIrradiance' && metric.promotionEligible === true ) &&
+		currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'offscreenSceneLinearTarget' && metric.promotionEligible === true ) &&
+		currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'preToneMaskedVisiblePixels' && metric.promotionEligible === 'provisional' ) &&
+		currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'presentationMaskedCanvasRatio' && metric.promotionEligible === false ) &&
+		typeof currentEvidence.metricTaxonomyStudy.gates.sceneLinearTargetGate === 'string' &&
+		typeof currentEvidence.metricTaxonomyStudy.gates.contributionGate === 'string' &&
+		typeof currentEvidence.metricTaxonomyStudy.gates.probeContentContributionAttributionGate === 'string' &&
+		currentEvidence.metricTaxonomyStudy.gates.presentationGateUse === 'DIAGNOSTIC-ONLY' &&
+		currentEvidence.metricTaxonomyStudy.gates.chebyshevTuning === 'UNCHANGED',
 		'grounding parity artifact: proof report must classify promotion-eligible, provisional, and presentation-only metric spaces before threshold tuning.' );
 	assertLightProbeProof( file,
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement !== undefined &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.status ) &&
-		[ 'probe-indirect-only-scene-linear-vs-cpu-surface-sh', 'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.mode ) &&
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.comparisonSourceLabel === 'runtime-probe-indirect-scene-linear' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.originalProbeOnlyAvailable === 'boolean' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.neutralProbeOnlyAvailable === 'boolean' &&
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.tolerance === report.currentEvidence.sealedRenderMetricMismatch.cpuRenderAgreementTolerance &&
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier !== undefined &&
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier.mode === 'receiver-mask-debug-runtime-albedo-lambert-bsdf-tone-map-classifier' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier.dominantMismatchSource === 'string' &&
-		report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStudy !== undefined &&
-		[ 'SUPPORTED-RECEIVER-PIXEL-CPU-GPU-PARITY', 'OPEN-RECEIVER-PIXEL-CPU-GPU-MISMATCH' ].includes( report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStudy.status ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityDominantMismatchSource === 'string' &&
-		report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStudy !== undefined &&
-		[ 'SUPPORTED-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-PARITY', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-MISMATCH', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-READBACK-FAILED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStudy.status ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorDominantMismatchSource === 'string' &&
-		Array.isArray( report.currentEvidence.leakComparisons.sealedWall.promotionBlockers ) &&
-		report.currentEvidence.leakComparisons.sealedWall.promotionRequirements.probeIndirectGate === 'SUPPORTED' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.diagnosticConclusion === 'string',
+		probeContentContributionAttribution !== undefined &&
+		[
+			'SUPPORTED-CONTRIBUTION-GATE-BOUNDED',
+			'OPEN-PROBE-CONTENT-BOUNCED-CHROMA-ATTRIBUTED',
+			'OPEN-PROBE-CONTENT-BOUNCED-CHROMA-PARTIAL',
+			'OPEN-CONTRIBUTION-ATTRIBUTION-UNDER-INSTRUMENTED'
+		].includes( probeContentContributionAttribution.status ) &&
+		probeContentContributionAttribution.mode === 'report-only-probe-content-contribution-attribution' &&
+		probeContentContributionAttribution.proofBoundary.includes( 'Report-only attribution' ) &&
+		probeContentContributionAttribution.proofBoundary.includes( 'does not change bake capture, runtime sampling, visibility moments' ) &&
+		probeContentContributionAttribution.runtimePromotionAllowed === false &&
+		probeContentContributionAttribution.summary.runtimePromotionAllowed === false &&
+		[ 'bounded', 'strong', 'partial', 'under-instrumented' ].includes(
+			probeContentContributionAttribution.summary.attributionStrength
+		) &&
+		typeof probeContentContributionAttribution.summary.probeContentExplainsContribution === 'boolean' &&
+		typeof probeContentContributionAttribution.summary.diagnosticConclusion === 'string' &&
+		/proof-only/i.test( probeContentContributionAttribution.summary.nextProofOnlyAction ) &&
+		probeContentContributionAttribution.currentGate.status ===
+			currentEvidence.sealedRenderMetricMismatch.presentation.offscreen.contributionGate.status &&
+		probeContentContributionAttribution.currentGate.dominantContributionSource ===
+			currentEvidence.sealedRenderMetricMismatch.presentation.offscreen.contributionGate.dominantContributionSource &&
+		Array.isArray( probeContentContributionAttribution.currentGate.blockerKeys ) &&
+		Array.isArray( probeContentContributionAttribution.openItems ) &&
+		probeContentContributionAttribution.openItems.every( item =>
+			typeof item.gate === 'string' &&
+			typeof item.status === 'string'
+		) &&
+		typeof probeContentContributionAttribution.clearedNonContentSources.receiverAlbedoCleared === 'boolean' &&
+		typeof probeContentContributionAttribution.clearedNonContentSources.directAmbientCleared === 'boolean' &&
+		probeContentContributionAttribution.contentEvidence.probeContentChromaStatus ===
+			currentEvidence.probeContentChromaStudy.status &&
+		probeContentContributionAttribution.contentEvidence.probeBakeContaminationStatus ===
+			currentEvidence.probeBakeContaminationMap.status &&
+		probeContentContributionAttribution.contentEvidence.surfaceShContentStatus ===
+			currentEvidence.surfaceShContentStudy.status &&
+		probeContentContributionAttribution.contentEvidence.surfaceContentAttributionSplitStatus ===
+			surfaceContentSplitStudy.status &&
+		probeContentContributionAttribution.contentEvidence.mappedLeakSampleCount ===
+			surfaceContentSplitStudy.summary.mappedLeakSampleCount &&
+		probeContentContributionAttribution.contentEvidence.unmappedLeakSampleCount ===
+			surfaceContentSplitStudy.summary.unmappedLeakSampleCount &&
+		Number.isFinite( probeContentContributionAttribution.contentEvidence.maxCorrectSideChromaPressure ) &&
+		Number.isFinite( probeContentContributionAttribution.contentEvidence.maxRuntimeFinalChromaPressure ) &&
+		Number.isFinite( probeContentContributionAttribution.contentEvidence.surfaceLeakSampleCount ) &&
+		Number.isFinite( probeContentContributionAttribution.contentEvidence.coefficientAttributionCoverageRatio ) &&
+		Number.isFinite( probeContentContributionAttribution.contentEvidence.mappedCoverageRatio ),
+		'grounding parity artifact: proof report must attribute the remaining contribution gate to probe-content evidence without authorizing runtime, visibility-moment, or Chebyshev changes.' );
+	assertLightProbeProof( file,
+		currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement !== undefined &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.status ) &&
+		[ 'probe-indirect-only-scene-linear-vs-cpu-surface-sh', 'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' ].includes( currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.mode ) &&
+		currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.comparisonSourceLabel === 'runtime-probe-indirect-scene-linear' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.originalProbeOnlyAvailable === 'boolean' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.neutralProbeOnlyAvailable === 'boolean' &&
+		currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.tolerance === currentEvidence.sealedRenderMetricMismatch.cpuRenderAgreementTolerance &&
+		currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier !== undefined &&
+		currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier.mode === 'receiver-mask-debug-runtime-albedo-lambert-bsdf-tone-map-classifier' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier.dominantMismatchSource === 'string' &&
+		currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStudy !== undefined &&
+		[ 'SUPPORTED-RECEIVER-PIXEL-CPU-GPU-PARITY', 'OPEN-RECEIVER-PIXEL-CPU-GPU-MISMATCH' ].includes( currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStudy.status ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.receiverPixelParityDominantMismatchSource === 'string' &&
+		currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStudy !== undefined &&
+		[ 'SUPPORTED-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-PARITY', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-MISMATCH', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-READBACK-FAILED' ].includes( currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStudy.status ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorDominantMismatchSource === 'string' &&
+		Array.isArray( currentEvidence.leakComparisons.sealedWall.promotionBlockers ) &&
+		currentEvidence.leakComparisons.sealedWall.promotionRequirements.probeIndirectGate === 'SUPPORTED' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.diagnosticConclusion === 'string',
 		'grounding parity artifact: proof report must isolate probe-only scene-linear render agreement before using presentation color as proof.' );
 	assertLightProbeProof( file,
-		report.currentEvidence.webglLeakReferenceStudy?.status === 'OPEN-NOT-COMPARABLE' &&
-		report.currentEvidence.webglLeakReferenceStudy.reference.label === lightProbeWebGLReferenceLabel &&
-		report.currentEvidence.webglLeakReferenceStudy.sealedWallAttempt.comparable === false &&
-		/non-comparable|sealed-wall|fixture|harness/i.test( report.currentEvidence.webglLeakReferenceStudy.sealedWallAttempt.reason ),
+		currentEvidence.webglLeakReferenceStudy?.status === 'OPEN-NOT-COMPARABLE' &&
+		currentEvidence.webglLeakReferenceStudy.reference.label === lightProbeWebGLReferenceLabel &&
+		currentEvidence.webglLeakReferenceStudy.sealedWallAttempt.comparable === false &&
+		/non-comparable|sealed-wall|fixture|harness/i.test( currentEvidence.webglLeakReferenceStudy.sealedWallAttempt.reason ),
 		'grounding parity artifact: WebGL leak reference must stay bounded and explicitly non-comparable when no trivial sealed-wall path exists.' );
 	assertLightProbeProof( file,
-		report.currentEvidence.researchRoadmapRevision?.status === 'REVISED-WGPU-FIRST' &&
-		report.currentEvidence.researchRoadmapRevision.literatureDecisions.some( item => /SixteenStudio.*not visibility proof/.test( item ) ) &&
-		report.currentEvidence.researchRoadmapRevision.literatureDecisions.some( item => /ZH3.*future compression/.test( item ) ) &&
-		report.currentEvidence.researchRoadmapRevision.nextRoadmap[ 0 ].includes( 'WebGPU leak audit' ),
+		currentEvidence.researchRoadmapRevision?.status === 'REVISED-WGPU-FIRST' &&
+		currentEvidence.researchRoadmapRevision.literatureDecisions.some( item => /SixteenStudio.*not visibility proof/.test( item ) ) &&
+		currentEvidence.researchRoadmapRevision.literatureDecisions.some( item => /ZH3.*future compression/.test( item ) ) &&
+		currentEvidence.researchRoadmapRevision.nextRoadmap[ 0 ].includes( 'WebGPU leak audit' ),
 		'grounding parity artifact: proof report must persist the revised literature and WebGPU-first roadmap.' );
 	assertLightProbeProof( file,
-		report.currentEvidence.sealedShContributionDiagnostic !== undefined &&
-		report.currentEvidence.probeContentChromaStudy !== undefined &&
-		[ 'OPEN-PROBE-CONTENT-CHROMA-PRESSURE', 'SUPPORTED-PROBE-CONTENT-CHROMA-BOUNDED' ].includes( report.currentEvidence.probeContentChromaStudy.status ) &&
-		Number.isFinite( report.currentEvidence.probeContentChromaStudy.summary.maxCorrectSideChromaPressure ) &&
-		report.currentEvidence.probeBakeContaminationMap !== undefined &&
+		currentEvidence.sealedShContributionDiagnostic !== undefined &&
+		currentEvidence.probeContentChromaStudy !== undefined &&
+		[ 'OPEN-PROBE-CONTENT-CHROMA-PRESSURE', 'SUPPORTED-PROBE-CONTENT-CHROMA-BOUNDED' ].includes( currentEvidence.probeContentChromaStudy.status ) &&
+		Number.isFinite( currentEvidence.probeContentChromaStudy.summary.maxCorrectSideChromaPressure ) &&
+		currentEvidence.probeBakeContaminationMap !== undefined &&
 		[
 			'OPEN-BAKE-CAPTURE-SIDE-WALL-VISIBILITY-BYPASS',
 			'OPEN-BAKE-CONTENT-DIRECTIONAL-CHROMA-PRESSURE',
 			'SUPPORTED-BAKE-CONTENT-CHROMA-BOUNDED'
-		].includes( report.currentEvidence.probeBakeContaminationMap.status ) &&
-		Number.isFinite( report.currentEvidence.probeBakeContaminationMap.summary.uniqueProbeCount ) &&
-		Number.isFinite( report.currentEvidence.probeBakeContaminationMap.summary.maxCorrectReceiverChromaPressure ) &&
-		typeof report.currentEvidence.probeBakeContaminationMap.summary.dominantProbeBandResponsibility === 'string' &&
-		Number.isFinite( report.currentEvidence.probeBakeContaminationMap.summary.directionalBandDominantProbeCount ) &&
-		report.currentEvidence.probeBakeContaminationMap.dominantProbeCoefficientStudy !== undefined &&
+		].includes( currentEvidence.probeBakeContaminationMap.status ) &&
+		Number.isFinite( currentEvidence.probeBakeContaminationMap.summary.uniqueProbeCount ) &&
+		Number.isFinite( currentEvidence.probeBakeContaminationMap.summary.maxCorrectReceiverChromaPressure ) &&
+		typeof currentEvidence.probeBakeContaminationMap.summary.dominantProbeBandResponsibility === 'string' &&
+		Number.isFinite( currentEvidence.probeBakeContaminationMap.summary.directionalBandDominantProbeCount ) &&
+		currentEvidence.probeBakeContaminationMap.dominantProbeCoefficientStudy !== undefined &&
 		[ 'OPEN-DOMINANT-SH-COEFFICIENT-LOBE-DRIVERS', 'SUPPORTED-NO-DOMINANT-SH-COEFFICIENT-DRIVERS' ].includes(
-			report.currentEvidence.probeBakeContaminationMap.dominantProbeCoefficientStudy.status
+			currentEvidence.probeBakeContaminationMap.dominantProbeCoefficientStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.shDampingOracleStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.shDampingOracleStudy !== undefined &&
 		[
 			'SUPPORTED-SH-DAMPING-ORACLE-REDUCES-AGGREGATE-CHROMA',
 			'OPEN-SH-DAMPING-ORACLE-CONTEXT-ONLY',
 			'OPEN-SH-DAMPING-ORACLE-NO-SAFE-WIN'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.shDampingOracleStudy.status
+			currentEvidence.probeBakeContaminationMap.shDampingOracleStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.dominantProbePlacementStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.dominantProbePlacementStudy !== undefined &&
 		[
 			'SUPPORTED-PLACEMENT-ORACLE-AGGREGATE-WIN',
 			'OPEN-PLACEMENT-ORACLE-CONTEXT-ONLY',
 			'OPEN-PLACEMENT-ORACLE-NO-SAFE-WIN'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.dominantProbePlacementStudy.status
+			currentEvidence.probeBakeContaminationMap.dominantProbePlacementStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.combinedSourceDampingOracleStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.combinedSourceDampingOracleStudy !== undefined &&
 		[
 			'SUPPORTED-COMBINED-SOURCE-DAMPING-AGGREGATE-WIN',
 			'OPEN-COMBINED-SOURCE-DAMPING-CONTEXT-ONLY',
 			'OPEN-COMBINED-SOURCE-DAMPING-NO-SAFE-WIN'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.combinedSourceDampingOracleStudy.status
+			currentEvidence.probeBakeContaminationMap.combinedSourceDampingOracleStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.dilationSourceQualityStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.dilationSourceQualityStudy !== undefined &&
 		[
 			'OPEN-DILATION-SOURCE-QUALITY-CANDIDATE',
 			'SUPPORTED-DILATION-SOURCE-QUALITY-BOUNDED'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.dilationSourceQualityStudy.status
+			currentEvidence.probeBakeContaminationMap.dilationSourceQualityStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.sameSideLayerMaskOracleStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.sameSideLayerMaskOracleStudy !== undefined &&
 		[
 			'SUPPORTED-SAME-SIDE-LAYER-AGGREGATE-WIN',
 			'OPEN-SAME-SIDE-LAYER-NO-SAFE-WIN'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.sameSideLayerMaskOracleStudy.status
+			currentEvidence.probeBakeContaminationMap.sameSideLayerMaskOracleStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy !== undefined &&
 		[
 			'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN',
 			'OPEN-SDF-STATIC-BLOCKER-MISSED-WRONG-SIDE',
 			'OPEN-SDF-STATIC-BLOCKER-NO-AGGREGATE-WIN'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy.status
+			currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy.status
 		) &&
-		report.currentEvidence.probeBakeContaminationMap.aggregateBakePolicyOracleStudy !== undefined &&
+		currentEvidence.probeBakeContaminationMap.aggregateBakePolicyOracleStudy !== undefined &&
 		[
 			'SUPPORTED-AGGREGATE-BAKE-POLICY-WIN',
 			'OPEN-AGGREGATE-BAKE-POLICY-NO-SAFE-WIN'
 		].includes(
-			report.currentEvidence.probeBakeContaminationMap.aggregateBakePolicyOracleStudy.status
+			currentEvidence.probeBakeContaminationMap.aggregateBakePolicyOracleStudy.status
 		) &&
-		Number.isFinite( report.currentEvidence.probeBakeContaminationMap.aggregateBakePolicyOracleStudy.summary.safeReceiverWinCount ) &&
-		report.currentEvidence.probeDensityMetricStudy !== undefined &&
+		Number.isFinite( currentEvidence.probeBakeContaminationMap.aggregateBakePolicyOracleStudy.summary.safeReceiverWinCount ) &&
+		currentEvidence.probeDensityMetricStudy !== undefined &&
 		[
 			'OPEN-PROBE-DENSITY-DIVIDER-STRADDLE-RISK',
 			'SUPPORTED-PROBE-DENSITY-BOUNDED'
 		].includes(
-			report.currentEvidence.probeDensityMetricStudy.status
+			currentEvidence.probeDensityMetricStudy.status
 		) &&
-		Number.isFinite( report.currentEvidence.probeDensityMetricStudy.summary.riskReceiverCount ) &&
-		report.currentEvidence.receiverSampleMetricAlignmentStudy !== undefined &&
+		Number.isFinite( currentEvidence.probeDensityMetricStudy.summary.riskReceiverCount ) &&
+		currentEvidence.receiverSampleMetricAlignmentStudy !== undefined &&
 		[
 			'OPEN-CENTER-SURFACE-SAMPLE-DIVERGENCE',
 			'SUPPORTED-CENTER-SURFACE-SAMPLE-ALIGNED'
 		].includes(
-			report.currentEvidence.receiverSampleMetricAlignmentStudy.status
+			currentEvidence.receiverSampleMetricAlignmentStudy.status
 		) &&
-		Number.isFinite( report.currentEvidence.receiverSampleMetricAlignmentStudy.summary.centerVsSurfaceCpuDelta ) &&
-		report.currentEvidence.surfaceAnchorPlacementStudy !== undefined &&
+		Number.isFinite( currentEvidence.receiverSampleMetricAlignmentStudy.summary.centerVsSurfaceCpuDelta ) &&
+		currentEvidence.surfaceAnchorPlacementStudy !== undefined &&
 		[
 			'SUPPORTED-SURFACE-ANCHOR-BIAS-CANDIDATE',
 			'OPEN-SURFACE-ANCHOR-CENTER-HIDES-LEAK',
 			'OPEN-SURFACE-ANCHOR-BIAS-NO-WIN'
 		].includes(
-			report.currentEvidence.surfaceAnchorPlacementStudy.status
+			currentEvidence.surfaceAnchorPlacementStudy.status
 		) &&
-		Number.isFinite( report.currentEvidence.surfaceAnchorPlacementStudy.summary.centerSurfaceDelta ) &&
-		typeof report.currentEvidence.surfaceAnchorPlacementStudy.summary.centerHidesSurfaceLeak === 'boolean' &&
-		report.currentEvidence.surfaceShContentStudy !== undefined &&
+		Number.isFinite( currentEvidence.surfaceAnchorPlacementStudy.summary.centerSurfaceDelta ) &&
+		typeof currentEvidence.surfaceAnchorPlacementStudy.summary.centerHidesSurfaceLeak === 'boolean' &&
+		currentEvidence.surfaceShContentStudy !== undefined &&
 		[
 			'OPEN-SURFACE-SH-CONTENT-PRESSURE',
 			'OPEN-SURFACE-SH-CONTENT-PARTIAL-PRESSURE',
 			'OPEN-SURFACE-LEAK-WITHOUT-MAPPED-CONTENT-PRESSURE',
 			'SUPPORTED-SURFACE-SH-CONTENT-BOUNDED'
 		].includes(
-			report.currentEvidence.surfaceShContentStudy.status
+			currentEvidence.surfaceShContentStudy.status
 		) &&
-		Number.isFinite( report.currentEvidence.surfaceShContentStudy.summary.leakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceShContentStudy.summary.worstSampleWrongOverCorrect ) &&
-		report.currentEvidence.surfaceSampleCoefficientAttributionStudy !== undefined &&
+		Number.isFinite( currentEvidence.surfaceShContentStudy.summary.leakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceShContentStudy.summary.worstSampleWrongOverCorrect ) &&
+		currentEvidence.surfaceSampleCoefficientAttributionStudy !== undefined &&
 		[
 			'OPEN-SURFACE-COEFFICIENT-ATTRIBUTION',
 			'SUPPORTED-SURFACE-COEFFICIENT-ATTRIBUTION-BOUNDED'
 		].includes(
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.status
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.status
 		) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.surfaceSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.weightedLeakWrongChannelPressure ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.weightedLeakCorrectChannelPreservation ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.wrongSideDominantLeakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.l2DominantLeakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureLeakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureDominantLeakSampleCount ) &&
-		report.currentEvidence.surfaceShContentStudy.summary.surfaceSampleCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.surfaceSampleCount &&
-		report.currentEvidence.surfaceShContentStudy.summary.leakSampleCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount &&
-		Number.isFinite( report.currentEvidence.surfaceShContentStudy.summary.leakSamplesWithoutContentPressureCount ) &&
-		Number.isFinite( report.currentEvidence.surfaceShContentStudy.summary.leakContentPressureCoverageRatio ) &&
-		report.currentEvidence.surfaceShContentStudy.summary.leakSampleCount ===
-			report.currentEvidence.surfaceShContentStudy.summary.leakSamplesWithContentPressureCount +
-			report.currentEvidence.surfaceShContentStudy.summary.leakSamplesWithoutContentPressureCount &&
-		report.currentEvidence.surfaceShContentStudy.receiverRows.every( receiver =>
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.surfaceSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.weightedLeakWrongChannelPressure ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.weightedLeakCorrectChannelPreservation ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.wrongSideDominantLeakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.l2DominantLeakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureLeakSampleCount ) &&
+		Number.isFinite( currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureDominantLeakSampleCount ) &&
+		currentEvidence.surfaceShContentStudy.summary.surfaceSampleCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.surfaceSampleCount &&
+		currentEvidence.surfaceShContentStudy.summary.leakSampleCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount &&
+		Number.isFinite( currentEvidence.surfaceShContentStudy.summary.leakSamplesWithoutContentPressureCount ) &&
+		Number.isFinite( currentEvidence.surfaceShContentStudy.summary.leakContentPressureCoverageRatio ) &&
+		currentEvidence.surfaceShContentStudy.summary.leakSampleCount ===
+			currentEvidence.surfaceShContentStudy.summary.leakSamplesWithContentPressureCount +
+			currentEvidence.surfaceShContentStudy.summary.leakSamplesWithoutContentPressureCount &&
+		currentEvidence.surfaceShContentStudy.receiverRows.every( receiver =>
 			receiver.samples.every( sample =>
 				typeof sample.receiver === 'string' &&
 				Number.isFinite( sample.runtimeWrongOverCorrect ) &&
@@ -814,99 +509,105 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 					Number.isFinite( probe.weightedContentPressure ) &&
 					typeof probe.relationToReceiver === 'string' ) ) ) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.dominantProbeHistogram,
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.dominantProbeHistogram,
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.dominantBandHistogram,
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.dominantBandHistogram,
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.dominantCoefficientHistogram,
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.dominantCoefficientHistogram,
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount
 		) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy !== undefined &&
+		surfaceContentSplitStudy !== undefined &&
 		[
 			'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT',
 			'OPEN-SURFACE-CONTENT-ATTRIBUTION-MAPPED',
 			'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNMAPPED',
 			'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED',
 			'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED'
-		].includes( report.currentEvidence.surfaceContentAttributionSplitStudy.status ) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.status === expectedSurfaceContentSplitStatus &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.proofBoundary.includes( 'Report-only split of canonical leaking surface attribution rows' ) &&
-		Array.isArray( report.currentEvidence.surfaceContentAttributionSplitStudy.rows ) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.leakSampleCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.rows.length &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.leakSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount +
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unattributedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount +
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount ===
+		].includes( surfaceContentSplitStudy.status ) &&
+		surfaceContentSplitStudy.status === expectedSurfaceContentSplitStatus &&
+		surfaceContentSplitStudy.proofBoundary.includes( 'Report-only split of canonical leaking surface attribution rows' ) &&
+		Array.isArray( surfaceContentSplitStudy.rows ) &&
+		surfaceContentSplitStudy.summary.leakSampleCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.leakSampleCount &&
+		surfaceContentSplitStudy.summary.attributedLeakSampleCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.attributedLeakSampleCount &&
+		surfaceContentSplitStudy.summary.attributedLeakSampleCount ===
+			surfaceContentSplitStudy.rows.length &&
+		surfaceContentSplitStudy.summary.leakSampleCount ===
+			surfaceContentSplitStudy.summary.attributedLeakSampleCount +
+			surfaceContentSplitStudy.summary.unattributedLeakSampleCount &&
+		surfaceContentSplitStudy.summary.attributedLeakSampleCount ===
+			surfaceContentSplitStudy.summary.mappedLeakSampleCount +
+			surfaceContentSplitStudy.summary.unmappedLeakSampleCount &&
+		surfaceContentSplitStudy.summary.mappedLeakSampleCount ===
 			surfaceContentMappedRows.length &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount ===
+		surfaceContentSplitStudy.summary.unmappedLeakSampleCount ===
 			surfaceContentUnmappedRows.length &&
-		Number.isFinite( report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedCoverageRatio ) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedCoverageRatio === expectedSurfaceContentMappedCoverage &&
+		Number.isFinite( surfaceContentSplitStudy.summary.mappedCoverageRatio ) &&
+		surfaceContentSplitStudy.summary.mappedCoverageRatio === expectedSurfaceContentMappedCoverage &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedDominantProbeHistogram,
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount
+			surfaceContentSplitStudy.summary.mappedDominantProbeHistogram,
+			surfaceContentSplitStudy.summary.mappedLeakSampleCount
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedDominantProbeHistogram,
-			countHistogram( surfaceContentMappedRows, 'attributionDominantProbeIndex' )
-		) &&
-		isFiniteCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedDominantProbeHistogram,
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount
-		) &&
-		sameCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedDominantProbeHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'attributionDominantProbeIndex' )
+		sameCountHistogramBy(
+			surfaceContentSplitStudy.summary.mappedDominantProbeHistogram,
+			surfaceContentMappedRows,
+			'attributionDominantProbeIndex'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedDominantBandHistogram,
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount
+			surfaceContentSplitStudy.summary.unmappedDominantProbeHistogram,
+			surfaceContentSplitStudy.summary.unmappedLeakSampleCount
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedDominantBandHistogram,
-			countHistogram( surfaceContentMappedRows, 'attributionDominantBand' )
-		) &&
-		isFiniteCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedDominantBandHistogram,
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount
-		) &&
-		sameCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedDominantBandHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'attributionDominantBand' )
+		sameCountHistogramBy(
+			surfaceContentSplitStudy.summary.unmappedDominantProbeHistogram,
+			surfaceContentUnmappedRows,
+			'attributionDominantProbeIndex'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedDominantCoefficientHistogram,
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount
+			surfaceContentSplitStudy.summary.mappedDominantBandHistogram,
+			surfaceContentSplitStudy.summary.mappedLeakSampleCount
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedDominantCoefficientHistogram,
-			countHistogram( surfaceContentMappedRows, 'attributionDominantCoefficient' )
+		sameCountHistogramBy(
+			surfaceContentSplitStudy.summary.mappedDominantBandHistogram,
+			surfaceContentMappedRows,
+			'attributionDominantBand'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedDominantCoefficientHistogram,
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount
+			surfaceContentSplitStudy.summary.unmappedDominantBandHistogram,
+			surfaceContentSplitStudy.summary.unmappedLeakSampleCount
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedDominantCoefficientHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'attributionDominantCoefficient' )
+		sameCountHistogramBy(
+			surfaceContentSplitStudy.summary.unmappedDominantBandHistogram,
+			surfaceContentUnmappedRows,
+			'attributionDominantBand'
 		) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedWrongChannelPressure ===
+		isFiniteCountHistogram(
+			surfaceContentSplitStudy.summary.mappedDominantCoefficientHistogram,
+			surfaceContentSplitStudy.summary.mappedLeakSampleCount
+		) &&
+		sameCountHistogramBy(
+			surfaceContentSplitStudy.summary.mappedDominantCoefficientHistogram,
+			surfaceContentMappedRows,
+			'attributionDominantCoefficient'
+		) &&
+		isFiniteCountHistogram(
+			surfaceContentSplitStudy.summary.unmappedDominantCoefficientHistogram,
+			surfaceContentSplitStudy.summary.unmappedLeakSampleCount
+		) &&
+		sameCountHistogramBy(
+			surfaceContentSplitStudy.summary.unmappedDominantCoefficientHistogram,
+			surfaceContentUnmappedRows,
+			'attributionDominantCoefficient'
+		) &&
+		surfaceContentSplitStudy.summary.mappedWrongChannelPressure ===
 			roundedRowSum( surfaceContentMappedRows, 'attributionWrongChannelPressure' ) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedWrongChannelPressure ===
+		surfaceContentSplitStudy.summary.unmappedWrongChannelPressure ===
 			roundedRowSum( surfaceContentUnmappedRows, 'attributionWrongChannelPressure' ) &&
-		report.currentEvidence.surfaceContentAttributionSplitStudy.rows.every( row =>
+		surfaceContentSplitStudy.rows.every( row =>
 			typeof row.receiver === 'string' &&
 			typeof row.sampleLabel === 'string' &&
 			Number.isFinite( row.runtimeWrongOverCorrect ) &&
@@ -920,47 +621,49 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 			typeof row.attributionDominantBand === 'string' &&
 			typeof row.attributionDominantCoefficient === 'string' &&
 			Number.isFinite( row.attributionWrongChannelPressure ) ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy !== undefined &&
+		surfaceContentFollowupStudy !== undefined &&
 		[
 			'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP',
 			'OPEN-SURFACE-CONTENT-MAPPED-BUCKET-FOLLOWUP',
 			'OPEN-SURFACE-CONTENT-UNMAPPED-BUCKET-FOLLOWUP',
 			'OPEN-SURFACE-CONTENT-FOLLOWUP-UNDER-INSTRUMENTED',
 			'SUPPORTED-SURFACE-CONTENT-FOLLOWUP-BOUNDED'
-		].includes( report.currentEvidence.surfaceContentAttributionFollowupStudy.status ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.status === expectedSurfaceContentFollowupStatus &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.proofBoundary.includes( 'Report-only follow-up prioritization' ) &&
-		Array.isArray( report.currentEvidence.surfaceContentAttributionFollowupStudy.rows ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.bucketCount ===
-			report.currentEvidence.surfaceContentAttributionFollowupStudy.rows.length &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.attributedLeakSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.unattributedLeakSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unattributedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.totalBucketSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.attributedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.totalBucketSampleCount ===
+		].includes( surfaceContentFollowupStudy.status ) &&
+		surfaceContentFollowupStudy.status === expectedSurfaceContentFollowupStatus &&
+		surfaceContentFollowupStudy.proofBoundary.includes( 'Report-only follow-up prioritization' ) &&
+		Array.isArray( surfaceContentFollowupStudy.rows ) &&
+		surfaceContentFollowupStudy.summary.bucketCount ===
+			surfaceContentFollowupStudy.rows.length &&
+		surfaceContentFollowupStudy.summary.attributedLeakSampleCount ===
+			surfaceContentSplitStudy.summary.attributedLeakSampleCount &&
+		surfaceContentFollowupStudy.summary.unattributedLeakSampleCount ===
+			surfaceContentSplitStudy.summary.unattributedLeakSampleCount &&
+		surfaceContentFollowupStudy.summary.totalBucketSampleCount ===
+			surfaceContentSplitStudy.summary.attributedLeakSampleCount &&
+		surfaceContentFollowupStudy.summary.totalBucketSampleCount ===
 			surfaceContentFollowupRows.reduce( ( total, row ) => total + row.sampleCount, 0 ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.mappedBucketSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.unmappedBucketSampleCount ===
-			report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.hasMappedBucket ===
-			( report.currentEvidence.surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount > 0 ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.hasUnmappedBucket ===
-			( report.currentEvidence.surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount > 0 ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.noRuntimePromotion === true &&
-		/proof-only/i.test( report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction ) &&
-		report.currentEvidence.surfaceContentAttributionFollowupStudy.rows.every( row =>
+		surfaceContentFollowupStudy.summary.mappedBucketSampleCount ===
+			surfaceContentSplitStudy.summary.mappedLeakSampleCount &&
+		surfaceContentFollowupStudy.summary.unmappedBucketSampleCount ===
+			surfaceContentSplitStudy.summary.unmappedLeakSampleCount &&
+		surfaceContentFollowupStudy.summary.hasMappedBucket ===
+			( surfaceContentSplitStudy.summary.mappedLeakSampleCount > 0 ) &&
+		surfaceContentFollowupStudy.summary.hasUnmappedBucket ===
+			( surfaceContentSplitStudy.summary.unmappedLeakSampleCount > 0 ) &&
+		surfaceContentFollowupStudy.summary.noRuntimePromotion === true &&
+		/proof-only/i.test( surfaceContentFollowupStudy.summary.nextProofOnlyAction ) &&
+		surfaceContentFollowupStudy.rows.every( row =>
 			[ 'mapped-bake-content', 'unmapped-coefficient-attribution' ].includes( row.id ) &&
 			Number.isInteger( row.sampleCount ) &&
 			row.sampleCount >= 0 &&
-			isFiniteCountHistogram( row.receiverHistogram, row.sampleCount ) &&
-			isFiniteCountHistogram( row.contentProbeHistogram, row.sampleCount ) &&
-			isFiniteCountHistogram( row.contentBandHistogram, row.sampleCount ) &&
-			isFiniteCountHistogram( row.attributionProbeHistogram, row.sampleCount ) &&
-			isFiniteCountHistogram( row.attributionBandHistogram, row.sampleCount ) &&
-			isFiniteCountHistogram( row.attributionCoefficientHistogram, row.sampleCount ) &&
+			hasFiniteCountHistograms( row, [
+				'receiverHistogram',
+				'contentProbeHistogram',
+				'contentBandHistogram',
+				'attributionProbeHistogram',
+				'attributionBandHistogram',
+				'attributionCoefficientHistogram'
+			], row.sampleCount ) &&
 			Number.isFinite( row.wrongChannelPressure ) &&
 			Number.isFinite( row.correctChannelPreservation ) &&
 			Number.isFinite( row.maxRuntimeWrongOverCorrect ) &&
@@ -968,71 +671,76 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 			typeof row.proofOnlyQuestion === 'string' &&
 			/proof-only/i.test( row.recommendedFollowup ) &&
 			typeof row.interpretation === 'string' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy !== undefined &&
+		mappedBakeContentSourcePolicyOracleStudy !== undefined &&
 		[
 			'OPEN-MAPPED-BAKE-CONTENT-SOURCE-POLICY-ORACLE',
 			'SUPPORTED-MAPPED-BAKE-CONTENT-SOURCE-POLICY-BOUNDED'
-		].includes( report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.status ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.status ===
+		].includes( mappedBakeContentSourcePolicyOracleStudy.status ) &&
+		mappedBakeContentSourcePolicyOracleStudy.status ===
 			( surfaceContentMappedRows.length > 0 ?
 				'OPEN-MAPPED-BAKE-CONTENT-SOURCE-POLICY-ORACLE' :
 				'SUPPORTED-MAPPED-BAKE-CONTENT-SOURCE-POLICY-BOUNDED' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.proofBoundary.includes( 'CPU/report-only mapped bake-content/source-policy oracle' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.proofBoundary.includes( 'does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.noRuntimePromotion === true &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.noRuntimePromotion === true &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.sampleCount === surfaceContentMappedRows.length &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.sampleCount === mappedBakeContentSourcePolicyOracleRows.length &&
+		mappedBakeContentSourcePolicyOracleStudy.proofBoundary.includes( 'CPU/report-only mapped bake-content/source-policy oracle' ) &&
+		mappedBakeContentSourcePolicyOracleStudy.proofBoundary.includes( 'does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds' ) &&
+		mappedBakeContentSourcePolicyOracleStudy.noRuntimePromotion === true &&
+		mappedBakeContentSourcePolicyOracleStudy.summary.noRuntimePromotion === true &&
+		mappedBakeContentSourcePolicyOracleStudy.summary.sampleCount === surfaceContentMappedRows.length &&
+		mappedBakeContentSourcePolicyOracleStudy.summary.sampleCount === mappedBakeContentSourcePolicyOracleRows.length &&
 		matchesMappedBakeContentOracleRows(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.rows,
+			mappedBakeContentSourcePolicyOracleStudy.rows,
 			surfaceContentMappedRows
 		) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.contentDominantPressureSum ===
+		mappedBakeContentSourcePolicyOracleStudy.summary.contentDominantPressureSum ===
 			roundedRowSum( surfaceContentMappedRows, 'contentDominantPressure' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.contentDominantWeightedPressureSum ===
+		mappedBakeContentSourcePolicyOracleStudy.summary.contentDominantWeightedPressureSum ===
 			roundedRowSum( surfaceContentMappedRows, 'contentDominantWeightedPressure' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.attributionWrongChannelPressureSum ===
+		mappedBakeContentSourcePolicyOracleStudy.summary.attributionWrongChannelPressureSum ===
 			roundedRowSum( surfaceContentMappedRows, 'attributionWrongChannelPressure' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.attributionCorrectChannelPreservationSum ===
+		mappedBakeContentSourcePolicyOracleStudy.summary.attributionCorrectChannelPreservationSum ===
 			roundedRowSum( surfaceContentMappedRows, 'attributionCorrectChannelPreservation' ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.bandMismatchCount ===
+		mappedBakeContentSourcePolicyOracleStudy.summary.bandMismatchCount ===
 			surfaceContentMappedRows.filter( row => row.contentDominantBand !== row.attributionDominantBand ).length &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.allMappedRowsHaveBandMismatch ===
+		mappedBakeContentSourcePolicyOracleStudy.summary.allMappedRowsHaveBandMismatch ===
 			( surfaceContentMappedRows.length > 0 && surfaceContentMappedRows.every( row => row.contentDominantBand !== row.attributionDominantBand ) ) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.contentProbeHistogram,
+			mappedBakeContentSourcePolicyOracleStudy.summary.contentProbeHistogram,
 			surfaceContentMappedRows.length
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.contentProbeHistogram,
-			countHistogram( surfaceContentMappedRows, 'contentDominantProbeIndex' )
+		sameCountHistogramBy(
+			mappedBakeContentSourcePolicyOracleStudy.summary.contentProbeHistogram,
+			surfaceContentMappedRows,
+			'contentDominantProbeIndex'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.contentBandHistogram,
+			mappedBakeContentSourcePolicyOracleStudy.summary.contentBandHistogram,
 			surfaceContentMappedRows.length
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.contentBandHistogram,
-			countHistogram( surfaceContentMappedRows, 'contentDominantBand' )
+		sameCountHistogramBy(
+			mappedBakeContentSourcePolicyOracleStudy.summary.contentBandHistogram,
+			surfaceContentMappedRows,
+			'contentDominantBand'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.attributionCoefficientHistogram,
+			mappedBakeContentSourcePolicyOracleStudy.summary.attributionCoefficientHistogram,
 			surfaceContentMappedRows.length
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.attributionCoefficientHistogram,
-			countHistogram( surfaceContentMappedRows, 'attributionDominantCoefficient' )
+		sameCountHistogramBy(
+			mappedBakeContentSourcePolicyOracleStudy.summary.attributionCoefficientHistogram,
+			surfaceContentMappedRows,
+			'attributionDominantCoefficient'
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.attributionSourceProbeHistogram,
-			countHistogram( surfaceContentMappedRows, 'attributionDominantSourceProbeIndex' )
+		sameCountHistogramBy(
+			mappedBakeContentSourcePolicyOracleStudy.summary.attributionSourceProbeHistogram,
+			surfaceContentMappedRows,
+			'attributionDominantSourceProbeIndex'
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.attributionSourceRelationHistogram,
-			countHistogram( surfaceContentMappedRows, 'attributionSourceRelationToReceiver' )
+		sameCountHistogramBy(
+			mappedBakeContentSourcePolicyOracleStudy.summary.attributionSourceRelationHistogram,
+			surfaceContentMappedRows,
+			'attributionSourceRelationToReceiver'
 		) &&
-		/proof-only/i.test( report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.summary.nextProofOnlyAction ) &&
-		report.currentEvidence.mappedBakeContentSourcePolicyOracleStudy.rows.every( row =>
+		/proof-only/i.test( mappedBakeContentSourcePolicyOracleStudy.summary.nextProofOnlyAction ) &&
+		mappedBakeContentSourcePolicyOracleStudy.rows.every( row =>
 			row.mappedToContentPressure === true &&
 			row.contentPressureAttributionRowCount > 0 &&
 			row.contentDominantPressure > 0 &&
@@ -1044,74 +752,79 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 			row.contentAttributionBandMismatch === ( row.contentDominantBand !== row.attributionDominantBand ) &&
 			Number.isFinite( row.attributionWrongChannelPressure ) &&
 			Number.isFinite( row.attributionCorrectChannelPreservation ) ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy !== undefined &&
+		unmappedCoefficientAttributionInstrumentationStudy !== undefined &&
 		[
 			'OPEN-UNMAPPED-COEFFICIENT-ATTRIBUTION-INSTRUMENTATION',
 			'SUPPORTED-UNMAPPED-COEFFICIENT-ATTRIBUTION-BOUNDED'
-		].includes( report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.status ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.status ===
+		].includes( unmappedCoefficientAttributionInstrumentationStudy.status ) &&
+		unmappedCoefficientAttributionInstrumentationStudy.status ===
 			( surfaceContentUnmappedRows.length > 0 ?
 				'OPEN-UNMAPPED-COEFFICIENT-ATTRIBUTION-INSTRUMENTATION' :
 				'SUPPORTED-UNMAPPED-COEFFICIENT-ATTRIBUTION-BOUNDED' ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.proofBoundary.includes( 'CPU/report-only unmapped coefficient-attribution instrumentation' ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.proofBoundary.includes( 'does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds' ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.noRuntimePromotion === true &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.noRuntimePromotion === true &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.sampleCount === surfaceContentUnmappedRows.length &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.sampleCount === unmappedCoefficientAttributionInstrumentationRows.length &&
+		unmappedCoefficientAttributionInstrumentationStudy.proofBoundary.includes( 'CPU/report-only unmapped coefficient-attribution instrumentation' ) &&
+		unmappedCoefficientAttributionInstrumentationStudy.proofBoundary.includes( 'does not change bake capture, runtime sampling, public API, docs, or Chebyshev thresholds' ) &&
+		unmappedCoefficientAttributionInstrumentationStudy.noRuntimePromotion === true &&
+		unmappedCoefficientAttributionInstrumentationStudy.summary.noRuntimePromotion === true &&
+		unmappedCoefficientAttributionInstrumentationStudy.summary.sampleCount === surfaceContentUnmappedRows.length &&
+		unmappedCoefficientAttributionInstrumentationStudy.summary.sampleCount === unmappedCoefficientAttributionInstrumentationRows.length &&
 		matchesUnmappedCoefficientInstrumentationRows(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.rows,
+			unmappedCoefficientAttributionInstrumentationStudy.rows,
 			surfaceContentUnmappedRows
 		) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.contentPressureAttributionRowCountSum ===
+		unmappedCoefficientAttributionInstrumentationStudy.summary.contentPressureAttributionRowCountSum ===
 			roundedRowSum( surfaceContentUnmappedRows, 'contentPressureAttributionRowCount' ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.attributionWrongChannelPressureSum ===
+		unmappedCoefficientAttributionInstrumentationStudy.summary.attributionWrongChannelPressureSum ===
 			roundedRowSum( surfaceContentUnmappedRows, 'attributionWrongChannelPressure' ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.attributionCorrectChannelPreservationSum ===
+		unmappedCoefficientAttributionInstrumentationStudy.summary.attributionCorrectChannelPreservationSum ===
 			roundedRowSum( surfaceContentUnmappedRows, 'attributionCorrectChannelPreservation' ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.needsCoefficientSourceInstrumentation ===
+		unmappedCoefficientAttributionInstrumentationStudy.summary.needsCoefficientSourceInstrumentation ===
 			( surfaceContentUnmappedRows.length > 0 ) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.contentProbeHistogram,
+			unmappedCoefficientAttributionInstrumentationStudy.summary.contentProbeHistogram,
 			surfaceContentUnmappedRows.length
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.contentProbeHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'contentDominantProbeIndex' )
+		sameCountHistogramBy(
+			unmappedCoefficientAttributionInstrumentationStudy.summary.contentProbeHistogram,
+			surfaceContentUnmappedRows,
+			'contentDominantProbeIndex'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.contentBandHistogram,
+			unmappedCoefficientAttributionInstrumentationStudy.summary.contentBandHistogram,
 			surfaceContentUnmappedRows.length
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.contentBandHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'contentDominantBand' )
+		sameCountHistogramBy(
+			unmappedCoefficientAttributionInstrumentationStudy.summary.contentBandHistogram,
+			surfaceContentUnmappedRows,
+			'contentDominantBand'
 		) &&
 		isFiniteCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.attributionCoefficientHistogram,
+			unmappedCoefficientAttributionInstrumentationStudy.summary.attributionCoefficientHistogram,
 			surfaceContentUnmappedRows.length
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.attributionCoefficientHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'attributionDominantCoefficient' )
+		sameCountHistogramBy(
+			unmappedCoefficientAttributionInstrumentationStudy.summary.attributionCoefficientHistogram,
+			surfaceContentUnmappedRows,
+			'attributionDominantCoefficient'
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.attributionSourceProbeHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'attributionDominantSourceProbeIndex' )
+		sameCountHistogramBy(
+			unmappedCoefficientAttributionInstrumentationStudy.summary.attributionSourceProbeHistogram,
+			surfaceContentUnmappedRows,
+			'attributionDominantSourceProbeIndex'
 		) &&
-		sameCountHistogram(
-			report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.attributionSourceRelationHistogram,
-			countHistogram( surfaceContentUnmappedRows, 'attributionSourceRelationToReceiver' )
+		sameCountHistogramBy(
+			unmappedCoefficientAttributionInstrumentationStudy.summary.attributionSourceRelationHistogram,
+			surfaceContentUnmappedRows,
+			'attributionSourceRelationToReceiver'
 		) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.probe52L10SampleCount ===
+		unmappedCoefficientAttributionInstrumentationStudy.summary.probe52L10SampleCount ===
 			surfaceContentUnmappedRows.filter( row =>
 				row.attributionDominantProbeIndex === 52 &&
 				row.attributionDominantCoefficient === 'L10'
 			).length &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.sourceTraceComplete ===
+		unmappedCoefficientAttributionInstrumentationStudy.summary.sourceTraceComplete ===
 			surfaceContentUnmappedRows.every( row => row.attributionDominantSourceProbeIndex !== null ) &&
-		/proof-only/i.test( report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.summary.nextProofOnlyAction ) &&
-		report.currentEvidence.unmappedCoefficientAttributionInstrumentationStudy.rows.every( row =>
+		/proof-only/i.test( unmappedCoefficientAttributionInstrumentationStudy.summary.nextProofOnlyAction ) &&
+		unmappedCoefficientAttributionInstrumentationStudy.rows.every( row =>
 			row.mappedToContentPressure === false &&
 			row.contentPressureAttributionRowCount === 0 &&
 			row.needsCoefficientSourceInstrumentation === true &&
@@ -1474,73 +1187,73 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 			typeof row.requirement === 'string' &&
 			typeof row.evidence === 'string' &&
 			row.satisfied === true ) &&
-		report.currentEvidence.surfaceAttributionBranchDecision !== undefined &&
+		currentEvidence.surfaceAttributionBranchDecision !== undefined &&
 		[
 			'OPEN-ATTRIBUTION-BRANCH-SELECTED',
 			'OPEN-ATTRIBUTION-UNDER-INSTRUMENTED',
 			'SUPPORTED-NO-SURFACE-LEAK-BRANCH'
-		].includes( report.currentEvidence.surfaceAttributionBranchDecision.status ) &&
+		].includes( currentEvidence.surfaceAttributionBranchDecision.status ) &&
 		[ 'proof-7a', 'proof-7b', 'proof-7c', 'proof-7d', 'none' ].includes(
-			report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch
+			currentEvidence.surfaceAttributionBranchDecision.selectedBranch
 		) &&
-		Number.isFinite( report.currentEvidence.surfaceAttributionBranchDecision.confidence ) &&
-		Array.isArray( report.currentEvidence.surfaceAttributionBranchDecision.candidates ) &&
-		hasUniqueExactIds( report.currentEvidence.surfaceAttributionBranchDecision.candidates, [ 'proof-7a', 'proof-7b', 'proof-7c' ] ) &&
-		report.currentEvidence.surfaceAttributionBranchDecision.candidates.every( candidate =>
+		Number.isFinite( currentEvidence.surfaceAttributionBranchDecision.confidence ) &&
+		Array.isArray( currentEvidence.surfaceAttributionBranchDecision.candidates ) &&
+		hasUniqueExactIds( currentEvidence.surfaceAttributionBranchDecision.candidates, [ 'proof-7a', 'proof-7b', 'proof-7c' ] ) &&
+		currentEvidence.surfaceAttributionBranchDecision.candidates.every( candidate =>
 			[ 'proof-7a', 'proof-7b', 'proof-7c' ].includes( candidate.branch ) &&
 			typeof candidate.oracleFamily === 'string' &&
 			Number.isInteger( candidate.score ) &&
 			candidate.score >= 0 &&
 			typeof candidate.reason === 'string' ) &&
-		report.currentEvidence.surfaceAttributionBranchDecision.candidates.every( ( candidate, index, candidates ) =>
+		currentEvidence.surfaceAttributionBranchDecision.candidates.every( ( candidate, index, candidates ) =>
 			index === 0 || candidates[ index - 1 ].score >= candidate.score ) &&
-		report.currentEvidence.surfaceAttributionBranchDecision.candidates.find( candidate => candidate.branch === 'proof-7a' ).score ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureLeakSampleCount &&
-		report.currentEvidence.surfaceAttributionBranchDecision.candidates.find( candidate => candidate.branch === 'proof-7b' ).score ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.l2DominantLeakSampleCount &&
-		report.currentEvidence.surfaceAttributionBranchDecision.candidates.find( candidate => candidate.branch === 'proof-7c' ).score ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
-		report.currentEvidence.surfaceAttributionBranchDecision.observedSignals.sourcePressureCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureLeakSampleCount &&
-		report.currentEvidence.surfaceAttributionBranchDecision.observedSignals.bandPressureCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.l2DominantLeakSampleCount &&
-		report.currentEvidence.surfaceAttributionBranchDecision.observedSignals.blockerPressureCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
+		currentEvidence.surfaceAttributionBranchDecision.candidates.find( candidate => candidate.branch === 'proof-7a' ).score ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureLeakSampleCount &&
+		currentEvidence.surfaceAttributionBranchDecision.candidates.find( candidate => candidate.branch === 'proof-7b' ).score ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.l2DominantLeakSampleCount &&
+		currentEvidence.surfaceAttributionBranchDecision.candidates.find( candidate => candidate.branch === 'proof-7c' ).score ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
+		currentEvidence.surfaceAttributionBranchDecision.observedSignals.sourcePressureCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.sourcePressureLeakSampleCount &&
+		currentEvidence.surfaceAttributionBranchDecision.observedSignals.bandPressureCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.l2DominantLeakSampleCount &&
+		currentEvidence.surfaceAttributionBranchDecision.observedSignals.blockerPressureCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
 		(
 			(
-				report.currentEvidence.surfaceAttributionBranchDecision.status === 'OPEN-ATTRIBUTION-BRANCH-SELECTED' &&
-				report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch === report.currentEvidence.surfaceAttributionBranchDecision.candidates[ 0 ].branch &&
-				report.currentEvidence.surfaceAttributionBranchDecision.candidates[ 0 ].score > 0
+				currentEvidence.surfaceAttributionBranchDecision.status === 'OPEN-ATTRIBUTION-BRANCH-SELECTED' &&
+				currentEvidence.surfaceAttributionBranchDecision.selectedBranch === currentEvidence.surfaceAttributionBranchDecision.candidates[ 0 ].branch &&
+				currentEvidence.surfaceAttributionBranchDecision.candidates[ 0 ].score > 0
 			) ||
 			(
-				report.currentEvidence.surfaceAttributionBranchDecision.status === 'OPEN-ATTRIBUTION-UNDER-INSTRUMENTED' &&
-				report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'proof-7d'
+				currentEvidence.surfaceAttributionBranchDecision.status === 'OPEN-ATTRIBUTION-UNDER-INSTRUMENTED' &&
+				currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'proof-7d'
 			) ||
 			(
-				report.currentEvidence.surfaceAttributionBranchDecision.status === 'SUPPORTED-NO-SURFACE-LEAK-BRANCH' &&
-				report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'none'
+				currentEvidence.surfaceAttributionBranchDecision.status === 'SUPPORTED-NO-SURFACE-LEAK-BRANCH' &&
+				currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'none'
 			)
 		) &&
-		typeof report.currentEvidence.surfaceAttributionBranchDecision.nextAction === 'string' &&
-		report.currentEvidence.surfaceAttributionFollowupSpec !== undefined &&
-		report.currentEvidence.surfaceAttributionFollowupSpec.status === 'SPECIFIED-CAUSAL-ATTRIBUTION-FOLLOWUP' &&
-		report.currentEvidence.surfaceAttributionFollowupSpec.mode === 'causal-attribution-before-fix' &&
-		report.currentEvidence.surfaceAttributionFollowupSpec.currentEvidence.selectedBranch ===
-			report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch &&
-		hasUniqueExactIds( report.currentEvidence.surfaceAttributionFollowupSpec.batches, [ 'proof-6', 'proof-7a', 'proof-7b', 'proof-7c', 'proof-7d' ] ) &&
-		report.currentEvidence.surfaceAttributionFollowupSpec.batches.every( batch =>
+		typeof currentEvidence.surfaceAttributionBranchDecision.nextAction === 'string' &&
+		currentEvidence.surfaceAttributionFollowupSpec !== undefined &&
+		currentEvidence.surfaceAttributionFollowupSpec.status === 'SPECIFIED-CAUSAL-ATTRIBUTION-FOLLOWUP' &&
+		currentEvidence.surfaceAttributionFollowupSpec.mode === 'causal-attribution-before-fix' &&
+		currentEvidence.surfaceAttributionFollowupSpec.currentEvidence.selectedBranch ===
+			currentEvidence.surfaceAttributionBranchDecision.selectedBranch &&
+		hasUniqueExactIds( currentEvidence.surfaceAttributionFollowupSpec.batches, [ 'proof-6', 'proof-7a', 'proof-7b', 'proof-7c', 'proof-7d' ] ) &&
+		currentEvidence.surfaceAttributionFollowupSpec.batches.every( batch =>
 			typeof batch.id === 'string' &&
 			typeof batch.title === 'string' &&
 			typeof batch.action === 'string' &&
 			typeof batch.output === 'string' &&
 			typeof batch.gate === 'string' ) &&
-		hasBatch( report.currentEvidence.surfaceAttributionFollowupSpec, 'proof-6' ) &&
-		hasBatch( report.currentEvidence.surfaceAttributionFollowupSpec, 'proof-7a' ) &&
-		hasBatch( report.currentEvidence.surfaceAttributionFollowupSpec, 'proof-7b' ) &&
-		hasBatch( report.currentEvidence.surfaceAttributionFollowupSpec, 'proof-7c' ) &&
-		hasBatch( report.currentEvidence.surfaceAttributionFollowupSpec, 'proof-7d' ) &&
-		report.currentEvidence.surfaceAttributionFollowupSpec.stopConditions.some( condition => /Chebyshev/.test( condition ) ) &&
-		report.currentEvidence.surfaceSampleCoefficientAttributionStudy.receivers.every( receiver =>
+		hasBatch( currentEvidence.surfaceAttributionFollowupSpec, 'proof-6' ) &&
+		hasBatch( currentEvidence.surfaceAttributionFollowupSpec, 'proof-7a' ) &&
+		hasBatch( currentEvidence.surfaceAttributionFollowupSpec, 'proof-7b' ) &&
+		hasBatch( currentEvidence.surfaceAttributionFollowupSpec, 'proof-7c' ) &&
+		hasBatch( currentEvidence.surfaceAttributionFollowupSpec, 'proof-7d' ) &&
+		currentEvidence.surfaceAttributionFollowupSpec.stopConditions.some( condition => /Chebyshev/.test( condition ) ) &&
+		currentEvidence.surfaceSampleCoefficientAttributionStudy.receivers.every( receiver =>
 			receiver.samples.every( sample =>
 				Array.isArray( sample.attributionRows ) &&
 				sample.attributionRows.length > 0 &&
@@ -1554,7 +1267,7 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 					Array.isArray( row.runtimeWeightedCoefficientContributions ) &&
 					Array.isArray( row.runtimeWeightedDilatedBandContributions ) &&
 					Array.isArray( row.runtimeWeightedDilatedCoefficientContributions ) ) ) ) &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy !== undefined &&
+		proof7cStudy !== undefined &&
 		[
 			'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE',
 			'SUPPORTED-PROOF-7C-NO-SURFACE-LEAK-SAMPLES',
@@ -1563,33 +1276,34 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 			'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-SAFE-RECEIVER-OVERLAP',
 			'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-AGGREGATE-WIN',
 			'OPEN-PROOF-7C-NO-BLOCKED-DOMINANT-SURFACE-PATHS'
-		].includes( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status ) &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.proofBoundary.includes( 'CPU/report-only proof-7c selected-oracle evaluation' ) &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.receiverAggregateOracleStatus ===
-			report.currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy.status &&
-		Array.isArray( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.rows ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.leakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.evaluatedDominantPathCount ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.unblockedDominantPathCount ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.proof7cEligibleLeakSampleCount ) &&
-		Number.isFinite( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceiverCount ) &&
-		Array.isArray( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceivers ) &&
-		sameStringList( reportedProof7cOverlapReceivers, expectedProof7cOverlapReceivers ) &&
-		typeof report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.selected === 'boolean' &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.selected ===
-			( report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'proof-7c' ) &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.proof7cEligibleLeakSampleCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.evaluatedDominantPathCount ===
-			report.currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.evaluatedDominantPathCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.rows.length &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.evaluatedDominantPathCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount +
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.unblockedDominantPathCount +
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount &&
+		].includes( proof7cStudy.status ) &&
+		proof7cStudy.proofBoundary.includes( 'CPU/report-only proof-7c selected-oracle evaluation' ) &&
+		proof7cStudy.receiverAggregateOracleStatus ===
+			currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy.status &&
+		Array.isArray( proof7cStudy.rows ) &&
+		Number.isFinite( proof7cStudy.summary.leakSampleCount ) &&
+		Number.isFinite( proof7cStudy.summary.evaluatedDominantPathCount ) &&
+		Number.isFinite( proof7cStudy.summary.missingSurfacePathAuditCount ) &&
+		Number.isFinite( proof7cStudy.summary.blockedDominantPathCount ) &&
+		Number.isFinite( proof7cStudy.summary.unblockedDominantPathCount ) &&
+		Number.isFinite( proof7cStudy.summary.proof7cEligibleLeakSampleCount ) &&
+		Number.isFinite( proof7cStudy.summary.overlappingSafeReceiverCount ) &&
+		Array.isArray( proof7cStudy.summary.overlappingSafeReceivers ) &&
+		reportedProof7cOverlapReceivers.length === expectedProof7cOverlapReceivers.length &&
+		reportedProof7cOverlapReceivers.every( ( receiver, index ) => receiver === expectedProof7cOverlapReceivers[ index ] ) &&
+		typeof proof7cStudy.summary.selected === 'boolean' &&
+		proof7cStudy.summary.selected ===
+			( currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'proof-7c' ) &&
+		proof7cStudy.summary.proof7cEligibleLeakSampleCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
+		proof7cStudy.summary.evaluatedDominantPathCount ===
+			currentEvidence.surfaceSampleCoefficientAttributionStudy.summary.correctSideDominantLeakSampleCount &&
+		proof7cStudy.summary.evaluatedDominantPathCount ===
+			proof7cStudy.rows.length &&
+		proof7cStudy.summary.evaluatedDominantPathCount ===
+			proof7cStudy.summary.blockedDominantPathCount +
+			proof7cStudy.summary.unblockedDominantPathCount +
+			proof7cStudy.summary.missingSurfacePathAuditCount &&
 		(
 			(
 				proof7cMissingAuditStatus === true &&
@@ -1611,23 +1325,23 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 				sdfStaticBlockerOracleStudy.status !== 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
 			)
 		) &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.rows.filter( row =>
+		proof7cStudy.summary.blockedDominantPathCount ===
+			proof7cStudy.rows.filter( row =>
 				row.staticBlocked === true
 			).length &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.unblockedDominantPathCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.rows.filter( row =>
+		proof7cStudy.summary.unblockedDominantPathCount ===
+			proof7cStudy.rows.filter( row =>
 				row.staticBlocked === false
 			).length &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.rows.filter( row =>
+		proof7cStudy.summary.missingSurfacePathAuditCount ===
+			proof7cStudy.rows.filter( row =>
 				row.hasSurfacePathAudit === false
 			).length &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceiverCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceivers.length &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleStatus ===
-			report.currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy.status &&
-		report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.rows.every( row =>
+		proof7cStudy.summary.overlappingSafeReceiverCount ===
+			proof7cStudy.summary.overlappingSafeReceivers.length &&
+		proof7cStudy.summary.receiverAggregateOracleStatus ===
+			currentEvidence.probeBakeContaminationMap.sdfStaticBlockerOracleStudy.status &&
+		proof7cStudy.rows.every( row =>
 			typeof row.receiver === 'string' &&
 			typeof row.sampleLabel === 'string' &&
 			Number.isFinite( row.quadratureWeight ) &&
@@ -1664,157 +1378,157 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 			) ) &&
 		(
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE' &&
-				report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch !== 'proof-7c' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.selected === false
+				proof7cStudy.status === 'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE' &&
+				currentEvidence.surfaceAttributionBranchDecision.selectedBranch !== 'proof-7c' &&
+				proof7cStudy.summary.selected === false
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status !== 'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE' &&
-				report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'proof-7c' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.selected === true
+				proof7cStudy.status !== 'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE' &&
+				currentEvidence.surfaceAttributionBranchDecision.selectedBranch === 'proof-7c' &&
+				proof7cStudy.summary.selected === true
 			)
 		) &&
 		(
 			(
-				report.currentEvidence.surfaceAttributionBranchDecision.selectedBranch !== 'proof-7c' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE'
+				currentEvidence.surfaceAttributionBranchDecision.selectedBranch !== 'proof-7c' &&
+				proof7cStudy.status === 'NOT-SELECTED-PROOF-7C-SURFACE-STATIC-BLOCKER-ORACLE'
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'SUPPORTED-PROOF-7C-NO-SURFACE-LEAK-SAMPLES' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.leakSampleCount === 0
+				proof7cStudy.status === 'SUPPORTED-PROOF-7C-NO-SURFACE-LEAK-SAMPLES' &&
+				proof7cStudy.summary.leakSampleCount === 0
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'OPEN-PROOF-7C-SURFACE-STATIC-BLOCKER-MISSING-PATH-AUDIT' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount > 0
+				proof7cStudy.status === 'OPEN-PROOF-7C-SURFACE-STATIC-BLOCKER-MISSING-PATH-AUDIT' &&
+				proof7cStudy.summary.missingSurfacePathAuditCount > 0
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount > 0 &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceiverCount > 0 &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleStatus === 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
+				proof7cStudy.status === 'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN' &&
+				proof7cStudy.summary.blockedDominantPathCount > 0 &&
+				proof7cStudy.summary.overlappingSafeReceiverCount > 0 &&
+				proof7cStudy.summary.receiverAggregateOracleStatus === 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-AGGREGATE-WIN' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount > 0 &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleStatus !== 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
+				proof7cStudy.status === 'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-AGGREGATE-WIN' &&
+				proof7cStudy.summary.blockedDominantPathCount > 0 &&
+				proof7cStudy.summary.receiverAggregateOracleStatus !== 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-SAFE-RECEIVER-OVERLAP' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount > 0 &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceiverCount === 0 &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleStatus === 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
+				proof7cStudy.status === 'OPEN-PROOF-7C-BLOCKED-SURFACE-PATHS-NO-SAFE-RECEIVER-OVERLAP' &&
+				proof7cStudy.summary.blockedDominantPathCount > 0 &&
+				proof7cStudy.summary.overlappingSafeReceiverCount === 0 &&
+				proof7cStudy.summary.receiverAggregateOracleStatus === 'SUPPORTED-SDF-STATIC-BLOCKER-AGGREGATE-WIN'
 			) ||
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'OPEN-PROOF-7C-NO-BLOCKED-DOMINANT-SURFACE-PATHS' &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount === 0 &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount === 0
+				proof7cStudy.status === 'OPEN-PROOF-7C-NO-BLOCKED-DOMINANT-SURFACE-PATHS' &&
+				proof7cStudy.summary.blockedDominantPathCount === 0 &&
+				proof7cStudy.summary.missingSurfacePathAuditCount === 0
 			)
 		) &&
-		report.currentEvidence.proof7cDispositionStudy !== undefined &&
+		currentEvidence.proof7cDispositionStudy !== undefined &&
 		[
 			'NOT-SELECTED-PROOF-7C-DISPOSITION',
 			'SUPPORTED-PROOF-7C-DISPOSITION-REVIEW-RUNTIME-PROMOTION',
 			'CLOSED-PROOF-7C-DISPOSITION-NO-RUNTIME-PROMOTION',
 			'OPEN-PROOF-7C-DISPOSITION-MISSING-EVIDENCE'
-		].includes( report.currentEvidence.proof7cDispositionStudy.status ) &&
-		report.currentEvidence.proof7cDispositionStudy.status === expectedProof7cDispositionStatus &&
-		report.currentEvidence.proof7cDispositionStudy.proofBoundary.includes( 'Report-only proof-7c disposition' ) &&
-		report.currentEvidence.proof7cDispositionStudy.sourceStatus ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status &&
-		report.currentEvidence.proof7cDispositionStudy.addressed ===
+		].includes( currentEvidence.proof7cDispositionStudy.status ) &&
+		currentEvidence.proof7cDispositionStudy.status === expectedProof7cDispositionStatus &&
+		currentEvidence.proof7cDispositionStudy.proofBoundary.includes( 'Report-only proof-7c disposition' ) &&
+		currentEvidence.proof7cDispositionStudy.sourceStatus ===
+			proof7cStudy.status &&
+		currentEvidence.proof7cDispositionStudy.addressed ===
 			(
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.selected === true &&
-				report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount === 0
+				proof7cStudy.summary.selected === true &&
+				proof7cStudy.summary.missingSurfacePathAuditCount === 0
 			) &&
-		report.currentEvidence.proof7cDispositionStudy.runtimePromotionAllowed ===
-			( report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.status === 'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN' ) &&
+		currentEvidence.proof7cDispositionStudy.runtimePromotionAllowed ===
+			( proof7cStudy.status === 'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN' ) &&
 		(
-			report.currentEvidence.proof7cDispositionStudy.runtimePromotionAllowed === true ||
-			report.currentEvidence.proof7cDispositionStudy.nextProofOnlyAction ===
-				report.currentEvidence.surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction
+			currentEvidence.proof7cDispositionStudy.runtimePromotionAllowed === true ||
+			currentEvidence.proof7cDispositionStudy.nextProofOnlyAction ===
+				surfaceContentFollowupStudy.summary.nextProofOnlyAction
 		) &&
-		report.currentEvidence.proof7cDispositionStudy.summary.selected ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.selected &&
-		report.currentEvidence.proof7cDispositionStudy.summary.blockedDominantPathCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.blockedDominantPathCount &&
-		report.currentEvidence.proof7cDispositionStudy.summary.evaluatedDominantPathCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.evaluatedDominantPathCount &&
-		report.currentEvidence.proof7cDispositionStudy.summary.missingSurfacePathAuditCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.missingSurfacePathAuditCount &&
-		report.currentEvidence.proof7cDispositionStudy.summary.receiverAggregateOracleStatus ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleStatus &&
-		report.currentEvidence.proof7cDispositionStudy.summary.receiverAggregateOracleSafeWinCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.receiverAggregateOracleSafeWinCount &&
-		report.currentEvidence.proof7cDispositionStudy.summary.overlappingSafeReceiverCount ===
-			report.currentEvidence.proof7cSurfaceStaticBlockerOracleStudy.summary.overlappingSafeReceiverCount &&
-		typeof report.currentEvidence.proof7cDispositionStudy.summary.reason === 'string' &&
-		report.currentEvidence.sealedReceiverNormalDiagnostic !== undefined &&
-		report.currentEvidence.sealedReceiverSurfaceQuadratureDiagnostic !== undefined &&
-		report.currentEvidence.sealedReceiverGpuDebugDiagnostic !== undefined &&
-		typeof report.currentEvidence.sealedFailureDomain === 'string' &&
-		[ 'OPEN-CPU-RENDER-METRIC-MISMATCH', 'BOUNDED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.status ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.cpuRenderAgreementGate ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureCpuRenderAgreementGate ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.cpuSurfaceRuntimeWrongRatioMax ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.delta ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.centerDelta ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.surfaceDelta ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.maskedWrongSideColorRatio ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.maskedCorrectBounceRatio ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureDelta ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureDeltaMean ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureDeltaMax ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.maskedQuadratureDeltaMean ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.maskedQuadratureDeltaMax ) &&
-		report.currentEvidence.sealedRenderMetricMismatch.maskedReceiverRegionMetricMode === 'receiver-id-mask-visible-pixels' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureCpuRenderAgreementAggregation === 'string' &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestSurfaceCpuDelta ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestSurfaceCpuAggregation === 'string' &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestScale ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointScale ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointSurfaceWrongRatio ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointSurfaceWrongRatioMax ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointSurfaceCpuDelta ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointCpuAggregation === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointVariant === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermVariant === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTerm === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermCpuKey === 'string' &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermScale ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermDeltaMean ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermDeltaMax ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceTermVariant === 'string' &&
-		[ 'scalarIrradiance', 'visibilityIrradiance', 'finalIrradiance' ].includes( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceTerm ) &&
-		[ 'scalar', 'visibility', 'final' ].includes( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceCpuKey ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceTermScale ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceDeltaMean ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceDeltaMax ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceClippedSampleCount ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementTolerance ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementGate ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementMode === 'string' &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermAgreementGate ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermAgreementMode === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStatus === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityDominantMismatchSource === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStatus === 'string' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorDominantMismatchSource === 'string' &&
+		currentEvidence.proof7cDispositionStudy.summary.selected ===
+			proof7cStudy.summary.selected &&
+		currentEvidence.proof7cDispositionStudy.summary.blockedDominantPathCount ===
+			proof7cStudy.summary.blockedDominantPathCount &&
+		currentEvidence.proof7cDispositionStudy.summary.evaluatedDominantPathCount ===
+			proof7cStudy.summary.evaluatedDominantPathCount &&
+		currentEvidence.proof7cDispositionStudy.summary.missingSurfacePathAuditCount ===
+			proof7cStudy.summary.missingSurfacePathAuditCount &&
+		currentEvidence.proof7cDispositionStudy.summary.receiverAggregateOracleStatus ===
+			proof7cStudy.summary.receiverAggregateOracleStatus &&
+		currentEvidence.proof7cDispositionStudy.summary.receiverAggregateOracleSafeWinCount ===
+			proof7cStudy.summary.receiverAggregateOracleSafeWinCount &&
+		currentEvidence.proof7cDispositionStudy.summary.overlappingSafeReceiverCount ===
+			proof7cStudy.summary.overlappingSafeReceiverCount &&
+		typeof currentEvidence.proof7cDispositionStudy.summary.reason === 'string' &&
+		currentEvidence.sealedReceiverNormalDiagnostic !== undefined &&
+		currentEvidence.sealedReceiverSurfaceQuadratureDiagnostic !== undefined &&
+		currentEvidence.sealedReceiverGpuDebugDiagnostic !== undefined &&
+		typeof currentEvidence.sealedFailureDomain === 'string' &&
+		[ 'OPEN-CPU-RENDER-METRIC-MISMATCH', 'BOUNDED' ].includes( currentEvidence.sealedRenderMetricMismatch.status ) &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.sealedRenderMetricMismatch.cpuRenderAgreementGate ) &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureCpuRenderAgreementGate ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.cpuSurfaceRuntimeWrongRatioMax ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.delta ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.centerDelta ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.surfaceDelta ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.maskedWrongSideColorRatio ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.maskedCorrectBounceRatio ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureDelta ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureDeltaMean ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureDeltaMax ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.maskedQuadratureDeltaMean ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.maskedQuadratureDeltaMax ) &&
+		currentEvidence.sealedRenderMetricMismatch.maskedReceiverRegionMetricMode === 'receiver-id-mask-visible-pixels' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.surfaceQuadratureCpuRenderAgreementAggregation === 'string' &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestSurfaceCpuDelta ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestSurfaceCpuAggregation === 'string' &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestScale ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointScale ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointSurfaceWrongRatio ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointSurfaceWrongRatioMax ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointSurfaceCpuDelta ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointCpuAggregation === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestTightPointVariant === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermVariant === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTerm === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermCpuKey === 'string' &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermScale ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermDeltaMean ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestWeightTermDeltaMax ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceTermVariant === 'string' &&
+		[ 'scalarIrradiance', 'visibilityIrradiance', 'finalIrradiance' ].includes( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceTerm ) &&
+		[ 'scalar', 'visibility', 'final' ].includes( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceCpuKey ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceTermScale ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceDeltaMean ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceDeltaMax ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugBestLinearIrradianceClippedSampleCount ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementTolerance ) &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementGate ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementMode === 'string' &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermAgreementGate ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermAgreementMode === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStatus === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.receiverPixelParityDominantMismatchSource === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStatus === 'string' &&
+		typeof currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorDominantMismatchSource === 'string' &&
 		(
-			report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityLegacyMaskWrongSideDelta === null ||
-			Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityLegacyMaskWrongSideDelta )
+			currentEvidence.sealedRenderMetricMismatch.receiverPixelParityLegacyMaskWrongSideDelta === null ||
+			Number.isFinite( currentEvidence.sealedRenderMetricMismatch.receiverPixelParityLegacyMaskWrongSideDelta )
 		) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugAgreementMode === 'string' &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugComparableVariantCount ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceTermVariantCount ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermVariantCount ) &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWhiteCalibrationLuminanceMean ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWhiteCalibrationVisible === 'boolean' &&
-		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.invertedNormalCenterDelta ) &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.normalConventionCleared === 'boolean' &&
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement !== undefined &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.status ) &&
-		[ 'probe-indirect-only-scene-linear-vs-cpu-surface-sh', 'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.mode ) &&
-		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.comparisonSourceLabel === 'runtime-probe-indirect-scene-linear',
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugAgreementMode === 'string' &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugComparableVariantCount ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceTermVariantCount ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermVariantCount ) &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.gpuDebugWhiteCalibrationLuminanceMean ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.gpuDebugWhiteCalibrationVisible === 'boolean' &&
+		Number.isFinite( currentEvidence.sealedRenderMetricMismatch.invertedNormalCenterDelta ) &&
+		typeof currentEvidence.sealedRenderMetricMismatch.normalConventionCleared === 'boolean' &&
+		currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement !== undefined &&
+		[ 'OPEN', 'SUPPORTED' ].includes( currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.status ) &&
+		[ 'probe-indirect-only-scene-linear-vs-cpu-surface-sh', 'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' ].includes( currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.mode ) &&
+		currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.comparisonSourceLabel === 'runtime-probe-indirect-scene-linear',
 		'grounding parity artifact: proof report must persist sealed-wall normal convention, SH contribution, receiver-surface quadrature, GPU debug, and render-metric mismatch diagnostics.' );
 	const reportPath = path.join( lightProbeParityArtifactDir, 'proof-report.json' );
 	const tablePath = path.join( lightProbeParityArtifactDir, 'proof-table.md' );

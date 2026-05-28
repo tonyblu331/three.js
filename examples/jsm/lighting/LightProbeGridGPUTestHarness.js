@@ -1,8 +1,36 @@
 import * as THREE from 'three/webgpu';
-import { Fn, floor, int, normalWorld, textureLoad, uniform, uv, viewportCoordinate, vec4, ivec2 } from 'three/tsl';
+import { Fn, normalWorld, uniform, uv, vec4 } from 'three/tsl';
 
 import { LightProbeGridGPU } from './LightProbeGridGPU.js';
 import { createLightProbeGridGPUVisibilityWeightingStudy } from './LightProbeGridGPUVisibilityWeightingStudy.js';
+import {
+	readLightProbeGridGPUCoefficientTarget,
+	readLightProbeGridGPUComputeCoefficientTexture,
+	readLightProbeGridGPUDecodedPackedAtlasPixel,
+	readLightProbeGridGPUPackedAtlasPixel,
+	readLightProbeGridGPUVisibilityMomentPixel
+} from './lightprobegridgpu/LightProbeGridGPUProofReadback.js';
+import {
+	ATLAS_PADDING,
+	PACKED_SH_COEFFICIENT_LAYOUT,
+	PACKED_SH_TEXTURES,
+	SH_COEFFICIENTS
+} from './lightprobegridgpu/LightProbeGridGPUConstants.js';
+import {
+	getLightProbeGridGPUAtlasDepth,
+	getLightProbeGridGPUPackedAtlasBaseLayer,
+	getLightProbeGridGPUPackedAtlasCenterSampleZ,
+	getLightProbeGridGPUPackedAtlasLayer,
+	getLightProbeGridGPUPaddedAtlasSlices,
+	getLightProbeGridGPUProbeIndex
+} from './lightprobegridgpu/LightProbeGridGPUAtlas.js';
+import {
+	colorMaxDelta,
+	evaluateIrradianceContract,
+	maxCoefficientDelta,
+	projectSyntheticCube,
+	projectSyntheticCubeFragmentCoefficientPath
+} from './lightprobegridgpu/LightProbeGridGPUCpuShMath.js';
 
 export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
@@ -397,264 +425,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
-	const sphericalHarmonics3Basis = ( dir ) => {
-
-		const x = dir.x;
-		const y = dir.y;
-		const z = dir.z;
-
-		return [
-			0.282095,
-			0.488603 * y,
-			0.488603 * z,
-			0.488603 * x,
-			1.092548 * x * y,
-			1.092548 * y * z,
-			0.315392 * ( 3 * z * z - 1 ),
-			1.092548 * x * z,
-			0.546274 * ( x * x - y * y )
-		];
-
-	};
-
-	const projectionConventionDirection = ( convention, faceIndex, ix, iy, imageWidth ) => {
-
-		const pixelSize = 2 / imageWidth;
-		const textureCol = - 1 + ( ix + 0.5 ) * pixelSize;
-		const shaderCol = 1 - ( ix + 0.5 ) * pixelSize;
-		const row = 1 - ( iy + 0.5 ) * pixelSize;
-
-		if ( convention === 'shader-webgpu' ||
-			convention === 'generator-render-target-webgpu' ||
-			convention === 'cube-texture' ) {
-
-			switch ( faceIndex ) {
-
-				case 0: return new THREE.Vector3( - 1, row, shaderCol );
-				case 1: return new THREE.Vector3( 1, row, - shaderCol );
-				case 2: return new THREE.Vector3( shaderCol, 1, - row );
-				case 3: return new THREE.Vector3( shaderCol, - 1, row );
-				case 4: return new THREE.Vector3( shaderCol, row, 1 );
-				default: return new THREE.Vector3( - shaderCol, row, - 1 );
-
-			}
-
-		}
-
-		if ( convention === 'webgl-light-probe-grid' ||
-			convention === 'generator-render-target-webgl' ) {
-
-			switch ( faceIndex ) {
-
-				case 0: return new THREE.Vector3( 1, row, - textureCol );
-				case 1: return new THREE.Vector3( - 1, row, textureCol );
-				case 2: return new THREE.Vector3( textureCol, 1, - row );
-				case 3: return new THREE.Vector3( textureCol, - 1, row );
-				case 4: return new THREE.Vector3( textureCol, row, 1 );
-				default: return new THREE.Vector3( - textureCol, row, - 1 );
-
-			}
-
-		}
-
-		throw new Error( `Unknown projection convention ${ convention }.` );
-
-	};
-
-	const projectionFixtureColor = ( fixture, faceIndex, dir ) => {
-
-		const resolvedFixture = fixture === 'axis-dominance' ? 'positive-axis-lobes' : fixture;
-
-		if ( resolvedFixture === 'constant' ) return { r: 0.7, g: 0.45, b: 0.25 };
-
-		if ( resolvedFixture === 'direction-rgb' ) {
-
-			return {
-				r: dir.x * 0.5 + 0.5,
-				g: dir.y * 0.5 + 0.5,
-				b: dir.z * 0.5 + 0.5
-			};
-
-		}
-
-		if ( resolvedFixture === 'positive-axis-lobes' ) {
-
-			return {
-				r: Math.max( dir.x, 0 ),
-				g: Math.max( dir.y, 0 ),
-				b: Math.max( dir.z, 0 )
-			};
-
-		}
-
-		const faceColors = [
-			{ r: 1.0, g: 0.15, b: 0.05 },
-			{ r: 0.05, g: 0.9, b: 0.2 },
-			{ r: 0.15, g: 0.2, b: 1.0 },
-			{ r: 0.95, g: 0.8, b: 0.1 },
-			{ r: 0.2, g: 0.85, b: 0.85 },
-			{ r: 0.85, g: 0.25, b: 0.9 }
-		];
-
-		return faceColors[ faceIndex ];
-
-	};
-
-	const projectSyntheticCubeFragmentCoefficientPath = ( convention, fixture, imageWidth = 8 ) => {
-
-		const coefficients = Array.from( { length: 9 }, () => ( { r: 0, g: 0, b: 0 } ) );
-
-		for ( let coefficientIndex = 0; coefficientIndex < 9; coefficientIndex ++ ) {
-
-			let totalWeight = 0;
-
-			for ( let faceIndex = 0; faceIndex < 6; faceIndex ++ ) {
-
-				for ( let iy = 0; iy < imageWidth; iy ++ ) {
-
-					for ( let ix = 0; ix < imageWidth; ix ++ ) {
-
-						const coord = projectionConventionDirection( convention, faceIndex, ix, iy, imageWidth );
-						const lengthSq = coord.lengthSq();
-						const weight = 4 / ( Math.sqrt( lengthSq ) * lengthSq );
-						const dir = coord.clone().normalize();
-						const color = projectionFixtureColor( fixture, faceIndex, dir );
-						const basis = sphericalHarmonics3Basis( dir )[ coefficientIndex ];
-
-						totalWeight += weight;
-						coefficients[ coefficientIndex ].r += basis * color.r * weight;
-						coefficients[ coefficientIndex ].g += basis * color.g * weight;
-						coefficients[ coefficientIndex ].b += basis * color.b * weight;
-
-					}
-
-				}
-
-			}
-
-			const norm = 4 * Math.PI / totalWeight;
-			coefficients[ coefficientIndex ].r *= norm;
-			coefficients[ coefficientIndex ].g *= norm;
-			coefficients[ coefficientIndex ].b *= norm;
-
-		}
-
-		return coefficients;
-
-	};
-
-	const projectSyntheticCube = ( convention, fixture, imageWidth = 8 ) => {
-
-		let totalWeight = 0;
-		const coefficients = Array.from( { length: 9 }, () => ( { r: 0, g: 0, b: 0 } ) );
-
-		for ( let faceIndex = 0; faceIndex < 6; faceIndex ++ ) {
-
-			for ( let iy = 0; iy < imageWidth; iy ++ ) {
-
-				for ( let ix = 0; ix < imageWidth; ix ++ ) {
-
-					const coord = projectionConventionDirection( convention, faceIndex, ix, iy, imageWidth );
-					const lengthSq = coord.lengthSq();
-					const weight = 4 / ( Math.sqrt( lengthSq ) * lengthSq );
-					const dir = coord.clone().normalize();
-					const color = projectionFixtureColor( fixture, faceIndex, dir );
-					const basis = sphericalHarmonics3Basis( dir );
-
-					totalWeight += weight;
-
-					for ( let coefficientIndex = 0; coefficientIndex < 9; coefficientIndex ++ ) {
-
-						coefficients[ coefficientIndex ].r += basis[ coefficientIndex ] * color.r * weight;
-						coefficients[ coefficientIndex ].g += basis[ coefficientIndex ] * color.g * weight;
-						coefficients[ coefficientIndex ].b += basis[ coefficientIndex ] * color.b * weight;
-
-					}
-
-				}
-
-			}
-
-		}
-
-		const norm = 4 * Math.PI / totalWeight;
-
-		for ( const coefficient of coefficients ) {
-
-			coefficient.r *= norm;
-			coefficient.g *= norm;
-			coefficient.b *= norm;
-
-		}
-
-		return coefficients;
-
-	};
-
-	const maxCoefficientDelta = ( a, b ) => {
-
-		let maxDelta = 0;
-
-		for ( let i = 0; i < a.length; i ++ ) {
-
-			maxDelta = Math.max(
-				maxDelta,
-				Math.abs( a[ i ].r - b[ i ].r ),
-				Math.abs( a[ i ].g - b[ i ].g ),
-				Math.abs( a[ i ].b - b[ i ].b )
-			);
-
-		}
-
-		return maxDelta;
-
-	};
-
-	const evaluateIrradianceContract = ( coefficients, normal, options = {} ) => {
-
-		const band1Intensity = options.band1Intensity ?? 1;
-		const band2Intensity = options.band2Intensity ?? 1;
-		const clampNegative = options.clampNegative === true;
-		const x = normal.x;
-		const y = normal.y;
-		const z = normal.z;
-		const result = { r: 0, g: 0, b: 0 };
-		const add = ( coefficient, scale ) => {
-
-			result.r += coefficient.r * scale;
-			result.g += coefficient.g * scale;
-			result.b += coefficient.b * scale;
-
-		};
-
-		add( coefficients[ 0 ], 0.886227 );
-		add( coefficients[ 1 ], 2.0 * 0.511664 * y * band1Intensity );
-		add( coefficients[ 2 ], 2.0 * 0.511664 * z * band1Intensity );
-		add( coefficients[ 3 ], 2.0 * 0.511664 * x * band1Intensity );
-		add( coefficients[ 4 ], 2.0 * 0.429043 * x * y * band2Intensity );
-		add( coefficients[ 5 ], 2.0 * 0.429043 * y * z * band2Intensity );
-		add( coefficients[ 6 ], ( 0.743125 * z * z - 0.247708 ) * band2Intensity );
-		add( coefficients[ 7 ], 2.0 * 0.429043 * x * z * band2Intensity );
-		add( coefficients[ 8 ], 0.429043 * ( x * x - y * y ) * band2Intensity );
-
-		if ( clampNegative ) {
-
-			result.r = Math.max( result.r, 0 );
-			result.g = Math.max( result.g, 0 );
-			result.b = Math.max( result.b, 0 );
-
-		}
-
-		return result;
-
-	};
-
-	const colorMaxDelta = ( a, b ) => Math.max(
-		Math.abs( a.r - b.r ),
-		Math.abs( a.g - b.g ),
-		Math.abs( a.b - b.b )
-	);
-
 	const roundContractMetric = ( value ) => Number( value.toFixed( 8 ) );
 
 	const inspectSHMathContract = () => {
@@ -706,7 +476,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		if ( typeof THREE.SphericalHarmonics3 === 'function' ) {
 
 			const sh = new THREE.SphericalHarmonics3();
-			for ( let i = 0; i < 9; i ++ ) {
+			for ( let i = 0; i < SH_COEFFICIENTS; i ++ ) {
 
 				sh.coefficients[ i ].set(
 					directionCoefficients[ i ].r,
@@ -951,7 +721,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const resolution = 2;
 		const cubemapSize = 4;
 		const totalProbes = resolution * resolution * resolution;
-		const coefficientWidth = 9;
+		const coefficientWidth = SH_COEFFICIENTS;
 		const coefficientHeight = totalProbes;
 		const coefficientTolerance = 0.035;
 		const atlasTolerance = 0.035;
@@ -974,82 +744,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		const baselineGrid = createParityGrid();
 		const computeGrid = createParityGrid();
-
-		const readCoefficientTarget = async ( grid ) => {
-
-			const data = await renderer.readRenderTargetPixelsAsync(
-				grid.coefficientTarget,
-				0,
-				0,
-				coefficientWidth,
-				coefficientHeight
-			);
-
-			return Array.from( data );
-
-		};
-
-		const readComputeCoefficientTexture = async ( grid ) => {
-
-			const target = new THREE.RenderTarget( coefficientWidth, coefficientHeight, {
-				format: THREE.RGBAFormat,
-				type: grid.coefficientTarget.texture.type,
-				minFilter: THREE.NearestFilter,
-				magFilter: THREE.NearestFilter,
-				depthBuffer: false
-			} );
-			const material = new THREE.NodeMaterial();
-			const camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
-			const mesh = new THREE.Mesh( new THREE.PlaneGeometry( 2, 2 ), material );
-			const readbackScene = new THREE.Scene();
-			const previousRenderTarget = renderer.getRenderTarget();
-			const previousAutoClear = renderer.autoClear;
-
-			material.fragmentNode = Fn( () => {
-
-				const ix = int( floor( viewportCoordinate.x ) );
-				const iy = int( floor( viewportCoordinate.y ) );
-
-				return textureLoad( grid.computeProjectionTexture, ivec2( ix, iy ) );
-
-			} )();
-			material.toneMapped = false;
-			readbackScene.add( mesh );
-
-			try {
-
-				renderer.autoClear = false;
-				renderer.setRenderTarget( target );
-				renderer.render( readbackScene, camera );
-
-				return Array.from( await renderer.readRenderTargetPixelsAsync(
-					target,
-					0,
-					0,
-					coefficientWidth,
-					coefficientHeight
-				) );
-
-			} finally {
-
-				renderer.setRenderTarget( previousRenderTarget );
-				renderer.autoClear = previousAutoClear;
-				mesh.geometry.dispose();
-				material.dispose();
-				target.dispose();
-
-			}
-
-		};
-
-		const readAtlasPixel = async ( grid, { textureIndex, gridZ, x, y } ) => {
-
-			const layer = grid._getPackedAtlasLayer( textureIndex, gridZ );
-			const data = await renderer.readRenderTargetPixelsAsync( grid.atlasTarget, x, y, 1, 1, 0, layer );
-
-			return Array.from( data );
-
-		};
 
 		const maxRgbDelta = ( a, b ) => {
 
@@ -1087,11 +781,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		try {
 
 			const fragmentTimings = await baselineGrid.bake( renderer, scene, { projectionBackendOverride: 'force-fragment' } );
-			const fragmentCoefficients = await readCoefficientTarget( baselineGrid );
+			const fragmentCoefficients = await readLightProbeGridGPUCoefficientTarget( renderer, baselineGrid, coefficientWidth, coefficientHeight );
 			const computeTimings = await computeGrid.bake( renderer, scene, { projectionBackendOverride: 'force-compute' } );
 			const computeSelected = computeTimings.projectionBackend === 'compute-probe-reduction';
 			const computeCoefficients = computeSelected ?
-				await readComputeCoefficientTexture( computeGrid ) :
+				await readLightProbeGridGPUComputeCoefficientTexture( renderer, computeGrid, coefficientWidth, coefficientHeight ) :
 				[];
 			const coefficientMaxDelta = computeSelected ?
 				maxRgbDelta( fragmentCoefficients, computeCoefficients ) :
@@ -1102,8 +796,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				for ( const sample of atlasSamples ) {
 
-					const fragment = await readAtlasPixel( baselineGrid, sample );
-					const compute = await readAtlasPixel( computeGrid, sample );
+					const fragment = await readLightProbeGridGPUPackedAtlasPixel( renderer, baselineGrid, sample );
+					const compute = await readLightProbeGridGPUPackedAtlasPixel( renderer, computeGrid, sample );
 					const maxDelta = maxRgbaDelta( fragment, compute );
 
 					atlasChecks.push( {
@@ -1358,13 +1052,13 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	const inspectAtlasPacking = async () => {
 
-		const shCoefficientCount = 9;
-		const packedAtlasTextureCount = 7;
-		const atlasPadding = 1;
+		const shCoefficientCount = SH_COEFFICIENTS;
+		const packedAtlasTextureCount = PACKED_SH_TEXTURES;
+		const atlasPadding = ATLAS_PADDING;
 		const resolution = 4;
 		const totalProbes = resolution * resolution * resolution;
-		const paddedSlices = resolution + 2 * atlasPadding;
-		const atlasDepth = packedAtlasTextureCount * paddedSlices;
+		const paddedSlices = getLightProbeGridGPUPaddedAtlasSlices( resolution );
+		const atlasDepth = getLightProbeGridGPUAtlasDepth( resolution );
 		const syntheticProbeScale = 0.014;
 		const syntheticCoefficientScale = 0.001;
 		const syntheticChannelOffsets = {
@@ -1373,51 +1067,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			b: 0.003,
 			a: 0.0045
 		};
-		const componentNames = [ 'r', 'g', 'b', 'a' ];
-		const coefficientPacking = [
-			[
-				{ coefficient: 0, component: 'r' },
-				{ coefficient: 0, component: 'g' },
-				{ coefficient: 0, component: 'b' },
-				{ coefficient: 1, component: 'r' }
-			],
-			[
-				{ coefficient: 1, component: 'g' },
-				{ coefficient: 1, component: 'b' },
-				{ coefficient: 2, component: 'r' },
-				{ coefficient: 2, component: 'g' }
-			],
-			[
-				{ coefficient: 2, component: 'b' },
-				{ coefficient: 3, component: 'r' },
-				{ coefficient: 3, component: 'g' },
-				{ coefficient: 3, component: 'b' }
-			],
-			[
-				{ coefficient: 4, component: 'r' },
-				{ coefficient: 4, component: 'g' },
-				{ coefficient: 4, component: 'b' },
-				{ coefficient: 5, component: 'r' }
-			],
-			[
-				{ coefficient: 5, component: 'g' },
-				{ coefficient: 5, component: 'b' },
-				{ coefficient: 6, component: 'r' },
-				{ coefficient: 6, component: 'g' }
-			],
-			[
-				{ coefficient: 6, component: 'b' },
-				{ coefficient: 7, component: 'r' },
-				{ coefficient: 7, component: 'g' },
-				{ coefficient: 7, component: 'b' }
-			],
-			[
-				{ coefficient: 8, component: 'r' },
-				{ coefficient: 8, component: 'g' },
-				{ coefficient: 8, component: 'b' },
-				{ value: 'validity' }
-			]
-		];
 		const probeValidity = Float32Array.from(
 			{ length: totalProbes },
 			( _, index ) => 0.25 + ( index % 7 ) * 0.1
@@ -1439,7 +1088,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			coefficient * syntheticCoefficientScale +
 			syntheticChannelOffsets[ component ];
 
-		const expectedPackedPixel = ( textureIndex, probeIndex ) => coefficientPacking[ textureIndex ].map( ( entry ) => {
+		const expectedPackedPixel = ( textureIndex, probeIndex ) => PACKED_SH_COEFFICIENT_LAYOUT[ textureIndex ].map( ( entry ) => {
 
 			if ( entry.value === 'validity' ) return probeValidity[ probeIndex ];
 
@@ -1447,23 +1096,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		} );
 
-		const decodeReadbackValue = ( value, data ) => data instanceof Uint16Array ?
-			THREE.DataUtils.fromHalfFloat( value ) :
-			value;
-
-		const readAtlasPixel = async ( layer, x, y ) => {
-
-			const data = await _lightProbeContext.renderer.readRenderTargetPixelsAsync( testGrid.atlasTarget, x, y, 1, 1, 0, layer );
-
-			return componentNames.map( ( _, index ) => decodeReadbackValue( data[ index ], data ) );
-
-		};
 
 		const createReadbackCheck = async ( { textureIndex, gridZ, x, y, label, sourceGridZ = gridZ } ) => {
 
 			const layer = testGrid._getPackedAtlasLayer( textureIndex, gridZ );
-			const probeIndex = x + y * resolution + sourceGridZ * resolution * resolution;
-			const actual = await readAtlasPixel( layer, x, y );
+			const probeIndex = getLightProbeGridGPUProbeIndex( x, y, sourceGridZ, resolution );
+			const actual = await readLightProbeGridGPUDecodedPackedAtlasPixel( _lightProbeContext.renderer, testGrid, { textureIndex, gridZ, x, y } );
 			const expected = expectedPackedPixel( textureIndex, probeIndex );
 			const deltas = actual.map( ( value, index ) => Math.abs( value - expected[ index ] ) );
 
@@ -1565,20 +1203,20 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				for ( const gridZ of [ 0, resolution - 1 ] ) {
 
-					const baseLayer = textureIndex * paddedSlices + atlasPadding;
+					const baseLayer = getLightProbeGridGPUPackedAtlasBaseLayer( textureIndex, paddedSlices );
 
 					addressChecks.push( {
 						textureIndex,
 						gridZ,
 						baseLayer,
 						methodBaseLayer: testGrid._getPackedAtlasBaseLayer( textureIndex ),
-						dataLayer: baseLayer + gridZ,
+						dataLayer: getLightProbeGridGPUPackedAtlasLayer( textureIndex, gridZ, paddedSlices ),
 						methodDataLayer: testGrid._getPackedAtlasLayer( textureIndex, gridZ ),
-						leadingPaddingLayer: baseLayer - atlasPadding,
+						leadingPaddingLayer: getLightProbeGridGPUPackedAtlasLayer( textureIndex, - atlasPadding, paddedSlices ),
 						methodLeadingPaddingLayer: testGrid._getPackedAtlasLayer( textureIndex, - atlasPadding ),
-						trailingPaddingLayer: baseLayer + resolution,
+						trailingPaddingLayer: getLightProbeGridGPUPackedAtlasLayer( textureIndex, resolution, paddedSlices ),
 						methodTrailingPaddingLayer: testGrid._getPackedAtlasLayer( textureIndex, resolution ),
-						centerSampleZ: roundMetric( ( baseLayer + gridZ + 0.5 ) / atlasDepth )
+						centerSampleZ: roundMetric( getLightProbeGridGPUPackedAtlasCenterSampleZ( textureIndex, gridZ, paddedSlices, atlasDepth ) )
 					} );
 
 				}
@@ -1624,7 +1262,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				atlasDepth,
 				gridProbeIndexFormula: 'x + y * resolution + z * resolution^2',
 				addressChecks,
-				coefficientPacking,
+				coefficientPacking: PACKED_SH_COEFFICIENT_LAYOUT,
 				readbackChecks,
 				paddingChecks,
 				maxReadbackDelta,
@@ -1713,35 +1351,22 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			{ label: 'probe-mid-down', probeIndex: midProbe, x: center, y: edge },
 			{ label: 'probe-mid-up', probeIndex: midProbe, x: center, y: oppositeEdge }
 		];
-		const decodeReadbackValue = ( value, data ) => data instanceof Uint16Array ?
-			THREE.DataUtils.fromHalfFloat( value ) :
-			value;
 		const samples = [];
 
 		for ( const point of readbackPoints ) {
 
-			const data = await _lightProbeContext.renderer.readRenderTargetPixelsAsync( target, point.x, point.y, 1, 1, 0, point.probeIndex );
-			const meanDistance = decodeReadbackValue( data[ 0 ], data );
-			const meanSquaredDistance = decodeReadbackValue( data[ 1 ], data );
-			const hitConfidence = decodeReadbackValue( data[ 2 ], data );
-			const backfaceConfidence = decodeReadbackValue( data[ 3 ], data );
-			const variance = meanSquaredDistance - meanDistance * meanDistance;
-			const finite = Number.isFinite( meanDistance ) &&
-				Number.isFinite( meanSquaredDistance ) &&
-				Number.isFinite( hitConfidence ) &&
-				Number.isFinite( backfaceConfidence ) &&
-				Number.isFinite( variance );
+			const moment = await readLightProbeGridGPUVisibilityMomentPixel( _lightProbeContext.renderer, target, point );
 
 			samples.push( {
 				...point,
-				meanDistance: roundMetric( meanDistance ),
-				meanSquaredDistance: roundMetric( meanSquaredDistance ),
-				variance: roundMetric( Math.max( variance, 0 ) ),
-				hitConfidence: roundMetric( hitConfidence ),
-				validity: roundMetric( backfaceConfidence ),
-				backfaceConfidence: roundMetric( backfaceConfidence ),
+				meanDistance: roundMetric( moment.meanDistance ),
+				meanSquaredDistance: roundMetric( moment.meanSquaredDistance ),
+				variance: roundMetric( Math.max( moment.variance, 0 ) ),
+				hitConfidence: roundMetric( moment.hitConfidence ),
+				validity: roundMetric( moment.backfaceConfidence ),
+				backfaceConfidence: roundMetric( moment.backfaceConfidence ),
 				momentEncoding: info.encoding,
-				finite
+				finite: moment.finite
 			} );
 
 		}

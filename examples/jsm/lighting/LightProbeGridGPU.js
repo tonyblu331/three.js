@@ -5,76 +5,88 @@ import {
 	DataTexture,
 	FloatType,
 	HalfFloatType,
-	InstancedMesh,
 	IrradianceNode,
 	LinearFilter,
-	Matrix4,
-	Mesh,
-	MeshBasicNodeMaterial,
 	NearestFilter,
-	NodeMaterial,
 	Object3D,
-	OrthographicCamera,
-	PlaneGeometry,
 	RenderTarget,
 	RenderTarget3D,
 	RGBAFormat,
-	Scene,
-	SphereGeometry,
 	StorageTexture,
-	Vector3,
-	Vector4
+	Vector3
 } from 'three/webgpu';
 import {
 	clamp,
-	cubeTexture,
 	cameraPosition,
 	float,
 	floor,
 	Fn,
 	If,
-	instanceIndex,
 	int,
 	ivec2,
 	ivec3,
 	lights,
-	Loop,
 	max,
 	normalWorld,
 	positionWorld,
 	texture3D,
 	textureLoad,
-	textureStore,
 	uint,
 	uniform,
-	uvec2,
 	uv,
-	vec2,
-	viewportCoordinate,
 	vec3,
 	vec4
 } from 'three/tsl';
 
-const SH_COEFFICIENTS = 9;
-const PACKED_SH_TEXTURES = 7;
-const ATLAS_PADDING = 1;
-const PROBE_VALIDITY_FLOOR = 0.05;
-const VISIBILITY_DEPTH_RESOLUTION = 8;
-const VISIBILITY_DEPTH_MAX_DISTANCE = 20;
-const VISIBILITY_MIN_VARIANCE = 0.0004;
-const VISIBILITY_DISTANCE_BIAS = 0.02;
-const DEFAULT_PROBE_LAYER_MASK = 1;
-const BACKEND_LABELS = {
-	projection: 'fragment',
-	atlas: 'render-pass',
-	update: 'full'
-};
+import {
+	ATLAS_PADDING,
+	BACKEND_LABELS,
+	DEFAULT_PROBE_LAYER_MASK,
+	PACKED_SH_TEXTURES,
+	PROBE_VALIDITY_FLOOR,
+	SH_COEFFICIENTS,
+	VISIBILITY_DEPTH_MAX_DISTANCE,
+	VISIBILITY_DEPTH_RESOLUTION,
+	VISIBILITY_DISTANCE_BIAS,
+	VISIBILITY_MIN_VARIANCE
+} from './lightprobegridgpu/LightProbeGridGPUConstants.js';
+import {
+	getLightProbeGridGPUAtlasDepth,
+	getLightProbeGridGPUPackedAtlasBaseLayer,
+	getLightProbeGridGPUPackedAtlasLayer,
+	getLightProbeGridGPUPaddedAtlasSlices,
+	getLightProbeGridGPUProbeCoord
+} from './lightprobegridgpu/LightProbeGridGPUAtlas.js';
+import {
+	createLightProbeGridGPUFullscreenPass,
+	disposeLightProbeGridGPUFullscreenMesh,
+	disposeLightProbeGridGPUHelper,
+	disposeLightProbeGridGPUResource
+} from './lightprobegridgpu/LightProbeGridGPUResources.js';
+import {
+	createLightProbeGridGPUComputeProjectionNode,
+	createLightProbeGridGPUProjectionMaterial
+} from './lightprobegridgpu/LightProbeGridGPUProjection.js';
+import {
+	createLightProbeGridGPUAtlasRepackMaterial
+} from './lightprobegridgpu/LightProbeGridGPUAtlasRepack.js';
+import {
+	createLightProbeGridGPUVisibilityDistanceMaterial,
+	createLightProbeGridGPUVisibilityRepackMaterial,
+	getLightProbeGridGPUVisibilityLoadCoord
+} from './lightprobegridgpu/LightProbeGridGPUVisibility.js';
+import {
+	applyLightProbeGridGPUHelperDepthMode,
+	createLightProbeGridGPUHelper
+} from './lightprobegridgpu/LightProbeGridGPUHelper.js';
+import {
+	captureLightProbeGridGPUBakeState,
+	createLightProbeGridGPUBakeResult,
+	restoreLightProbeGridGPUBakeState
+} from './lightprobegridgpu/LightProbeGridGPUBake.js';
 
 const _probePosition = /*@__PURE__*/ new Vector3();
 const _gridSize = /*@__PURE__*/ new Vector3();
-const _currentViewport = /*@__PURE__*/ new Vector4();
-const _currentScissor = /*@__PURE__*/ new Vector4();
-const _matrix = /*@__PURE__*/ new Matrix4();
 
 const getBakeTimingPerformance = () => globalThis.performance;
 const getBakeTimingNow = () => {
@@ -134,6 +146,7 @@ const getBakeTimingSourceKind = ( timingSource ) => timingSource === 'gpu-timest
  *
  * @augments Object3D
  */
+
 class LightProbeGridGPU extends Object3D {
 
 	/**
@@ -389,29 +402,23 @@ class LightProbeGridGPU extends Object3D {
 
 	dispose() {
 
-		if ( this.projectionMaterial !== null ) this.projectionMaterial.dispose();
-		if ( this.computeProjectionNode !== null ) this.computeProjectionNode.dispose();
-		if ( this.repackFragmentMaterial !== null ) this.repackFragmentMaterial.dispose();
-		if ( this.repackComputeProjectionMaterial !== null ) this.repackComputeProjectionMaterial.dispose();
-		if ( this.projectionMesh !== null ) this.projectionMesh.geometry.dispose();
-		if ( this.repackMesh !== null ) this.repackMesh.geometry.dispose();
-		if ( this.visibilityRepackMesh !== null ) this.visibilityRepackMesh.geometry.dispose();
-		if ( this.helper !== null ) {
-
-			this.helper.geometry.dispose();
-			this.helper.material.dispose();
-
-		}
-
-		if ( this.cubeRenderTarget !== null ) this.cubeRenderTarget.dispose();
-		if ( this.coefficientTarget !== null ) this.coefficientTarget.dispose();
-		if ( this.computeProjectionTexture !== null ) this.computeProjectionTexture.dispose();
-		if ( this.atlasTarget !== null ) this.atlasTarget.dispose();
-		if ( this.probeValidityTexture !== null ) this.probeValidityTexture.dispose();
-		if ( this.visibilityDepthTarget !== null ) this.visibilityDepthTarget.dispose();
-		if ( this.visibilityDistanceTarget !== null ) this.visibilityDistanceTarget.dispose();
-		if ( this.visibilityDistanceMaterial !== null ) this.visibilityDistanceMaterial.dispose();
-		if ( this.visibilityRepackMaterial !== null ) this.visibilityRepackMaterial.dispose();
+		disposeLightProbeGridGPUResource( this.projectionMaterial );
+		disposeLightProbeGridGPUResource( this.computeProjectionNode );
+		disposeLightProbeGridGPUResource( this.repackFragmentMaterial );
+		disposeLightProbeGridGPUResource( this.repackComputeProjectionMaterial );
+		disposeLightProbeGridGPUFullscreenMesh( this.projectionMesh );
+		disposeLightProbeGridGPUFullscreenMesh( this.repackMesh );
+		disposeLightProbeGridGPUFullscreenMesh( this.visibilityRepackMesh );
+		disposeLightProbeGridGPUHelper( this.helper );
+		disposeLightProbeGridGPUResource( this.cubeRenderTarget );
+		disposeLightProbeGridGPUResource( this.coefficientTarget );
+		disposeLightProbeGridGPUResource( this.computeProjectionTexture );
+		disposeLightProbeGridGPUResource( this.atlasTarget );
+		disposeLightProbeGridGPUResource( this.probeValidityTexture );
+		disposeLightProbeGridGPUResource( this.visibilityDepthTarget );
+		disposeLightProbeGridGPUResource( this.visibilityDistanceTarget );
+		disposeLightProbeGridGPUResource( this.visibilityDistanceMaterial );
+		disposeLightProbeGridGPUResource( this.visibilityRepackMaterial );
 
 		this.projectionMaterial = null;
 		this.computeProjectionNode = null;
@@ -451,16 +458,14 @@ class LightProbeGridGPU extends Object3D {
 	getProbePosition( index, target ) {
 
 		const resolution = this.resolution;
-		const iz = Math.floor( index / ( resolution * resolution ) );
-		const iy = Math.floor( ( index - iz * resolution * resolution ) / resolution );
-		const ix = index % resolution;
+		const coord = getLightProbeGridGPUProbeCoord( index, resolution );
 
 		_gridSize.subVectors( this.max, this.min );
 
 		target.set(
-			this.min.x + ix * _gridSize.x / ( resolution - 1 ),
-			this.min.y + iy * _gridSize.y / ( resolution - 1 ),
-			this.min.z + iz * _gridSize.z / ( resolution - 1 )
+			this.min.x + coord.x * _gridSize.x / ( resolution - 1 ),
+			this.min.y + coord.y * _gridSize.y / ( resolution - 1 ),
+			this.min.z + coord.z * _gridSize.z / ( resolution - 1 )
 		);
 
 		return target;
@@ -633,13 +638,13 @@ class LightProbeGridGPU extends Object3D {
 
 	_getPackedAtlasBaseLayer( textureIndex ) {
 
-		return textureIndex * this.paddedSlices + ATLAS_PADDING;
+		return getLightProbeGridGPUPackedAtlasBaseLayer( textureIndex, this.paddedSlices );
 
 	}
 
 	_getPackedAtlasLayer( textureIndex, gridZ ) {
 
-		return this._getPackedAtlasBaseLayer( textureIndex ) + gridZ;
+		return getLightProbeGridGPUPackedAtlasLayer( textureIndex, gridZ, this.paddedSlices );
 
 	}
 
@@ -764,24 +769,8 @@ class LightProbeGridGPU extends Object3D {
 
 		const loadVisibilityMoment = useGuardedVisibility ? ( coord, direction ) => {
 
-			const probeIndex = int( coord.x ).add( int( coord.y ).mul( resolution ) ).add( int( coord.z ).mul( resolution * resolution ) );
 			const dir = this._safeNormalize( direction );
-			const denominator = dir.x.abs().add( dir.y.abs() ).add( dir.z.abs() ).max( 0.0001 );
-			const octX = dir.x.div( denominator ).toVar();
-			const octY = dir.y.div( denominator ).toVar();
-
-			If( dir.z.lessThan( 0 ), () => {
-
-				const oldX = octX.toVar();
-				octX.assign( float( 1 ).sub( octY.abs() ).mul( oldX.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
-				octY.assign( float( 1 ).sub( oldX.abs() ).mul( octY.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
-
-			} );
-
-			const ix = int( clamp( octX.mul( 0.5 ).add( 0.5 ).mul( this.visibilityDepthResolution ), 0, this.visibilityDepthResolution - 1 ) );
-			const iy = int( clamp( octY.mul( 0.5 ).add( 0.5 ).mul( this.visibilityDepthResolution ), 0, this.visibilityDepthResolution - 1 ) );
-
-			return visibilityLoad.load( ivec3( ix, iy, probeIndex ) );
+			return visibilityLoad.load( getLightProbeGridGPUVisibilityLoadCoord( coord, dir, resolution, this.visibilityDepthResolution ) );
 
 		} : null;
 
@@ -808,6 +797,7 @@ class LightProbeGridGPU extends Object3D {
 			const debugProbeConfidenceWeights = [];
 			const debugProbeLayerCompatibility = [];
 			const debugProbeCompatibleKernels = [];
+			const debugProbeDirections = [];
 			const debugProbeBaseWeights = [];
 			const debugProbeVisibilityWeights = [];
 			const debugProbeVisibilities = [];
@@ -834,6 +824,7 @@ class LightProbeGridGPU extends Object3D {
 				debugProbeConfidenceWeights.push( float( 0 ).toVar() );
 				debugProbeLayerCompatibility.push( float( 0 ).toVar() );
 				debugProbeCompatibleKernels.push( float( 0 ).toVar() );
+				debugProbeDirections.push( vec3( 0.5 ).toVar() );
 				debugProbeBaseWeights.push( float( 0 ).toVar() );
 				debugProbeVisibilityWeights.push( float( 0 ).toVar() );
 				debugProbeVisibilities.push( float( 0 ).toVar() );
@@ -846,7 +837,8 @@ class LightProbeGridGPU extends Object3D {
 				const sample = loadPackedSamples( coord );
 				const probeIndex = int( coord.x ).add( int( coord.y ).mul( resolution ) ).add( int( coord.z ).mul( resolution * resolution ) );
 				const meta = loadProbeMeta( probeIndex );
-				const probePosition = gridMinNode.add( coord.toFloat().div( resolutionMinusOne ).mul( gridExtentNode ) );
+				const coordFloat = vec3( coord.x.toFloat(), coord.y.toFloat(), coord.z.toFloat() );
+				const probePosition = gridMinNode.add( coordFloat.div( resolutionMinusOne ).mul( gridExtentNode ) ).toVar();
 				const probeDirection = this._safeNormalize( probePosition.sub( positionWorld ) );
 				const wrapShading = normal.dot( probeDirection ).add( 1 ).mul( 0.5 );
 				const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
@@ -884,6 +876,7 @@ class LightProbeGridGPU extends Object3D {
 				debugProbeConfidenceWeights[ debugSlot ].assign( confidenceWeight );
 				debugProbeLayerCompatibility[ debugSlot ].assign( layerCompatibility );
 				debugProbeCompatibleKernels[ debugSlot ].assign( compatibleKernel );
+				debugProbeDirections[ debugSlot ].assign( probeDirection.mul( 0.5 ).add( 0.5 ) );
 				debugProbeBaseWeights[ debugSlot ].assign( base );
 				debugProbeVisibilityWeights[ debugSlot ].assign( weight );
 				debugProbeVisibilities[ debugSlot ].assign( visibility );
@@ -940,6 +933,7 @@ class LightProbeGridGPU extends Object3D {
 			const probeIndexScale = float( resolution * resolution * resolution - 1 ).max( 1 );
 
 			if ( debugMode === 'samplePositionGrid' ) return clamp( samplePosition.sub( gridMinNode ).div( gridExtentNode ), 0, 1 );
+			if ( debugMode === 'manualNormalWorld' ) return normal.mul( 0.5 ).add( 0.5 );
 			if ( debugMode === 'baseProbeCoordGrid' ) return base.div( resolutionMinusOne );
 			if ( debugMode === 'trilinearBlend' ) return blend;
 			if ( debugMode === 'probeCoordGrid' ) return probeCoord.div( resolutionMinusOne );
@@ -952,6 +946,7 @@ class LightProbeGridGPU extends Object3D {
 				if ( debugMode === `neighbor${ i }ConfidenceWeight` ) return vec3( debugProbeConfidenceWeights[ i ] );
 				if ( debugMode === `neighbor${ i }LayerCompatibility` ) return vec3( debugProbeLayerCompatibility[ i ] );
 				if ( debugMode === `neighbor${ i }CompatibleKernel` ) return vec3( debugProbeCompatibleKernels[ i ] );
+				if ( debugMode === `neighbor${ i }ProbeDirectionEncoded` ) return debugProbeDirections[ i ];
 				if ( debugMode === `neighbor${ i }BaseWeight` ) return vec3( debugProbeBaseWeights[ i ] );
 				if ( debugMode === `neighbor${ i }VisibilityWeight` ) return vec3( debugProbeVisibilityWeights[ i ] );
 				if ( debugMode === `neighbor${ i }Visibility` ) return vec3( debugProbeVisibilities[ i ] );
@@ -1014,9 +1009,21 @@ class LightProbeGridGPU extends Object3D {
 
 	createHelper() {
 
-		if ( this.helper !== null ) return this.helper;
+		if ( this.helper === null ) {
 
-		this._createHelper();
+			this.helper = createLightProbeGridGPUHelper(
+				this.atlasTarget.texture,
+				this.helperDebugMode,
+				this.helperIntensity,
+				this.resolution,
+				this.totalProbes,
+				( x, y, z, textureIndex ) => this._getPackedAtlasLoadCoord( x, y, z, textureIndex ),
+				( index, target ) => this.getProbePosition( index, target )
+			);
+			applyLightProbeGridGPUHelperDepthMode( this.helper, this.helperDepthMode );
+
+		}
+
 		return this.helper;
 
 	}
@@ -1031,21 +1038,9 @@ class LightProbeGridGPU extends Object3D {
 	setHelperDepthMode( mode ) {
 
 		this.helperDepthMode = this._validateHelperDepthMode( mode );
-		this._applyHelperDepthMode();
+		applyLightProbeGridGPUHelperDepthMode( this.helper, this.helperDepthMode );
 
 		return this;
-
-	}
-
-	_applyHelperDepthMode() {
-
-		if ( this.helper === null ) return;
-
-		const xRay = this.helperDepthMode === 'x-ray';
-		this.helper.material.depthTest = xRay === false;
-		this.helper.material.depthWrite = false;
-		this.helper.material.needsUpdate = true;
-		this.helper.renderOrder = xRay ? 1000 : 0;
 
 	}
 
@@ -1156,15 +1151,7 @@ class LightProbeGridGPU extends Object3D {
 		this._resolvePrecision( renderer );
 		this.updateBoundingBox();
 
-		const currentRenderTarget = renderer.getRenderTarget();
-		const currentScissorTest = renderer.getScissorTest();
-		const currentAutoClear = renderer.autoClear;
-		const currentMatrixWorldAutoUpdate = scene.matrixWorldAutoUpdate;
-		const currentOverrideMaterial = scene.overrideMaterial;
-		const hasShadowMap = renderer.shadowMap !== undefined;
-		const currentShadowAutoUpdate = hasShadowMap ? renderer.shadowMap.autoUpdate : undefined;
-		const currentProbeIntensity = this.probeIntensity.value;
-		const currentHelperVisible = this.helper?.visible ?? false;
+		const bakeState = captureLightProbeGridGPUBakeState( renderer, scene, this );
 		const timingSource = getBakeTimingSource();
 		const deterministicTimerDetected = isDeterministicPerformanceNow();
 		const totalStart = getBakeTimingNow();
@@ -1185,9 +1172,6 @@ class LightProbeGridGPU extends Object3D {
 		this._activeProjectionBackend = projectionBackend;
 		this._setRepackSource( projectionBackend );
 
-		renderer.getViewport( _currentViewport );
-		renderer.getScissor( _currentScissor );
-
 		try {
 
 			const sceneUpdateStart = getBakeTimingNow();
@@ -1195,10 +1179,10 @@ class LightProbeGridGPU extends Object3D {
 			scene.matrixWorldAutoUpdate = false;
 			sceneUpdateMs += getBakeTimingNow() - sceneUpdateStart;
 
-			if ( hasShadowMap ) {
+			if ( bakeState.shadowMap !== undefined ) {
 
-				renderer.shadowMap.autoUpdate = false;
-				renderer.shadowMap.needsUpdate = true;
+				bakeState.shadowMap.autoUpdate = false;
+				bakeState.shadowMap.needsUpdate = true;
 
 			}
 
@@ -1240,7 +1224,7 @@ class LightProbeGridGPU extends Object3D {
 				phaseStart = getBakeTimingNow();
 				scene.overrideMaterial = this.visibilityDistanceMaterial;
 				this.visibilityDistanceCamera.update( renderer, scene );
-				scene.overrideMaterial = currentOverrideMaterial;
+				scene.overrideMaterial = bakeState.overrideMaterial;
 				visibilityCubemapMs += getBakeTimingNow() - phaseStart;
 
 				phaseStart = getBakeTimingNow();
@@ -1279,87 +1263,30 @@ class LightProbeGridGPU extends Object3D {
 
 		} finally {
 
-			renderer.setRenderTarget( currentRenderTarget );
-			renderer.setViewport( _currentViewport );
-			renderer.setScissor( _currentScissor );
-			renderer.setScissorTest( currentScissorTest );
-			renderer.autoClear = currentAutoClear;
-			scene.matrixWorldAutoUpdate = currentMatrixWorldAutoUpdate;
-			scene.overrideMaterial = currentOverrideMaterial;
-
-			if ( hasShadowMap ) renderer.shadowMap.autoUpdate = currentShadowAutoUpdate;
-
-			this.probeIntensity.value = currentProbeIntensity;
-			if ( this.helper !== null ) this.helper.visible = currentHelperVisible;
-			this.coefficientTarget.viewport.set( 0, 0, SH_COEFFICIENTS, this.totalProbes );
-			this.coefficientTarget.scissor.set( 0, 0, SH_COEFFICIENTS, this.totalProbes );
+			restoreLightProbeGridGPUBakeState( renderer, scene, this, bakeState );
 
 		}
 
 		if ( retryFragmentProjection ) return this._bake( renderer, scene, options );
 		if ( retryHalfFloat ) return this._bake( renderer, scene, options );
 
-		const roundedSceneUpdateMs = Number( sceneUpdateMs.toFixed( 2 ) );
-		const roundedCubemapMs = Number( cubemapMs.toFixed( 2 ) );
-		const roundedProjectionMs = Number( projectionMs.toFixed( 2 ) );
-		const roundedCopyMs = Number( copyMs.toFixed( 2 ) );
-		const timingSourceKind = getBakeTimingSourceKind( timingSource );
 
-		this.visibilityCubemapMs = Number( visibilityCubemapMs.toFixed( 2 ) );
-		this.visibilityRepackMs = Number( visibilityRepackMs.toFixed( 2 ) );
-
-		const timingBuckets = {
-			sceneUpdateMs: roundedSceneUpdateMs,
-			radianceCubemapCaptureMs: roundedCubemapMs,
-			distanceCubemapCaptureMs: this.visibilityCubemapMs,
-			computeShProjectionMs: roundedProjectionMs,
-			visibilityRepackMs: this.visibilityRepackMs,
-			atlasRepackMs: roundedCopyMs,
-			verifierReadbackMs: 0,
-			runtimeFastAtlasMs: null,
-			runtimeGuardedGatherMs: null,
-			runtimeMomentTextureLoadMs: null,
-			runtimeKernelMathMs: null,
-			runtimeVisibilityMassMs: null,
-			runtimeShEvaluationMs: null,
-			source: timingSourceKind,
-			legacySource: timingSource,
-			verifierReadbackTimingSource: 'unavailable',
-			runtimeTimingSource: 'unavailable'
-		};
-
-		return {
-			sceneUpdateMs: roundedSceneUpdateMs,
-			cubemapMs: roundedCubemapMs,
-			radianceCubemapCaptureMs: roundedCubemapMs,
-			projectionMs: roundedProjectionMs,
-			computeShProjectionMs: roundedProjectionMs,
-			copyMs: roundedCopyMs,
-			atlasRepackMs: roundedCopyMs,
-			visibilityCubemapMs: this.visibilityCubemapMs,
-			distanceCubemapCaptureMs: this.visibilityCubemapMs,
-			visibilityRepackMs: this.visibilityRepackMs,
-			verifierReadbackMs: 0,
-			verifierReadbackTimingSource: 'unavailable',
-			visibilityDepthMode: this.visibilityDepthMode,
-			projectionBackendRequest: projectionBackendOverride,
-			projectionBackend: this._activeProjectionBackend,
-			projectionBackendForced: projectionBackendOverride !== 'auto',
+		return createLightProbeGridGPUBakeResult( this, renderer, {
+			sceneUpdateMs,
+			cubemapMs,
+			projectionMs,
+			copyMs,
+			visibilityCubemapMs,
+			visibilityRepackMs,
+			projectionBackendOverride,
+			projectionBackend,
 			projectionCubemapSweepsPerProbe,
 			projectionTexelVisits,
-			projectionTexelVisitReductionRatio: projectionBackend === 'compute-probe-reduction' ?
-				Number( ( 1 - ( 1 / SH_COEFFICIENTS ) ).toFixed( 4 ) ) :
-				0,
-			computeProjectionFallbackReason: this.computeProjectionFallbackReason,
-			totalBakeMs: Number( ( getBakeTimingNow() - totalStart ).toFixed( 2 ) ),
+			totalBakeMs: getBakeTimingNow() - totalStart,
 			timingSource,
-			timingSourceKind,
-			gpuTimestampStatus: 'unavailable',
-			projectionTimingSource: timingSource,
-			deterministicTimerDetected,
-			timingBuckets,
-			precision: this.getPrecisionInfo( renderer )
-		};
+			timingSourceKind: getBakeTimingSourceKind( timingSource ),
+			deterministicTimerDetected
+		} );
 
 	}
 
@@ -1417,8 +1344,8 @@ class LightProbeGridGPU extends Object3D {
 		this.computeProjectionFallbackReason = null;
 
 		this.totalProbes = this.resolution * this.resolution * this.resolution;
-		this.paddedSlices = this.resolution + 2 * ATLAS_PADDING;
-		this.atlasDepth = PACKED_SH_TEXTURES * this.paddedSlices;
+		this.paddedSlices = getLightProbeGridGPUPaddedAtlasSlices( this.resolution );
+		this.atlasDepth = getLightProbeGridGPUAtlasDepth( this.resolution );
 
 		this._resolvePrecision( renderer );
 
@@ -1472,45 +1399,72 @@ class LightProbeGridGPU extends Object3D {
 		);
 
 		this._createProbeValidityTexture();
-		this.projectionMaterial = this._createProjectionMaterial();
-		this.computeProjectionNode = this._createComputeProjectionNode();
-		this.repackFragmentMaterial = this._createRepackMaterial( this.coefficientTarget.texture );
-		this.repackComputeProjectionMaterial = this._createRepackMaterial( this.computeProjectionTexture );
+		this.projectionMaterial = createLightProbeGridGPUProjectionMaterial( this.cubeRenderTarget.texture, this.cubemapSize );
+		this.computeProjectionNode = createLightProbeGridGPUComputeProjectionNode(
+			this.cubeRenderTarget.texture,
+			this.computeProjectionTexture,
+			this.computeProjectionProbeIndex,
+			this.cubemapSize
+		);
+		this.repackFragmentMaterial = createLightProbeGridGPUAtlasRepackMaterial(
+			this.coefficientTarget.texture,
+			this.probeValidityTexture,
+			this.repackResolution,
+			this.repackTextureIndex,
+			this.repackSliceZ,
+			this.probeValidityTextureWidth
+		);
+		this.repackComputeProjectionMaterial = createLightProbeGridGPUAtlasRepackMaterial(
+			this.computeProjectionTexture,
+			this.probeValidityTexture,
+			this.repackResolution,
+			this.repackTextureIndex,
+			this.repackSliceZ,
+			this.probeValidityTextureWidth
+		);
 		this.repackMaterial = this.repackFragmentMaterial;
-		this.visibilityDistanceMaterial = this._createVisibilityDistanceMaterial();
-		this.visibilityRepackMaterial = this._createVisibilityRepackMaterial();
+		this.visibilityDistanceMaterial = createLightProbeGridGPUVisibilityDistanceMaterial(
+			this.visibilityProbePosition,
+			this.visibilityMaxDistance
+		);
+		this.visibilityRepackMaterial = createLightProbeGridGPUVisibilityRepackMaterial(
+			this.visibilityDistanceTarget.texture,
+			this.visibilityMaxDistance,
+			this.visibilityDepthResolution,
+			VISIBILITY_MIN_VARIANCE
+		);
 
 		if ( this.projectionScene === null ) {
 
-			this.projectionCamera = new OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
-			this.projectionMesh = new Mesh( new PlaneGeometry( 2, 2 ), this.projectionMaterial );
-			this.projectionScene = new Scene();
-			this.projectionScene.add( this.projectionMesh );
+			const pass = createLightProbeGridGPUFullscreenPass( this.projectionMaterial );
+			this.projectionCamera = pass.camera;
+			this.projectionMesh = pass.mesh;
+			this.projectionScene = pass.scene;
 
 		}
 
 		if ( this.repackScene === null ) {
 
-			this.repackCamera = new OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
-			this.repackMesh = new Mesh( new PlaneGeometry( 2, 2 ), this.repackMaterial );
-			this.repackScene = new Scene();
-			this.repackScene.add( this.repackMesh );
+			const pass = createLightProbeGridGPUFullscreenPass( this.repackMaterial );
+			this.repackCamera = pass.camera;
+			this.repackMesh = pass.mesh;
+			this.repackScene = pass.scene;
 
 		}
 
 		if ( this.visibilityRepackScene === null ) {
 
-			this.visibilityRepackCamera = new OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
-			this.visibilityRepackMesh = new Mesh( new PlaneGeometry( 2, 2 ), this.visibilityRepackMaterial );
-			this.visibilityRepackScene = new Scene();
-			this.visibilityRepackScene.add( this.visibilityRepackMesh );
+			const pass = createLightProbeGridGPUFullscreenPass( this.visibilityRepackMaterial );
+			this.visibilityRepackCamera = pass.camera;
+			this.visibilityRepackMesh = pass.mesh;
+			this.visibilityRepackScene = pass.scene;
 
 		}
 
 		this.projectionMesh.material = this.projectionMaterial;
 		this.repackMesh.material = this.repackMaterial;
 		this.visibilityRepackMesh.material = this.visibilityRepackMaterial;
-		this._createHelper();
+		this.createHelper();
 		this.helper.visible = oldHelperVisible;
 
 	}
@@ -1568,450 +1522,6 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	_createHelper() {
-
-		const geometry = new SphereGeometry( 0.055, 12, 8 );
-		const material = new MeshBasicNodeMaterial();
-		const atlasLoad = texture3D( this.atlasTarget.texture ).setSampler( false );
-		const helperDebugMode = this.helperDebugMode;
-		const evaluateInstanceProbe = Fn( () => {
-
-			const index = int( instanceIndex );
-			const z = index.div( this.resolution * this.resolution );
-			const y = index.sub( z.mul( this.resolution * this.resolution ) ).div( this.resolution );
-			const x = index.sub( z.mul( this.resolution * this.resolution ) ).sub( y.mul( this.resolution ) );
-			const s0 = atlasLoad.load( this._getPackedAtlasLoadCoord( x, y, z ) ).xyz;
-			const validity = atlasLoad.load( this._getPackedAtlasLoadCoord( x, y, z, 6 ) ).w;
-			const irradianceColor = max( s0.mul( 0.886227 ), vec3( 0 ) );
-			const validityColor = vec3( 1.0, 0.12, 0.08 ).toVar();
-			const helperColor = irradianceColor.toVar();
-
-			If( validity.greaterThanEqual( 0.999 ), () => {
-
-				validityColor.assign( vec3( 0.08, 1.0, 0.22 ) );
-
-			} ).ElseIf( validity.greaterThanEqual( 0.5 ), () => {
-
-				validityColor.assign( vec3( 1.0, 0.72, 0.05 ) );
-
-			} );
-
-			If( helperDebugMode.greaterThan( 0.5 ), () => {
-
-				helperColor.assign( validityColor );
-
-			} );
-
-			return helperColor;
-
-		} );
-
-		material.colorNode = evaluateInstanceProbe().mul( this.helperIntensity );
-
-		this.helper = new InstancedMesh( geometry, material, this.totalProbes );
-
-		for ( let i = 0; i < this.totalProbes; i ++ ) {
-
-			this.getProbePosition( i, _probePosition );
-			_matrix.makeTranslation( _probePosition.x, _probePosition.y, _probePosition.z );
-			this.helper.setMatrixAt( i, _matrix );
-
-		}
-
-		this.helper.instanceMatrix.needsUpdate = true;
-		this._applyHelperDepthMode();
-
-	}
-
-	_createVisibilityDistanceMaterial() {
-
-		const material = new MeshBasicNodeMaterial();
-		const distance = positionWorld.sub( this.visibilityProbePosition ).length();
-		const normalizedDistance = distance.div( this.visibilityMaxDistance ).clamp( 0, 1 );
-
-		material.colorNode = vec3( normalizedDistance );
-		material.toneMapped = false;
-
-		return material;
-
-	}
-
-	_createVisibilityRepackMaterial() {
-
-		const pixelSize = float( 1 ).div( this.visibilityDepthResolution );
-		const halfPixel = pixelSize.mul( 0.5 );
-		const negativeHalfPixel = float( 0 ).sub( halfPixel );
-		const distanceCube = this.visibilityDistanceTarget.texture;
-
-		const octaDirection = Fn( ( { octUv } ) => {
-
-			const p = octUv.clamp( 0, 1 ).mul( 2 ).sub( 1 );
-			const x = p.x.toVar();
-			const y = p.y.toVar();
-			const z = float( 1 ).sub( x.abs() ).sub( y.abs() ).toVar();
-
-			If( z.lessThan( 0 ), () => {
-
-				const oldX = x.toVar();
-				x.assign( float( 1 ).sub( y.abs() ).mul( oldX.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
-				y.assign( float( 1 ).sub( oldX.abs() ).mul( y.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
-
-			} );
-
-			return vec3( x, y, z ).normalize();
-
-		} );
-
-		const sampleRadialDistance = Fn( ( { octUv } ) => {
-
-			const dir = octaDirection( { octUv } );
-			const normalizedDistance = cubeTexture( distanceCube, dir, 0 ).r.clamp( 0, 1 );
-			const receiverDistance = normalizedDistance.mul( this.visibilityMaxDistance );
-			const hitConfidence = normalizedDistance.greaterThan( pixelSize.mul( 0.5 ) ).select( float( 1 ), float( 0 ) );
-
-			return vec4( receiverDistance, receiverDistance.mul( receiverDistance ), hitConfidence, float( 0 ) );
-
-		} );
-
-		const repack = Fn( () => {
-
-			const center = uv();
-			const sampleCenter = sampleRadialDistance( { octUv: center } );
-			const samplePositiveX = sampleRadialDistance( { octUv: center.add( vec2( halfPixel, 0 ) ) } );
-			const sampleNegativeX = sampleRadialDistance( { octUv: center.add( vec2( negativeHalfPixel, 0 ) ) } );
-			const samplePositiveY = sampleRadialDistance( { octUv: center.add( vec2( 0, halfPixel ) ) } );
-			const sampleNegativeY = sampleRadialDistance( { octUv: center.add( vec2( 0, negativeHalfPixel ) ) } );
-			const hitSum = sampleCenter.z
-				.add( samplePositiveX.z )
-				.add( sampleNegativeX.z )
-				.add( samplePositiveY.z )
-				.add( sampleNegativeY.z );
-			const safeHitSum = hitSum.max( 1 );
-			const meanDistance = sampleCenter.x.mul( sampleCenter.z )
-				.add( samplePositiveX.x.mul( samplePositiveX.z ) )
-				.add( sampleNegativeX.x.mul( sampleNegativeX.z ) )
-				.add( samplePositiveY.x.mul( samplePositiveY.z ) )
-				.add( sampleNegativeY.x.mul( sampleNegativeY.z ) )
-				.div( safeHitSum );
-			const meanSquaredDistance = sampleCenter.y.mul( sampleCenter.z )
-				.add( samplePositiveX.y.mul( samplePositiveX.z ) )
-				.add( sampleNegativeX.y.mul( sampleNegativeX.z ) )
-				.add( samplePositiveY.y.mul( samplePositiveY.z ) )
-				.add( sampleNegativeY.y.mul( sampleNegativeY.z ) )
-				.div( safeHitSum )
-				.add( VISIBILITY_MIN_VARIANCE );
-			const hitConfidence = hitSum.div( 5 ).clamp( 0, 1 );
-
-			return vec4( meanDistance, meanSquaredDistance, hitConfidence, float( 0 ) );
-
-		} );
-
-		const material = new NodeMaterial();
-		material.fragmentNode = repack();
-		material.toneMapped = false;
-
-		return material;
-
-	}
-
-	_createProjectionMaterial() {
-
-		const cubemapSize = this.cubemapSize;
-		const pixelSize = 2 / cubemapSize;
-
-		const shBasis = Fn( ( { coefficient, dir } ) => {
-
-			const basis = float( 0 ).toVar();
-			const x = dir.x;
-			const y = dir.y;
-			const z = dir.z;
-
-			If( coefficient.equal( uint( 0 ) ), () => {
-
-				basis.assign( 0.282095 );
-
-			} ).ElseIf( coefficient.equal( uint( 1 ) ), () => {
-
-				basis.assign( y.mul( 0.488603 ) );
-
-			} ).ElseIf( coefficient.equal( uint( 2 ) ), () => {
-
-				basis.assign( z.mul( 0.488603 ) );
-
-			} ).ElseIf( coefficient.equal( uint( 3 ) ), () => {
-
-				basis.assign( x.mul( 0.488603 ) );
-
-			} ).ElseIf( coefficient.equal( uint( 4 ) ), () => {
-
-				basis.assign( x.mul( y ).mul( 1.092548 ) );
-
-			} ).ElseIf( coefficient.equal( uint( 5 ) ), () => {
-
-				basis.assign( y.mul( z ).mul( 1.092548 ) );
-
-			} ).ElseIf( coefficient.equal( uint( 6 ) ), () => {
-
-				basis.assign( z.mul( z ).mul( 3.0 ).sub( 1.0 ).mul( 0.315392 ) );
-
-			} ).ElseIf( coefficient.equal( uint( 7 ) ), () => {
-
-				basis.assign( x.mul( z ).mul( 1.092548 ) );
-
-			} ).Else( () => {
-
-				basis.assign( x.mul( x ).sub( y.mul( y ) ).mul( 0.546274 ) );
-
-			} );
-
-			return basis;
-
-		} );
-
-		const projectCube = Fn( () => {
-
-			const coefficient = uint( uv().x.mul( SH_COEFFICIENTS ).floor() );
-			const accum = vec3( 0 ).toVar();
-			const totalWeight = float( 0 ).toVar();
-
-			Loop( { start: int( 0 ), end: int( 6 ), type: 'int', condition: '<' }, ( { i: face } ) => {
-
-				Loop( { start: int( 0 ), end: int( cubemapSize ), type: 'int', condition: '<' }, ( { i: iy } ) => {
-
-					Loop( { start: int( 0 ), end: int( cubemapSize ), type: 'int', condition: '<' }, ( { i: ix } ) => {
-
-						const col = float( 1.0 ).sub( float( ix ).add( 0.5 ).mul( pixelSize ) );
-						const row = float( 1.0 ).sub( float( iy ).add( 0.5 ).mul( pixelSize ) );
-						const coord = vec3( 0 ).toVar();
-
-						If( face.equal( int( 0 ) ), () => {
-
-							coord.assign( vec3( - 1.0, row, col ) );
-
-						} ).ElseIf( face.equal( int( 1 ) ), () => {
-
-							coord.assign( vec3( 1.0, row, col.negate() ) );
-
-						} ).ElseIf( face.equal( int( 2 ) ), () => {
-
-							coord.assign( vec3( col, 1.0, row.negate() ) );
-
-						} ).ElseIf( face.equal( int( 3 ) ), () => {
-
-							coord.assign( vec3( col, - 1.0, row ) );
-
-						} ).ElseIf( face.equal( int( 4 ) ), () => {
-
-							coord.assign( vec3( col, row, 1.0 ) );
-
-						} ).Else( () => {
-
-							coord.assign( vec3( col.negate(), row, - 1.0 ) );
-
-						} );
-
-						const lengthSq = coord.dot( coord );
-						const weight = float( 4.0 ).div( lengthSq.sqrt().mul( lengthSq ) );
-						const dir = coord.normalize();
-						const radiance = cubeTexture( this.cubeRenderTarget.texture, coord, 0 ).rgb;
-
-						totalWeight.addAssign( weight );
-						accum.addAssign( radiance.mul( weight ).mul( shBasis( { coefficient, dir } ) ) );
-
-					} );
-
-				} );
-
-			} );
-
-			const norm = float( 4 * Math.PI ).div( totalWeight );
-			return accum.mul( norm );
-
-		} );
-
-		const material = new NodeMaterial();
-		material.fragmentNode = projectCube();
-		material.toneMapped = false;
-
-		return material;
-
-	}
-
-	_createComputeProjectionNode() {
-
-		const cubemapSize = this.cubemapSize;
-		const pixelSize = 2 / cubemapSize;
-
-		const computeProjection = Fn( () => {
-
-			const probeIndex = uint( this.computeProjectionProbeIndex );
-			const c0 = vec3( 0 ).toVar();
-			const c1 = vec3( 0 ).toVar();
-			const c2 = vec3( 0 ).toVar();
-			const c3 = vec3( 0 ).toVar();
-			const c4 = vec3( 0 ).toVar();
-			const c5 = vec3( 0 ).toVar();
-			const c6 = vec3( 0 ).toVar();
-			const c7 = vec3( 0 ).toVar();
-			const c8 = vec3( 0 ).toVar();
-			const totalWeight = float( 0 ).toVar();
-
-			Loop( { start: int( 0 ), end: int( 6 ), type: 'int', condition: '<' }, ( { i: face } ) => {
-
-				Loop( { start: int( 0 ), end: int( cubemapSize ), type: 'int', condition: '<' }, ( { i: iy } ) => {
-
-					Loop( { start: int( 0 ), end: int( cubemapSize ), type: 'int', condition: '<' }, ( { i: ix } ) => {
-
-						const col = float( 1.0 ).sub( float( ix ).add( 0.5 ).mul( pixelSize ) );
-						const row = float( 1.0 ).sub( float( iy ).add( 0.5 ).mul( pixelSize ) );
-						const coord = vec3( 0 ).toVar();
-
-						If( face.equal( int( 0 ) ), () => {
-
-							coord.assign( vec3( - 1.0, row, col ) );
-
-						} ).ElseIf( face.equal( int( 1 ) ), () => {
-
-							coord.assign( vec3( 1.0, row, col.negate() ) );
-
-						} ).ElseIf( face.equal( int( 2 ) ), () => {
-
-							coord.assign( vec3( col, 1.0, row.negate() ) );
-
-						} ).ElseIf( face.equal( int( 3 ) ), () => {
-
-							coord.assign( vec3( col, - 1.0, row ) );
-
-						} ).ElseIf( face.equal( int( 4 ) ), () => {
-
-							coord.assign( vec3( col, row, 1.0 ) );
-
-						} ).Else( () => {
-
-							coord.assign( vec3( col.negate(), row, - 1.0 ) );
-
-						} );
-
-						const lengthSq = coord.dot( coord );
-						const weight = float( 4.0 ).div( lengthSq.sqrt().mul( lengthSq ) );
-						const dir = coord.normalize();
-						const x = dir.x;
-						const y = dir.y;
-						const z = dir.z;
-						const radiance = cubeTexture( this.cubeRenderTarget.texture, coord, 0 ).rgb;
-						const weightedRadiance = radiance.mul( weight );
-
-						totalWeight.addAssign( weight );
-						c0.addAssign( weightedRadiance.mul( 0.282095 ) );
-						c1.addAssign( weightedRadiance.mul( y.mul( 0.488603 ) ) );
-						c2.addAssign( weightedRadiance.mul( z.mul( 0.488603 ) ) );
-						c3.addAssign( weightedRadiance.mul( x.mul( 0.488603 ) ) );
-						c4.addAssign( weightedRadiance.mul( x.mul( y ).mul( 1.092548 ) ) );
-						c5.addAssign( weightedRadiance.mul( y.mul( z ).mul( 1.092548 ) ) );
-						c6.addAssign( weightedRadiance.mul( z.mul( z ).mul( 3.0 ).sub( 1.0 ).mul( 0.315392 ) ) );
-						c7.addAssign( weightedRadiance.mul( x.mul( z ).mul( 1.092548 ) ) );
-						c8.addAssign( weightedRadiance.mul( x.mul( x ).sub( y.mul( y ) ).mul( 0.546274 ) ) );
-
-					} );
-
-				} );
-
-			} );
-
-			const norm = float( 4 * Math.PI ).div( totalWeight );
-
-			textureStore( this.computeProjectionTexture, uvec2( uint( 0 ), probeIndex ), vec4( c0.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 1 ), probeIndex ), vec4( c1.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 2 ), probeIndex ), vec4( c2.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 3 ), probeIndex ), vec4( c3.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 4 ), probeIndex ), vec4( c4.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 5 ), probeIndex ), vec4( c5.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 6 ), probeIndex ), vec4( c6.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 7 ), probeIndex ), vec4( c7.mul( norm ), 1 ) ).toWriteOnly();
-			textureStore( this.computeProjectionTexture, uvec2( uint( 8 ), probeIndex ), vec4( c8.mul( norm ), 1 ) ).toWriteOnly();
-
-		} );
-
-		return computeProjection().compute( 1 ).setName( 'LightProbeGridGPU compute projection' );
-
-	}
-
-	_createRepackMaterial( coefficientTexture ) {
-
-		const batch = coefficientTexture;
-		const resolution = this.repackResolution;
-		const textureIndex = this.repackTextureIndex;
-		const sliceZ = this.repackSliceZ;
-		const validityTextureWidth = this.probeValidityTextureWidth;
-
-		const loadCoefficient = ( coefficient, probeIndex ) => textureLoad( batch, ivec2( coefficient, probeIndex ) );
-		const loadValidity = ( probeIndex ) => textureLoad( this.probeValidityTexture, ivec2(
-			probeIndex.mod( validityTextureWidth ),
-			probeIndex.div( validityTextureWidth )
-		) );
-
-		const repack = Fn( () => {
-
-			const nx = int( resolution.x );
-			const ix = int( floor( viewportCoordinate.x ) );
-			const iy = int( floor( viewportCoordinate.y ) );
-			const iz = int( sliceZ );
-			const probeIndex = ix.add( iy.mul( nx ) ).add( iz.mul( nx.mul( nx ) ) );
-
-			const c0 = loadCoefficient( 0, probeIndex );
-			const c1 = loadCoefficient( 1, probeIndex );
-			const c2 = loadCoefficient( 2, probeIndex );
-			const c3 = loadCoefficient( 3, probeIndex );
-			const c4 = loadCoefficient( 4, probeIndex );
-			const c5 = loadCoefficient( 5, probeIndex );
-			const c6 = loadCoefficient( 6, probeIndex );
-			const c7 = loadCoefficient( 7, probeIndex );
-			const c8 = loadCoefficient( 8, probeIndex );
-			const packed = vec4( 0 ).toVar();
-
-			If( textureIndex.equal( 0 ), () => {
-
-				packed.assign( vec4( c0.x, c0.y, c0.z, c1.x ) );
-
-			} ).ElseIf( textureIndex.equal( 1 ), () => {
-
-				packed.assign( vec4( c1.y, c1.z, c2.x, c2.y ) );
-
-			} ).ElseIf( textureIndex.equal( 2 ), () => {
-
-				packed.assign( vec4( c2.z, c3.x, c3.y, c3.z ) );
-
-			} ).ElseIf( textureIndex.equal( 3 ), () => {
-
-				packed.assign( vec4( c4.x, c4.y, c4.z, c5.x ) );
-
-			} ).ElseIf( textureIndex.equal( 4 ), () => {
-
-				packed.assign( vec4( c5.y, c5.z, c6.x, c6.y ) );
-
-			} ).ElseIf( textureIndex.equal( 5 ), () => {
-
-				packed.assign( vec4( c6.z, c7.x, c7.y, c7.z ) );
-
-			} ).Else( () => {
-
-				const validity = loadValidity( probeIndex );
-
-				packed.assign( vec4( c8.x, c8.y, c8.z, validity.x ) );
-
-			} );
-
-			return packed;
-
-		} );
-
-		const material = new NodeMaterial();
-		material.fragmentNode = repack();
-		material.toneMapped = false;
-
-		return material;
-
-	}
 
 	_resolvePrecision( renderer ) {
 

@@ -1,6 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { normalWorld, positionWorld, vec3 } from 'three/tsl';
 
+import { readLightProbeGridGPURenderedTargetRegion } from './lightprobegridgpu/LightProbeGridGPUProofReadback.js';
+
 export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 	const {
@@ -15,6 +17,70 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		roundColor,
 		roundMetric
 	} = dependencies;
+
+	const captureSceneMeshOverrides = async ( applyOverride, capture ) => {
+
+		const states = [];
+
+		_lightProbeContext.scene.traverse( object => {
+
+			if ( object.isMesh !== true ) return;
+
+			states.push( {
+				object,
+				material: object.material,
+				visible: object.visible
+			} );
+			applyOverride( object );
+
+		} );
+
+		try {
+
+			return await capture();
+
+		} finally {
+
+			for ( const state of states ) {
+
+				state.object.material = state.material;
+				state.object.visible = state.visible;
+
+			}
+
+		}
+
+	};
+
+	const createReceiverReadbackStateSnapshot = () => ( {
+		renderTarget: _lightProbeContext.renderer.getRenderTarget(),
+		toneMapping: _lightProbeContext.renderer.toneMapping,
+		toneMappingExposure: _lightProbeContext.renderer.toneMappingExposure,
+		outputColorSpace: _lightProbeContext.renderer.outputColorSpace,
+		background: _lightProbeContext.scene.background,
+		leftMaterial: _lightProbeContext.leakFixture.leftReceiver.material,
+		rightMaterial: _lightProbeContext.leakFixture.rightReceiver.material,
+		directLightIntensity: _lightProbeContext.directLight.intensity,
+		ambientLightIntensity: _lightProbeContext.ambientLight.intensity,
+		probeIntensity: _lightProbeContext.probeGrid.probeIntensity.value,
+		visibilityDepthWeighting: _lightProbeContext.probeGrid.visibilityDepthWeighting.value
+	} );
+
+	const restoreReceiverReadbackState = ( state ) => {
+
+		_lightProbeContext.leakFixture.leftReceiver.material = state.leftMaterial;
+		_lightProbeContext.leakFixture.rightReceiver.material = state.rightMaterial;
+		_lightProbeContext.scene.background = state.background;
+		_lightProbeContext.renderer.toneMapping = state.toneMapping;
+		_lightProbeContext.renderer.toneMappingExposure = state.toneMappingExposure;
+		_lightProbeContext.renderer.outputColorSpace = state.outputColorSpace;
+		_lightProbeContext.directLight.intensity = state.directLightIntensity;
+		_lightProbeContext.ambientLight.intensity = state.ambientLightIntensity;
+		_lightProbeContext.probeGrid.probeIntensity.value = state.probeIntensity;
+		_lightProbeContext.probeGrid.visibilityDepthWeighting.value = state.visibilityDepthWeighting;
+		_lightProbeContext.renderer.setRenderTarget( state.renderTarget );
+
+	};
 
 	const createGaussLegendreReceiverSamples = ( mesh ) => {
 
@@ -252,6 +318,44 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				cpuRenderAgreementGate: surfaceCpuRenderDelta <= agreementTolerance ? 'SUPPORTED' : 'OPEN'
 			}
 		};
+
+	};
+
+	const captureDepthPreservedReceiverMaskData = async ( {
+		width,
+		height,
+		maskTarget,
+		leftMaskMaterial,
+		rightMaskMaterial,
+		occluderMaskMaterial
+	} ) => {
+
+		return await captureSceneMeshOverrides( object => {
+			if ( object === _lightProbeContext.leakFixture.leftReceiver ) {
+
+				object.material = leftMaskMaterial;
+
+			} else if ( object === _lightProbeContext.leakFixture.rightReceiver ) {
+
+				object.material = rightMaskMaterial;
+
+			} else {
+
+				object.material = occluderMaskMaterial;
+
+			}
+		}, async () => {
+
+			_lightProbeContext.scene.background = new THREE.Color( 0x000000 );
+			return await readLightProbeGridGPURenderedTargetRegion(
+				_lightProbeContext.renderer,
+				_lightProbeContext.scene,
+				_lightProbeContext.camera,
+				maskTarget,
+				width,
+				height
+			);
+		} );
 
 	};
 
@@ -522,6 +626,21 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 		};
 
+		const getQuadratureWeightTotal = samples => samples.reduce(
+			( total, sample ) => total + sample.quadratureWeight,
+			0
+		);
+
+		const getWeightedSampleMean = ( samples, readValue ) => {
+
+			const weightTotal = getQuadratureWeightTotal( samples );
+			return samples.reduce(
+				( total, sample ) => total + readValue( sample ) * sample.quadratureWeight,
+				0
+			) / Math.max( weightTotal, 0.0001 );
+
+		};
+
 		const createTightSurfacePointMetrics = ( canvasSample ) => {
 
 			const summarizeReceiver = ( receiver ) => {
@@ -545,15 +664,8 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					};
 
 				} );
-				const weightTotal = pointSamples.reduce( ( total, sample ) => total + sample.quadratureWeight, 0 );
-				const wrongRatio = pointSamples.reduce(
-					( total, sample ) => total + sample.colorBias.wrongOverCorrect * sample.quadratureWeight,
-					0
-				) / Math.max( weightTotal, 0.0001 );
-				const luminanceMean = pointSamples.reduce(
-					( total, sample ) => total + sample.luminance * sample.quadratureWeight,
-					0
-				) / Math.max( weightTotal, 0.0001 );
+				const wrongRatio = getWeightedSampleMean( pointSamples, sample => sample.colorBias.wrongOverCorrect );
+				const luminanceMean = getWeightedSampleMean( pointSamples, sample => sample.luminance );
 
 				return {
 					label: receiver.label,
@@ -687,15 +799,8 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					};
 
 				} );
-				const weightTotal = pointSamples.reduce( ( total, sample ) => total + sample.quadratureWeight, 0 );
-				const gpuWeightedMean = pointSamples.reduce(
-					( total, sample ) => total + sample.gpuValue * sample.quadratureWeight,
-					0
-				) / Math.max( weightTotal, 0.0001 );
-				const cpuWeightedMean = pointSamples.reduce(
-					( total, sample ) => total + sample.cpuValue * sample.quadratureWeight,
-					0
-				) / Math.max( weightTotal, 0.0001 );
+				const gpuWeightedMean = getWeightedSampleMean( pointSamples, sample => sample.gpuValue );
+				const cpuWeightedMean = getWeightedSampleMean( pointSamples, sample => sample.cpuValue );
 
 				return {
 					label: receiver.label,
@@ -752,7 +857,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					};
 
 				} );
-				const weightTotal = pointSamples.reduce( ( total, sample ) => total + sample.quadratureWeight, 0 );
+				const weightTotal = getQuadratureWeightTotal( pointSamples );
 				const gpuWeightedTotal = pointSamples.reduce(
 					( total, sample ) => addWeightedColor( total, sample.gpuLinearRgb, sample.quadratureWeight ),
 					{ r: 0, g: 0, b: 0 }
@@ -764,14 +869,8 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const gpuWeightedMean = divideColor( gpuWeightedTotal, weightTotal );
 				const cpuWeightedMean = divideColor( cpuWeightedTotal, weightTotal );
 				const weightedDelta = createLinearColorDelta( gpuWeightedMean, cpuWeightedMean );
-				const weightedSampleDeltaMean = pointSamples.reduce(
-					( total, sample ) => total + sample.linearRgbDelta.mean * sample.quadratureWeight,
-					0
-				) / Math.max( weightTotal, 0.0001 );
-				const weightedSampleDeltaMax = pointSamples.reduce(
-					( total, sample ) => total + sample.linearRgbDelta.max * sample.quadratureWeight,
-					0
-				) / Math.max( weightTotal, 0.0001 );
+				const weightedSampleDeltaMean = getWeightedSampleMean( pointSamples, sample => sample.linearRgbDelta.mean );
+				const weightedSampleDeltaMax = getWeightedSampleMean( pointSamples, sample => sample.linearRgbDelta.max );
 
 				return {
 					label: receiver.label,
@@ -1287,14 +1386,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const width = _lightProbeContext.renderer.domElement.width;
 				const height = _lightProbeContext.renderer.domElement.height;
 				const maxSamplesPerReceiver = 9;
-				const previousRenderTarget = _lightProbeContext.renderer.getRenderTarget();
-				const previousToneMapping = _lightProbeContext.renderer.toneMapping;
-				const previousToneMappingExposure = _lightProbeContext.renderer.toneMappingExposure;
-				const previousOutputColorSpace = _lightProbeContext.renderer.outputColorSpace;
-				const previousBackground = _lightProbeContext.scene.background;
-				const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
-				const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
-				const previousVisibilityWeighting = _lightProbeContext.probeGrid.visibilityDepthWeighting.value;
+				const previousState = createReceiverReadbackStateSnapshot();
 				const debugTarget = new THREE.RenderTarget( width, height, {
 					type: THREE.HalfFloatType,
 					colorSpace: THREE.LinearSRGBColorSpace,
@@ -1451,65 +1543,13 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					return selected;
 
 				};
-				const captureDepthPreservedMaskData = async () => {
-
-					const materialStates = [];
-
-					_lightProbeContext.scene.traverse( object => {
-
-						if ( object.isMesh !== true ) return;
-
-						materialStates.push( { object, material: object.material } );
-
-						if ( object === _lightProbeContext.leakFixture.leftReceiver ) {
-
-							object.material = leftMaskMaterial;
-
-						} else if ( object === _lightProbeContext.leakFixture.rightReceiver ) {
-
-							object.material = rightMaskMaterial;
-
-						} else {
-
-							object.material = occluderMaskMaterial;
-
-						}
-
-					} );
-
-					try {
-
-						_lightProbeContext.scene.background = new THREE.Color( 0x000000 );
-						_lightProbeContext.renderer.setRenderTarget( maskTarget );
-						_lightProbeContext.renderer.clear();
-						_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
-
-						return await _lightProbeContext.renderer.readRenderTargetPixelsAsync( maskTarget, 0, 0, width, height );
-
-					} finally {
-
-						for ( const state of materialStates ) {
-
-							state.object.material = state.material;
-
-						}
-
-					}
-
-				};
 				const captureDebugReadback = async ( variant ) => {
 
 					const material = createDebugMaterial( variant );
-					const materialStates = [];
 
 					try {
 
-						_lightProbeContext.scene.traverse( object => {
-
-							if ( object.isMesh !== true ) return;
-
-							materialStates.push( { object, material: object.material } );
-
+						return await captureSceneMeshOverrides( object => {
 							if ( object === _lightProbeContext.leakFixture.leftReceiver ||
 								object === _lightProbeContext.leakFixture.rightReceiver ) {
 
@@ -1520,21 +1560,16 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 								object.material = occluderMaskMaterial;
 
 							}
-
-						} );
-						_lightProbeContext.renderer.setRenderTarget( debugTarget );
-						_lightProbeContext.renderer.clear();
-						_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
-
-						return await _lightProbeContext.renderer.readRenderTargetPixelsAsync( debugTarget, 0, 0, width, height );
+						}, async () => await readLightProbeGridGPURenderedTargetRegion(
+							_lightProbeContext.renderer,
+							_lightProbeContext.scene,
+							_lightProbeContext.camera,
+							debugTarget,
+							width,
+							height
+						) );
 
 					} finally {
-
-						for ( const state of materialStates ) {
-
-							state.object.material = state.material;
-
-						}
 
 						material.dispose();
 
@@ -1558,6 +1593,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					},
 					...[
 						'samplePositionGrid',
+						'manualNormalWorld',
 						'probeCoordGrid',
 						'baseProbeCoordGrid',
 						'trilinearBlend',
@@ -1584,6 +1620,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						`neighbor${ slot }ConfidenceWeight`,
 						`neighbor${ slot }LayerCompatibility`,
 						`neighbor${ slot }CompatibleKernel`,
+						`neighbor${ slot }ProbeDirectionEncoded`,
 						`neighbor${ slot }BaseWeight`,
 						`neighbor${ slot }Visibility`,
 						`neighbor${ slot }VisibilityWeight`
@@ -1605,7 +1642,14 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					_lightProbeContext.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
 					_lightProbeContext.probeGrid.visibilityDepthWeighting.value = 1;
 
-					const maskData = await captureDepthPreservedMaskData();
+					const maskData = await captureDepthPreservedReceiverMaskData( {
+						width,
+						height,
+						maskTarget,
+						leftMaskMaterial,
+						rightMaskMaterial,
+						occluderMaskMaterial
+					} );
 					const debugReadbacks = new Map();
 
 					for ( const variant of debugVariantDescriptors ) {
@@ -1622,7 +1666,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						_lightProbeContext.probeGrid.visibilityDepthTarget !== null;
 					const isDebugReceiverPixel = pixel => {
 
-						const encodedNormal = getVector( 'normalWorld', pixel );
+						const encodedNormal = getVector( 'manualNormalWorld', pixel );
 						const positionGrid = getVector( 'positionWorldGrid', pixel );
 						const samplePositionGrid = getVector( 'samplePositionGrid', pixel );
 						const decodedNormal = decodeEncodedNormal( encodedNormal );
@@ -1665,8 +1709,10 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							const sampleLabel = `gpu-visible-${ correctSide }-${ pixel.sampleOrder }`;
 							const gpuPositionWorldGrid = getVector( 'positionWorldGrid', pixel );
 							const gpuPositionWorld = grid01ToWorld( gpuPositionWorldGrid );
-							const gpuNormalEncoded = getVector( 'normalWorld', pixel );
-							const gpuNormal = decodeEncodedNormal( gpuNormalEncoded );
+							const gpuDebugNormalEncoded = getVector( 'normalWorld', pixel );
+							const gpuDebugNormal = decodeEncodedNormal( gpuDebugNormalEncoded );
+							const gpuManualNormalEncoded = getVector( 'manualNormalWorld', pixel );
+							const gpuManualNormal = decodeEncodedNormal( gpuManualNormalEncoded );
 							const receiver = await analyzeReceiver(
 								label,
 								mesh,
@@ -1686,7 +1732,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 										readbackOrigin: 'render-target-readback'
 									},
 									worldPosition: gpuPositionWorld,
-									worldNormal: new THREE.Vector3( gpuNormal.x, gpuNormal.y, gpuNormal.z ),
+									worldNormal: new THREE.Vector3( gpuManualNormal.x, gpuManualNormal.y, gpuManualNormal.z ),
 									quadratureWeight: 1,
 									visibilityPath: gpuGuardedVisibilityActive ?
 										'gpu-runtime-positionworld-distance-bias' :
@@ -1729,6 +1775,14 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 								const gpuConfidenceWeight = getScalar( `neighbor${ slot }ConfidenceWeight`, pixel );
 								const gpuLayerCompatibility = getScalar( `neighbor${ slot }LayerCompatibility`, pixel );
 								const gpuCompatibleKernel = getScalar( `neighbor${ slot }CompatibleKernel`, pixel );
+								const gpuProbeDirectionEncoded = getVector( `neighbor${ slot }ProbeDirectionEncoded`, pixel );
+								const gpuProbeDirection = decodeEncodedNormal( gpuProbeDirectionEncoded );
+								const cpuProbeDirection = new THREE.Vector3(
+									cpuRow.probePosition.x - receiver.receiverPosition.x,
+									cpuRow.probePosition.y - receiver.receiverPosition.y,
+									cpuRow.probePosition.z - receiver.receiverPosition.z
+								).normalize();
+								const cpuProbeDirectionEncoded = normalToEncoded( cpuProbeDirection );
 								const gpuBaseWeight = getScalar( `neighbor${ slot }BaseWeight`, pixel );
 								const gpuVisibility = getScalar( `neighbor${ slot }Visibility`, pixel );
 								const gpuVisibilityWeight = getScalar( `neighbor${ slot }VisibilityWeight`, pixel );
@@ -1752,6 +1806,14 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 									gpuLayerCompatibility,
 									cpuCompatibleKernel: cpuRow.compatibleKernel,
 									gpuCompatibleKernel,
+									cpuProbeDirectionEncoded,
+									gpuProbeDirectionEncoded,
+									cpuProbeDirection: {
+										x: roundMetric( cpuProbeDirection.x ),
+										y: roundMetric( cpuProbeDirection.y ),
+										z: roundMetric( cpuProbeDirection.z )
+									},
+									gpuProbeDirection,
 									cpuScalarWeight: cpuRow.scalarWeight,
 									cpuBaseWeight: cpuRow.baseWeight,
 									cpuVisibility: cpuRow.visibility,
@@ -1765,6 +1827,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 									confidenceWeightDelta: roundMetric( Math.abs( gpuConfidenceWeight - cpuRow.confidenceWeight ) ),
 									layerCompatibilityDelta: roundMetric( Math.abs( gpuLayerCompatibility - cpuRow.layerCompatibility ) ),
 									compatibleKernelDelta: roundMetric( Math.abs( gpuCompatibleKernel - cpuRow.compatibleKernel ) ),
+									probeDirectionEncodedDelta: vectorDelta( gpuProbeDirectionEncoded, cpuProbeDirectionEncoded ),
 									baseWeightDelta: roundMetric( Math.abs( gpuBaseWeight - cpuRow.baseWeight ) ),
 									visibilityDelta: roundMetric( Math.abs( gpuVisibility - cpuRow.visibility ) ),
 									visibilityWeightDelta: roundMetric( Math.abs( gpuVisibilityWeight - cpuRow.visibilityWeight ) )
@@ -1830,8 +1893,12 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 									positionWorld: roundWorldVector( gpuPositionWorld ),
 									positionWorldGrid: gpuPositionWorldGrid,
 									samplePositionGrid: gpuSamplePositionGrid,
-									normalEncoded: gpuNormalEncoded,
-									normalWorld: gpuNormal,
+									normalEncoded: gpuManualNormalEncoded,
+									normalWorld: gpuManualNormal,
+									manualNormalEncoded: gpuManualNormalEncoded,
+									manualNormalWorld: gpuManualNormal,
+									debugNormalEncoded: gpuDebugNormalEncoded,
+									debugNormalWorld: gpuDebugNormal,
 									probeCoordGrid: gpuProbeCoordGrid,
 									baseProbeCoordGrid: gpuBaseProbeCoordGrid,
 									trilinearBlend: gpuTrilinearBlend,
@@ -1844,7 +1911,8 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 								deltas: {
 									positionWorldGrid: vectorDelta( gpuPositionWorldGrid, cpuPositionWorldGrid ),
 									samplePositionGrid: vectorDelta( gpuSamplePositionGrid, cpuSamplePositionGrid ),
-									normalEncoded: vectorDelta( gpuNormalEncoded, cpuNormalEncoded ),
+									normalEncoded: vectorDelta( gpuManualNormalEncoded, cpuNormalEncoded ),
+									debugNormalToManualEncoded: vectorDelta( gpuDebugNormalEncoded, gpuManualNormalEncoded ),
 									probeCoordGrid: vectorDelta( gpuProbeCoordGrid, cpuProbeCoordGrid ),
 									baseProbeCoordGrid: vectorDelta( gpuBaseProbeCoordGrid, cpuBaseProbeCoordGrid ),
 									trilinearBlend: vectorDelta( gpuTrilinearBlend, receiver.trilinearBlend ),
@@ -1908,8 +1976,13 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						0,
 						...samples.flatMap( sample => sample.neighborRows.map( row => row[ key ] ?? 0 ) ).filter( Number.isFinite )
 					);
+					const maxNeighborVectorDelta = key => Math.max(
+						0,
+						...samples.flatMap( sample => sample.neighborRows.map( row => row[ key ]?.max ?? 0 ) ).filter( Number.isFinite )
+					);
 					const maxNeighborComponentDeltas = {
 						trilinearWeight: maxNeighborDelta( 'trilinearWeightDelta' ),
+						probeDirection: maxNeighborVectorDelta( 'probeDirectionEncodedDelta' ),
 						normalWeight: maxNeighborDelta( 'normalWeightDelta' ),
 						validityWeight: maxNeighborDelta( 'validityWeightDelta' ),
 						confidenceWeight: maxNeighborDelta( 'confidenceWeightDelta' ),
@@ -1967,6 +2040,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						finiteScalarDeltaMax( 'visibilityWeight' ) <= thresholds.weightMax &&
 						finiteScalarDeltaMax( 'visibilityMass' ) <= thresholds.weightMax &&
 						maxNeighborComponentDeltas.trilinearWeight <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.probeDirection <= thresholds.normalEncodedMax &&
 						maxNeighborComponentDeltas.normalWeight <= thresholds.weightMax &&
 						maxNeighborComponentDeltas.validityWeight <= thresholds.weightMax &&
 						maxNeighborComponentDeltas.confidenceWeight <= thresholds.weightMax &&
@@ -2034,6 +2108,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							dominantWeightingMismatchComponent,
 							maxNeighborWeightComponentDeltas: maxNeighborComponentDeltas,
 							maxNeighborTrilinearWeightDelta: maxNeighborComponentDeltas.trilinearWeight,
+							maxNeighborProbeDirectionEncodedDelta: maxNeighborComponentDeltas.probeDirection,
 							maxNeighborNormalWeightDelta: maxNeighborComponentDeltas.normalWeight,
 							maxNeighborValidityWeightDelta: maxNeighborComponentDeltas.validityWeight,
 							maxNeighborConfidenceWeightDelta: maxNeighborComponentDeltas.confidenceWeight,
@@ -2078,14 +2153,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 				} finally {
 
-					_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
-					_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
-					_lightProbeContext.scene.background = previousBackground;
-					_lightProbeContext.probeGrid.visibilityDepthWeighting.value = previousVisibilityWeighting;
-					_lightProbeContext.renderer.toneMapping = previousToneMapping;
-					_lightProbeContext.renderer.toneMappingExposure = previousToneMappingExposure;
-					_lightProbeContext.renderer.outputColorSpace = previousOutputColorSpace;
-					_lightProbeContext.renderer.setRenderTarget( previousRenderTarget );
+					restoreReceiverReadbackState( previousState );
 					leftMaskMaterial.dispose();
 					rightMaskMaterial.dispose();
 					occluderMaskMaterial.dispose();
@@ -2103,24 +2171,14 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const height = _lightProbeContext.renderer.domElement.height;
 				const label = options.label ?? 'current-lighting';
 				const receiverAlbedoMode = options.receiverAlbedoMode ?? 'original-receiver-albedo';
-				const previousRenderTarget = _lightProbeContext.renderer.getRenderTarget();
-				const previousToneMapping = _lightProbeContext.renderer.toneMapping;
-				const previousToneMappingExposure = _lightProbeContext.renderer.toneMappingExposure;
-				const previousOutputColorSpace = _lightProbeContext.renderer.outputColorSpace;
-				const previousBackground = _lightProbeContext.scene.background;
-				const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
-				const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
+				const previousState = createReceiverReadbackStateSnapshot();
 				const receiverMaterial = options.receiverMaterial ?? null;
-				const overrideLeftMaterial = receiverMaterial === null && options.receiverAlbedo !== undefined ? previousLeftMaterial.clone() : null;
-				const overrideRightMaterial = receiverMaterial === null && options.receiverAlbedo !== undefined ? previousRightMaterial.clone() : null;
-				const previousDirectLightIntensity = _lightProbeContext.directLight.intensity;
-				const previousAmbientLightIntensity = _lightProbeContext.ambientLight.intensity;
-				const previousProbeIntensity = _lightProbeContext.probeGrid.probeIntensity.value;
-				const previousVisibilityWeighting = _lightProbeContext.probeGrid.visibilityDepthWeighting.value;
+				const overrideLeftMaterial = receiverMaterial === null && options.receiverAlbedo !== undefined ? previousState.leftMaterial.clone() : null;
+				const overrideRightMaterial = receiverMaterial === null && options.receiverAlbedo !== undefined ? previousState.rightMaterial.clone() : null;
 				const selectedLighting = {
-					directIntensity: options.directIntensity ?? previousDirectLightIntensity,
-					ambientIntensity: options.ambientIntensity ?? previousAmbientLightIntensity,
-					probeIntensity: options.probeIntensity ?? previousProbeIntensity
+					directIntensity: options.directIntensity ?? previousState.directLightIntensity,
+					ambientIntensity: options.ambientIntensity ?? previousState.ambientLightIntensity,
+					probeIntensity: options.probeIntensity ?? previousState.probeIntensity
 				};
 				const colorTarget = new THREE.RenderTarget( width, height, {
 					type: THREE.HalfFloatType,
@@ -2139,63 +2197,9 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const leftMaskMaterial = new THREE.MeshBasicMaterial( { color: 0xff0000, toneMapped: false } );
 				const rightMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x00ff00, toneMapped: false } );
 				const occluderMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x000000, toneMapped: false } );
-				const captureDepthPreservedMaskData = async () => {
-
-					const materialStates = [];
-
-					_lightProbeContext.scene.traverse( object => {
-
-						if ( object.isMesh !== true ) return;
-
-						materialStates.push( { object, material: object.material } );
-
-						if ( object === _lightProbeContext.leakFixture.leftReceiver ) {
-
-							object.material = leftMaskMaterial;
-
-						} else if ( object === _lightProbeContext.leakFixture.rightReceiver ) {
-
-							object.material = rightMaskMaterial;
-
-						} else {
-
-							object.material = occluderMaskMaterial;
-
-						}
-
-					} );
-
-					try {
-
-						_lightProbeContext.scene.background = new THREE.Color( 0x000000 );
-						_lightProbeContext.renderer.setRenderTarget( maskTarget );
-						_lightProbeContext.renderer.clear();
-						_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
-
-						return await _lightProbeContext.renderer.readRenderTargetPixelsAsync( maskTarget, 0, 0, width, height );
-
-					} finally {
-
-						for ( const state of materialStates ) {
-
-							state.object.material = state.material;
-
-						}
-
-					}
-
-				};
 				const captureReceiverOnlyMaskData = async () => {
 
-					const visibilityStates = [];
-					const materialStates = [];
-
-					_lightProbeContext.scene.traverse( object => {
-
-						if ( object.isMesh !== true ) return;
-
-						visibilityStates.push( { object, visible: object.visible } );
-						materialStates.push( { object, material: object.material } );
+					return await captureSceneMeshOverrides( object => {
 						object.visible = object === _lightProbeContext.leakFixture.leftReceiver ||
 							object === _lightProbeContext.leakFixture.rightReceiver;
 
@@ -2208,35 +2212,20 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							object.material = rightMaskMaterial;
 
 						}
-
-					} );
-
-					try {
+					}, async () => {
 
 						_lightProbeContext.scene.background = new THREE.Color( 0x000000 );
 						_lightProbeContext.leakFixture.leftReceiver.visible = true;
 						_lightProbeContext.leakFixture.rightReceiver.visible = true;
-						_lightProbeContext.renderer.setRenderTarget( maskTarget );
-						_lightProbeContext.renderer.clear();
-						_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
-
-						return await _lightProbeContext.renderer.readRenderTargetPixelsAsync( maskTarget, 0, 0, width, height );
-
-					} finally {
-
-						for ( const state of materialStates ) {
-
-							state.object.material = state.material;
-
-						}
-
-						for ( const state of visibilityStates ) {
-
-							state.object.visible = state.visible;
-
-						}
-
-					}
+						return await readLightProbeGridGPURenderedTargetRegion(
+							_lightProbeContext.renderer,
+							_lightProbeContext.scene,
+							_lightProbeContext.camera,
+							maskTarget,
+							width,
+							height
+						);
+					} );
 
 				};
 
@@ -2268,11 +2257,22 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 					}
 
-					_lightProbeContext.renderer.setRenderTarget( colorTarget );
-					_lightProbeContext.renderer.clear();
-					_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
-					const colorData = await _lightProbeContext.renderer.readRenderTargetPixelsAsync( colorTarget, 0, 0, width, height );
-					const maskData = await captureDepthPreservedMaskData();
+					const colorData = await readLightProbeGridGPURenderedTargetRegion(
+						_lightProbeContext.renderer,
+						_lightProbeContext.scene,
+						_lightProbeContext.camera,
+						colorTarget,
+						width,
+						height
+					);
+					const maskData = await captureDepthPreservedReceiverMaskData( {
+						width,
+						height,
+						maskTarget,
+						leftMaskMaterial,
+						rightMaskMaterial,
+						occluderMaskMaterial
+					} );
 					const legacyReceiverOnlyMaskData = await captureReceiverOnlyMaskData();
 					const left = createReadbackReceiverMetric( colorData, maskData, width, height, THREE.HalfFloatType, 'left' );
 					const right = createReadbackReceiverMetric( colorData, maskData, width, height, THREE.HalfFloatType, 'right' );
@@ -2369,18 +2369,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 				} finally {
 
-					_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
-					_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
-					_lightProbeContext.scene.background = previousBackground;
-
-					_lightProbeContext.renderer.toneMapping = previousToneMapping;
-					_lightProbeContext.renderer.toneMappingExposure = previousToneMappingExposure;
-					_lightProbeContext.renderer.outputColorSpace = previousOutputColorSpace;
-					_lightProbeContext.directLight.intensity = previousDirectLightIntensity;
-					_lightProbeContext.ambientLight.intensity = previousAmbientLightIntensity;
-					_lightProbeContext.probeGrid.probeIntensity.value = previousProbeIntensity;
-					_lightProbeContext.probeGrid.visibilityDepthWeighting.value = previousVisibilityWeighting;
-					_lightProbeContext.renderer.setRenderTarget( previousRenderTarget );
+					restoreReceiverReadbackState( previousState );
 					leftMaskMaterial.dispose();
 					rightMaskMaterial.dispose();
 					occluderMaskMaterial.dispose();
@@ -2616,31 +2605,143 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 				}
 
+				const contributionGateThresholds = {
+					neutralProbesOnlyWrongSideMax: 1.15,
+					neutralProbesOnlyCorrectBounceMin: 0.85,
+					neutralChromaticityWrongSidePressureMax: 0.05
+				};
+				const contributionGateBlockers = [];
+				const addContributionBlocker = ( key, value, threshold, failed, finding, severity = 0 ) => {
+
+					if ( failed === false ) return;
+
+					contributionGateBlockers.push( {
+						key,
+						value: Number.isFinite( value ) ? roundMetric( value ) : null,
+						threshold,
+						delta: Number.isFinite( value ) && Number.isFinite( threshold ) ? roundMetric( Math.abs( value - threshold ) ) : null,
+						normalizedSeverity: roundMetric( severity ),
+						finding
+					} );
+
+				};
+
+				if ( offscreenSceneLinearContributionSummary.status !== 'SUPPORTED' ) {
+
+					contributionGateBlockers.push( {
+						key: 'originalContributionRows',
+						value: offscreenSceneLinearContributionSummary.status,
+						threshold: 'SUPPORTED',
+						delta: null,
+						normalizedSeverity: 1,
+						finding: 'Original receiver offscreen contribution isolation did not produce all required supported rows.'
+					} );
+
+				}
+
+				if ( offscreenSceneLinearNeutralContributionSummary.status !== 'SUPPORTED' ) {
+
+					contributionGateBlockers.push( {
+						key: 'neutralContributionRows',
+						value: offscreenSceneLinearNeutralContributionSummary.status,
+						threshold: 'SUPPORTED',
+						delta: null,
+						normalizedSeverity: 1,
+						finding: 'Neutral receiver offscreen contribution isolation did not produce all required supported rows.'
+					} );
+
+				}
+
+				if ( neutralProbeRow === null ) {
+
+					contributionGateBlockers.push( {
+						key: 'neutralProbesOnly',
+						value: null,
+						threshold: 'captured row',
+						delta: null,
+						normalizedSeverity: 1,
+						finding: 'Neutral receiver probe-only row was not captured.'
+					} );
+
+				} else {
+
+					addContributionBlocker(
+						'neutralProbesOnlyWrongSide',
+						neutralProbeRow.maskedWrongSideColorRatio,
+						contributionGateThresholds.neutralProbesOnlyWrongSideMax,
+						neutralProbeRow.maskedWrongSideColorRatio > contributionGateThresholds.neutralProbesOnlyWrongSideMax,
+						'Neutral probe-only wrong-side ratio is above the conservative scene-linear promotion threshold.',
+						( neutralProbeRow.maskedWrongSideColorRatio - contributionGateThresholds.neutralProbesOnlyWrongSideMax ) / contributionGateThresholds.neutralProbesOnlyWrongSideMax
+					);
+					addContributionBlocker(
+						'neutralProbesOnlyCorrectBounce',
+						neutralProbeRow.maskedCorrectBounceRatio,
+						contributionGateThresholds.neutralProbesOnlyCorrectBounceMin,
+						neutralProbeRow.maskedCorrectBounceRatio < contributionGateThresholds.neutralProbesOnlyCorrectBounceMin,
+						'Neutral probe-only correct-bounce ratio is below the conservative scene-linear promotion threshold.',
+						( contributionGateThresholds.neutralProbesOnlyCorrectBounceMin - neutralProbeRow.maskedCorrectBounceRatio ) / contributionGateThresholds.neutralProbesOnlyCorrectBounceMin
+					);
+					addContributionBlocker(
+						'neutralChromaticityWrongSidePressure',
+						neutralProbeRow.chromaticityWrongSidePressure,
+						contributionGateThresholds.neutralChromaticityWrongSidePressureMax,
+						neutralProbeRow.chromaticityWrongSidePressure > contributionGateThresholds.neutralChromaticityWrongSidePressureMax,
+						'Neutral probe-only chromaticity wrong-side pressure is above the conservative scene-linear promotion threshold.',
+						( neutralProbeRow.chromaticityWrongSidePressure - contributionGateThresholds.neutralChromaticityWrongSidePressureMax ) / contributionGateThresholds.neutralChromaticityWrongSidePressureMax
+					);
+
+				}
+
+				const dominantContributionBlocker = contributionGateBlockers
+					.slice()
+					.sort( ( a, b ) => ( b.normalizedSeverity ?? 0 ) - ( a.normalizedSeverity ?? 0 ) )[ 0 ] ?? null;
+				const contributionGateSupported = contributionGateBlockers.length === 0;
+				const receiverAlbedoBounded = neutralVsOriginalProbeDelta !== null && neutralVsOriginalProbeDelta <= 0.0001;
+				const probeDominated = offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta !== null &&
+					offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta <= 0.0001;
+				const directAmbientSeparationWeak = offscreenSceneLinearContributionSummary.directAmbientMaskedDelta !== null &&
+					offscreenSceneLinearContributionSummary.directAmbientMaskedDelta <= 0.0001;
+				const dominantContributionSource = receiverAlbedoBounded && probeDominated ?
+					'probe-content-or-visibility-shaping' :
+					receiverAlbedoBounded ?
+						'non-albedo-contribution-pressure' :
+						'receiver-albedo-or-material-pressure';
 				const offscreenSceneLinearContributionGate = {
-					status: offscreenSceneLinearContributionSummary.status === 'SUPPORTED' &&
-								offscreenSceneLinearNeutralContributionSummary.status === 'SUPPORTED' &&
-								neutralProbeRow !== null &&
-								neutralProbeRow.maskedWrongSideColorRatio <= 1.15 &&
-								neutralProbeRow.maskedCorrectBounceRatio >= 0.85 &&
-								neutralProbeRow.chromaticityWrongSidePressure <= 0.05 ?
+					status: contributionGateSupported ?
 						'SUPPORTED' :
-						'OPEN',
+						dominantContributionSource === 'probe-content-or-visibility-shaping' ?
+							'OPEN-PROBE-CONTENT-OR-VISIBILITY-SHAPING' :
+							'OPEN-CONTRIBUTION-PRESSURE',
 					mode: 'proof-only-offscreen-scene-linear-contribution-gate',
-					thresholds: {
-						neutralProbesOnlyWrongSideMax: 1.15,
-						neutralProbesOnlyCorrectBounceMin: 0.85,
-						neutralChromaticityWrongSidePressureMax: 0.05
-					},
+					promotionRole: 'scene-linear-contribution-promotion-blocker',
+					publicApiPromotion: false,
+					thresholds: contributionGateThresholds,
 					neutralProbesOnly: neutralProbeRow === null ? null : {
 						maskedWrongSideColorRatio: neutralProbeRow.maskedWrongSideColorRatio,
 						maskedCorrectBounceRatio: neutralProbeRow.maskedCorrectBounceRatio,
-						chromaticityWrongSidePressure: neutralProbeRow.chromaticityWrongSidePressure
+						chromaticityWrongSidePressure: neutralProbeRow.chromaticityWrongSidePressure,
+						wrongSideExcess: roundMetric( Math.max( neutralProbeRow.maskedWrongSideColorRatio - contributionGateThresholds.neutralProbesOnlyWrongSideMax, 0 ) ),
+						correctBounceDeficit: roundMetric( Math.max( contributionGateThresholds.neutralProbesOnlyCorrectBounceMin - neutralProbeRow.maskedCorrectBounceRatio, 0 ) ),
+						chromaticityPressureExcess: roundMetric( Math.max( neutralProbeRow.chromaticityWrongSidePressure - contributionGateThresholds.neutralChromaticityWrongSidePressureMax, 0 ) )
+					},
+					blockers: contributionGateBlockers,
+					dominantBlocker: dominantContributionBlocker,
+					dominantContributionSource,
+					sourceAttribution: {
+						receiverAlbedoBounded,
+						probeDominated,
+						directAmbientSeparationWeak,
+						neutralVsOriginalProbeDelta,
+						probesDirectPlusMaskedDelta: offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta,
+						directAmbientMaskedDelta: offscreenSceneLinearContributionSummary.directAmbientMaskedDelta
 					},
 					neutralVsOriginalProbeDelta,
 					warnings: contributionGateWarnings,
 					diagnosticConclusion: neutralProbeRow === null ?
 						'Neutral receiver probe-only row was not captured; keep promotion closed.' :
-						'Contribution gate compares neutral receiver probe-only wrong-side/correct-bounce/chromaticity pressure against conservative proof thresholds; this remains report-only and does not promote public API.'
+						contributionGateSupported ?
+							'Neutral receiver probe-only wrong-side, correct-bounce, and chromaticity pressure are inside conservative proof thresholds.' :
+							'Neutral receiver probe-only contribution remains outside conservative scene-linear thresholds; receiver albedo is bounded at current precision, so inspect probe content / bounced-light chroma and visibility shaping before tuning moments or Chebyshev thresholds.'
 				};
 				const ratioDelta = ( a, b, key ) => roundMetric( Math.abs(
 					a.leakMetrics[ key ] - b.leakMetrics[ key ]
@@ -2669,6 +2770,15 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const albedoLambertDelta = rowRatioDelta( albedoProbeRow, lambertProbeRow );
 				const lambertStandardProbeDelta = rowRatioDelta( lambertProbeRow, originalProbeRow );
 				const runtimeStandardProbeDelta = rowRatioDelta( runtimeProbeRow, originalProbeRow );
+				const finiteProbeMaterialPathDeltas = [
+					runtimeProbeAlbedoDelta,
+					albedoLambertDelta,
+					lambertStandardProbeDelta,
+					runtimeStandardProbeDelta
+				].filter( Number.isFinite );
+				const probeMaterialPathDelta = finiteProbeMaterialPathDeltas.length > 0 ?
+					roundMetric( Math.max( ...finiteProbeMaterialPathDeltas ) ) :
+					null;
 				const exposureSweep = [
 					standardAcesExposureHalf,
 					standardCurrent,
@@ -2683,42 +2793,60 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const exposureMaskedDelta = roundMetric( Math.max(
 					...exposureSweep.map( row => row.deltaFromCurrentMaskedWrongSide )
 				) );
-				const bsdfIntegrationSupported = lambertVsStandardLinearMaskedDelta <= 0.05;
+				const bsdfIntegrationSupported = probeMaterialPathDelta !== null && probeMaterialPathDelta <= 0.05;
 				const materialAmplificationSuspected = bsdfIntegrationSupported === false;
 				const toneMappingAmplificationSuspected = toneMappingMaskedDelta > 0.05 ||
 							toneMappingSurfaceDelta > 0.05 ||
 							outputColorSpaceMaskedDelta > 0.05 ||
 							exposureMaskedDelta > 0.05;
+				const visiblePixelMismatchOpen = visiblePixelCpuMirrorSupported === false &&
+					visiblePixelCpuMirrorStudy.summary.dominantMismatchSource !== undefined &&
+					visiblePixelCpuMirrorStudy.summary.dominantMismatchSource !== 'none-within-visible-pixel-thresholds';
+				const cpuGpuAggregateOpen = visiblePixelCpuMirrorSupported === false &&
+					Math.min( runtimeProbeCpuDeltaMean ?? Infinity, runtimeProbeCpuDeltaMax ?? Infinity ) > 0.15;
+				const dominantColorMappingSource = exposureMaskedDelta > 0.05 ?
+					'tone-mapping-exposure-response' :
+					toneMappingMaskedDelta > 0.05 ?
+						'tone-mapping-output-transform' :
+						outputColorSpaceMaskedDelta > 0.05 ?
+							'output-color-space-transform' :
+							'none-within-current-thresholds';
+				const colorMappingDiagnostic = {
+					status: toneMappingAmplificationSuspected ?
+						'OPEN-COLOR-MAPPING-DIAGNOSTIC' :
+						'SUPPORTED-COLOR-MAPPING-BOUNDED',
+					promotionEligible: false,
+					dominantMismatchSource: dominantColorMappingSource,
+					toneMappingMaskedDelta,
+					toneMappingSurfaceDelta,
+					outputColorSpaceMaskedDelta,
+					exposureMaskedDelta,
+					diagnosticConclusion: toneMappingAmplificationSuspected ?
+						'Renderer tone mapping, exposure, or output color-space reshapes visible wrong-side ratios; keep this as presentation-only diagnostic pressure rather than blocking scene-linear material/probe promotion.' :
+						'Renderer tone mapping, exposure, and output color-space deltas are bounded for this fixture.'
+				};
 				const sceneLinearMismatchClassifier = {
 					status: runtimeProbeRow === null || runtimeProbeRow.status !== 'SUPPORTED' ?
 						'OPEN-DEBUG-TARGET' :
 						visiblePixelCpuMirrorSupported ?
 							materialAmplificationSuspected ? 'OPEN-BSDF' :
-								toneMappingAmplificationSuspected ? 'OPEN-COLOR-MAPPING' :
-									'SUPPORTED' :
-						Math.min( runtimeProbeCpuDeltaMean ?? Infinity, runtimeProbeCpuDeltaMax ?? Infinity ) > 0.15 ?
+								'SUPPORTED' :
+						cpuGpuAggregateOpen ?
 							'OPEN-CPU-GPU' :
 							materialAmplificationSuspected ?
 								'OPEN-BSDF' :
-								toneMappingAmplificationSuspected ?
-									'OPEN-COLOR-MAPPING' :
-									'SUPPORTED',
+								'SUPPORTED',
 					mode: 'receiver-mask-debug-runtime-albedo-lambert-bsdf-tone-map-classifier',
 					tolerance: 0.15,
 					dominantMismatchSource: runtimeProbeRow === null || runtimeProbeRow.status !== 'SUPPORTED' ?
 						'receiver-mask-or-debug-target' :
-						visiblePixelCpuMirrorSupported ?
-							'cpu-surface-quadrature-sample-set-mismatch' :
-							visiblePixelCpuMirrorStudy.summary.dominantMismatchSource !== undefined &&
-							visiblePixelCpuMirrorStudy.summary.dominantMismatchSource !== 'none-within-visible-pixel-thresholds' ?
-								visiblePixelCpuMirrorStudy.summary.dominantMismatchSource :
-						Math.min( runtimeProbeCpuDeltaMean ?? Infinity, runtimeProbeCpuDeltaMax ?? Infinity ) > 0.15 ?
+						visiblePixelMismatchOpen ?
+							visiblePixelCpuMirrorStudy.summary.dominantMismatchSource :
+						cpuGpuAggregateOpen ?
 							'debug-runtime-path-or-cpu-weighting' :
-							materialAmplificationSuspected ?
-								'standard-material-bsdf-integration' :
-								toneMappingAmplificationSuspected ?
-									'tone-mapping-output-color-space' :
-									'none-within-current-thresholds',
+						materialAmplificationSuspected ?
+							'probe-material-bsdf-path' :
+							'none-within-current-thresholds',
 					runtimeProbeCpuDeltaMean,
 					runtimeProbeCpuDeltaMax,
 					visiblePixelCpuMirrorStatus: visiblePixelCpuMirrorStudy.status,
@@ -2729,27 +2857,28 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					albedoLambertDelta,
 					lambertStandardProbeDelta,
 					runtimeStandardProbeDelta,
+					probeMaterialPathDelta,
+					standardLinearVsProbeOnlyLambertMaskedDelta: lambertVsStandardLinearMaskedDelta,
 					toneMappingMaskedDelta,
 					outputColorSpaceMaskedDelta,
 					exposureMaskedDelta,
+					colorMappingDiagnostic,
 					receiverMaskOverlay: runtimeProbeRow !== null && runtimeProbeRow.leftReceiverMasked.samples > 0 && runtimeProbeRow.rightReceiverMasked.samples > 0,
 					diagnosticConclusion: runtimeProbeRow === null || runtimeProbeRow.status !== 'SUPPORTED' ?
 						'Runtime-equivalent probe-indirect offscreen row did not capture both receiver masks; do not promote presentation color.' :
-						visiblePixelCpuMirrorSupported ?
-							'Runtime-equivalent probe-indirect scene-linear pixels agree with a CPU mirror seeded from the exact GPU-read visible receiver positions; the old CPU surface quadrature aggregate is not the matching sample set.' :
-						Math.min( runtimeProbeCpuDeltaMean ?? Infinity, runtimeProbeCpuDeltaMax ?? Infinity ) > 0.15 ?
+						visiblePixelMismatchOpen ?
+							'Runtime-equivalent probe-indirect scene-linear pixels still disagree with the exact GPU-read visible-pixel CPU mirror; patch that before touching material or visibility thresholds.' :
+						cpuGpuAggregateOpen ?
 							'Runtime-equivalent probe-indirect scene-linear row still disagrees with CPU surface SH attribution; inspect debug/runtime weighting and CPU mirror before tuning visibility.' :
-							materialAmplificationSuspected ?
-								'Runtime-equivalent probe-indirect agrees with CPU, but StandardMaterial / light-node BSDF mapping remains divergent from the Lambert debug path.' :
-								toneMappingAmplificationSuspected ?
-									'Probe-indirect and BSDF paths are bounded, but renderer tone mapping or output color space reshapes visible wrong-side ratios.' :
-									'Runtime-equivalent probe-indirect, receiver mask, albedo, BSDF, and tone-mapping transforms are bounded for this fixture.'
+						materialAmplificationSuspected ?
+							'Runtime-equivalent probe-indirect agrees with the visible-pixel CPU mirror, but the probe albedo / Lambert / standard-probe material rows diverge beyond threshold.' :
+						toneMappingAmplificationSuspected ?
+							'Runtime-equivalent probe-indirect and probe material rows are bounded; tone mapping / exposure / output-color pressure is tracked as a diagnostic-only presentation transform, not a scene-linear material blocker.' :
+							'Runtime-equivalent probe-indirect, receiver mask, albedo, BSDF, and tone-mapping transforms are bounded for this fixture.'
 				};
 				const status = materialAmplificationSuspected ?
 					'OPEN-BSDF' :
-					toneMappingAmplificationSuspected ?
-						'OPEN-COLOR-MAPPING' :
-						'SUPPORTED';
+					'SUPPORTED';
 
 				return {
 					status,
@@ -2797,14 +2926,17 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						albedoLambertDelta,
 						lambertStandardProbeDelta,
 						runtimeStandardProbeDelta,
+						probeMaterialPathDelta,
+						standardLinearVsProbeOnlyLambertMaskedDelta: lambertVsStandardLinearMaskedDelta,
 						lambertVsStandardLinearMaskedDelta,
 						bsdfIntegrationSupported,
 						materialAmplificationSuspected,
 						toneMappingAmplificationSuspected,
+						colorMappingDiagnostic,
 						diagnosticConclusion: materialAmplificationSuspected ?
-							'Presentation Lambert debug does not match the standard material linear-output path closely enough; inspect BSDF/light-node integration before tuning visibility thresholds.' :
+							'Probe albedo / Lambert / standard-probe material rows do not agree closely enough; inspect BSDF/light-node integration before tuning visibility thresholds.' :
 							toneMappingAmplificationSuspected ?
-								'Presentation Lambert debug matches the standard material linear-output path, so BSDF/lightsNode integration is bounded; visible wrong-side ratios are being reshaped mainly by tone mapping / output color-space.' :
+								'Probe albedo / Lambert / standard-probe material rows are bounded; tone mapping / exposure / output color-space pressure remains diagnostic-only and does not block the scene-linear material gate.' :
 								'Original receiver material, tone mapping, and MeshBasic final-irradiance debug path are close enough that the remaining leak is more likely coefficient/content/visibility shaping than color-space amplification.'
 					}
 				};

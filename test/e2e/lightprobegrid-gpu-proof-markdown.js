@@ -363,6 +363,7 @@ export function createLightProbeProofMarkdown( report ) {
 		`- Promotion principle: ${ metricTaxonomyStudy.promotionPrinciple }`,
 		`- Scene-linear target gate: ${ metricTaxonomyStudy.gates.sceneLinearTargetGate }`,
 		`- Contribution gate: ${ metricTaxonomyStudy.gates.contributionGate }`,
+		`- Probe-content contribution attribution gate: ${ metricTaxonomyStudy.gates.probeContentContributionAttributionGate }`,
 		`- Presentation use: ${ metricTaxonomyStudy.gates.presentationGateUse }`,
 		`- Chebyshev tuning: ${ metricTaxonomyStudy.gates.chebyshevTuning }`,
 		'',
@@ -381,6 +382,34 @@ export function createLightProbeProofMarkdown( report ) {
 		].join( ' | ' ).replace( /^/, '| ' ).replace( /$/, ' |' ) );
 
 	}
+
+	const probeContentContributionAttribution = report.currentEvidence.probeContentContributionAttribution;
+
+	lines.push(
+		'',
+		'## Probe Content Contribution Attribution',
+		'',
+		`- Status: ${ probeContentContributionAttribution.status }`,
+		`- Boundary: ${ probeContentContributionAttribution.proofBoundary }`,
+		`- Contribution gate: ${ probeContentContributionAttribution.currentGate.status }`,
+		`- Dominant contribution blocker: ${ probeContentContributionAttribution.currentGate.dominantBlocker }`,
+		`- Dominant explained source: ${ probeContentContributionAttribution.summary.dominantExplainedSource }`,
+		`- Attribution strength: ${ probeContentContributionAttribution.summary.attributionStrength }`,
+		`- Runtime promotion allowed: ${ probeContentContributionAttribution.runtimePromotionAllowed }`,
+		`- Next proof-only action: ${ probeContentContributionAttribution.summary.nextProofOnlyAction }`,
+		`- Conclusion: ${ probeContentContributionAttribution.summary.diagnosticConclusion }`,
+		'',
+		'| Evidence | Status/value |',
+		'|---|---|',
+		`| Receiver albedo cleared | ${ probeContentContributionAttribution.clearedNonContentSources.receiverAlbedoCleared } |`,
+		`| Direct/ambient cleared | ${ probeContentContributionAttribution.clearedNonContentSources.directAmbientCleared } |`,
+		`| Probe-content chroma status | ${ probeContentContributionAttribution.contentEvidence.probeContentChromaStatus } |`,
+		`| Bake contamination status | ${ probeContentContributionAttribution.contentEvidence.probeBakeContaminationStatus } |`,
+		`| Surface content status | ${ probeContentContributionAttribution.contentEvidence.surfaceShContentStatus } |`,
+		`| Surface split status | ${ probeContentContributionAttribution.contentEvidence.surfaceContentAttributionSplitStatus } |`,
+		`| Dominant probe/coefficient | ${ probeContentContributionAttribution.contentEvidence.probeBakeDominantProbeIndex } / ${ probeContentContributionAttribution.contentEvidence.probeBakeDominantCoefficientName } |`,
+		`| Mapped/unmapped leak samples | ${ probeContentContributionAttribution.contentEvidence.mappedLeakSampleCount } / ${ probeContentContributionAttribution.contentEvidence.unmappedLeakSampleCount } |`
+	);
 
 	const wgpuLeakAuditStudy = report.currentEvidence.wgpuLeakAuditStudy;
 
