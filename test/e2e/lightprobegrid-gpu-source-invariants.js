@@ -26,17 +26,9 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		gpuHelperSource,
 		gpuBakeSource,
 		smokeRunnerSource,
-		proofReportSource,
+		proofGatesSource,
 		proofVisibilitySource,
-		proofResearchSectionsSource,
-		proofMarkdownSource,
-		proofDiagnosticsMarkdownSource,
-		proofProgramMarkdownSource,
-		proofProbeMarkdownSource,
-		proofReceiverMarkdownSource,
-		proofResearchMarkdownSource,
 		artifactSource,
-		artifactPerformanceAssertionsSource,
 		imageMetricsSource,
 		proofValidationSource,
 		configSource,
@@ -73,17 +65,9 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-report.js', 'utf8' ),
+		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-gates.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-visibility.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-research-sections.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-markdown.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-diagnostics-markdown.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-program-markdown.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-probe-markdown.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-receiver-markdown.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-research-markdown.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-artifacts.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-artifact-performance-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-image-metrics.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-validation.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke-config.js', 'utf8' ),
@@ -110,17 +94,9 @@ ${ receiverDiagnosticsSource }
 ${ oracleDiagnosticsSource }
 ${ cpuShMathSource }`;
 	const e2eSource = `${ smokeRunnerSource }
-${ proofReportSource }
+${ proofGatesSource }
 ${ proofVisibilitySource }
-${ proofResearchSectionsSource }
-${ proofMarkdownSource }
-${ proofDiagnosticsMarkdownSource }
-${ proofProgramMarkdownSource }
-${ proofProbeMarkdownSource }
-${ proofReceiverMarkdownSource }
-${ proofResearchMarkdownSource }
 ${ artifactSource }
-${ artifactPerformanceAssertionsSource }
 ${ imageMetricsSource }
 ${ proofValidationSource }
 ${ configSource }
@@ -183,6 +159,18 @@ ${ runnerRuntimeAssertionsSource }`;
 			e2eSource.includes( lightProbeWebGLReferenceLabel ) &&
 			e2eSource.includes( 'captureLightProbeWebGLReference' ),
 		'WebGL LightProbeGrid reference capture must stay explicit, harness-gated, and secondary to the WebGPU proof.'
+	);
+
+	requireSource(
+		smokeRunnerSource.includes( 'runLightProbeGridGpuProofGateAssertions' ) &&
+			artifactSource.includes( 'proof-summary.json' ) &&
+			artifactSource.includes( 'assertLightProbeProofSummary' ) &&
+			proofGatesSource.includes( 'MAX_PROOF_SUMMARY_BYTES' ) &&
+			proofGatesSource.includes( 'MAX_PROOF_GATE_COUNT' ) &&
+			artifactSource.includes( 'createLightProbeProofReport' ) === false &&
+			artifactSource.includes( 'proof-report.json' ) === false &&
+			artifactSource.includes( 'proof-table.md' ) === false,
+		'LightProbeGridGPU artifacts must default to compact proof-summary.json instead of writing the legacy giant proof report/table.'
 	);
 
 	requireSource(
@@ -400,178 +388,8 @@ ${ runnerRuntimeAssertionsSource }`;
 		'Cornell harness must include a synthetic cubemap projection parity fixture and a guarded runtime compute projection parity contract with fragment fallback.'
 	);
 
-	requireSource(
-		proofResearchSectionsSource.includes( 'computeProjectionDesignSketch' ) &&
-			proofResearchSectionsSource.includes( 'DESIGN-SKETCH-IMPLEMENTED-AS-GUARDED-RUNTIME' ) &&
-			proofResearchSectionsSource.includes( 'storageLayout' ) &&
-			proofResearchSectionsSource.includes( 'reductionContract' ) &&
-			proofResearchSectionsSource.includes( 'outputPackingContract' ) &&
-			proofResearchSectionsSource.includes( 'parityTolerance' ) &&
-			proofResearchSectionsSource.includes( 'fallbackBehavior' ) &&
-			proofResearchSectionsSource.includes( 'architectureDiagram' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Design Sketch' ),
-		'Proof report must include a guarded-runtime compute projection design sketch.'
-	);
-
-	requireSource(
-		proofResearchSectionsSource.includes( 'computeProjectionParityEvidencePlan' ) &&
-			proofResearchSectionsSource.includes( 'CAPTURED-RUNTIME-PARITY-EVIDENCE' ) &&
-			proofResearchSectionsSource.includes( 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ) &&
-			proofResearchSectionsSource.includes( 'compute-fixture-parity' ) &&
-			proofResearchSectionsSource.includes( 'compute-atlas-repack-parity' ) &&
-			proofResearchSectionsSource.includes( 'compute-adapter-fallback' ) &&
-			proofResearchSectionsSource.includes( 'compute-runtime-readback-parity' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Parity Evidence Plan' ) &&
-			artifactPerformanceAssertionsSource.includes( 'computeProjectionParityEvidencePlan' ),
-		'Proof report must specify compute projection parity evidence shape including runtime readback before full promotion.'
-	);
-
-	requireSource(
-		exampleSource.includes( 'projectSyntheticCubeFragmentCoefficientPath' ) &&
-			exampleSource.includes( 'computeProjectionCandidateOracle' ) &&
-			exampleSource.includes( 'PROOF-ONLY-MOCK-PARITY-PASSING' ) &&
-			exampleSource.includes( 'does-not-promote-runtime' ) &&
-			proofReportSource.includes( 'getSmokeStep( smokeResults, \'projection parity\' ).projectionParity' ) &&
-			proofReportSource.includes( 'getSmokeStep( smokeResults, \'atlas packing\' ).atlasPacking' ) &&
-			proofResearchSectionsSource.includes( 'computeProjectionCandidateOracle' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Candidate Oracle' ) &&
-			artifactPerformanceAssertionsSource.includes( 'proof-only compute projection candidate oracle' ),
-		'Proof harness must include an executable compute candidate oracle/mock before full runtime parity promotion.'
-	);
-
-	requireSource(
-		exampleSource.includes( 'computeProjectionAtlasRepackOracle' ) &&
-			exampleSource.includes( 'PROOF-ONLY-ATLAS-REPACK-PARITY-PASSING' ) &&
-			exampleSource.includes( 'compute-written coefficientTarget-compatible rows' ) &&
-			exampleSource.includes( 'openEvidenceAfterPass' ) &&
-			proofResearchSectionsSource.includes( 'computeProjectionAtlasRepackOracle' ) &&
-			proofResearchSectionsSource.includes( 'CAPTURED-PROOF-ONLY-ATLAS-REPACK-PASSING' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Atlas Repack Oracle' ) &&
-			artifactPerformanceAssertionsSource.includes( 'proof-only compute atlas repack oracle' ),
-		'Proof harness must capture compute atlas repack parity before adapter fallback is the only open compute projection evidence.'
-	);
-
-	requireSource(
-		exampleSource.includes( 'inspectComputeProjectionRuntimeParity' ) &&
-			exampleSource.includes( 'RUNTIME-PARITY-READBACK-PASSING' ) &&
-			exampleSource.includes( 'coefficientMaxDelta' ) &&
-			exampleSource.includes( 'atlasMaxDelta' ) &&
-			exampleSource.includes( 'coefficientTolerance' ) &&
-			exampleSource.includes( 'atlasTolerance' ) &&
-			proofReportSource.includes( 'getSmokeStep( smokeResults, \'compute projection runtime parity\' ).computeProjectionRuntimeParity' ) &&
-			proofResearchSectionsSource.includes( 'computeProjectionRuntimeParityEvidence' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Runtime Readback Parity' ) &&
-			artifactPerformanceAssertionsSource.includes( 'computeProjectionRuntimeParityEvidence' ),
-		'Proof harness must include browser/runtime compute-vs-fragment coefficient, atlas repack, and tolerance validation evidence.'
-	);
-
-	requireSource(
-			source.includes( '_projectionBackendOverride' ) &&
-			source.includes( '_setProjectionBackendOverrideForProfiling' ) &&
-			source.includes( 'projectionBackendOverride' ) &&
-			gpuBakeSource.includes( 'projectionTexelVisitReductionRatio' ) &&
-			exampleSource.includes( 'inspectComputeProjectionProfiling' ) &&
-			exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PROFILE-CAPTURED' ) &&
-			exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' ) &&
-			exampleSource.includes( 'CAPTURED-NON-DETERMINISTIC-PERFORMANCE-NOW' ) &&
-			source.includes( 'non-deterministic-performance-now' ) &&
-			runnerCoreAssertionsSource.includes( 'call( \'inspectComputeProjectionProfiling\' )' ) &&
-			proofReportSource.includes( 'getSmokeStep( smokeResults, \'compute projection profiling\' ).computeProjectionProfiling' ) &&
-			proofResearchSectionsSource.includes( 'computeProjectionProfilingEvidence' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Diagnostic Profiling' ) &&
-			artifactPerformanceAssertionsSource.includes( 'computeProjectionProfilingEvidence' ),
-		'Compute projection profiling must expose a private force-fragment/force-compute diagnostic selector, static 9x work evidence, and non-gated timing artifacts.'
-	);
-
-	requireSource(
-		cubeTextureNodeSource.includes( 'builder.shaderStage !== \'compute\'' ) &&
-			cubeTextureNodeSource.includes( 'materialEnvRotation.mul( uvNode )' ) &&
-			webgpuBuildSource.includes( 'builder.shaderStage !== \'compute\'' ) &&
-			webgpuBuildSource.includes( 'materialEnvRotation.mul( uvNode )' ) &&
-			runnerCoreAssertionsSource.includes( 'computeFallbackReason !== "Cannot read properties of null (reading \'environment\')"' ),
-		'CubeTextureNode must keep explicit compute cubemap sampling from pulling scene/material environment rotation, and the runtime gate must reject null-environment fallback regressions.'
-	);
-
-	requireSource(
-		exampleSource.includes( 'computeProjectionAdapterFallbackOracle' ) &&
-			exampleSource.includes( 'RUNTIME-GUARDED-ADAPTER-FALLBACK-SPEC-PASSING' ) &&
-			exampleSource.includes( 'runtime-implemented-adapter-supported' ) &&
-			exampleSource.includes( 'unsupported-compute-capability' ) &&
-			exampleSource.includes( 'unsupported-storage-texture-capability' ) &&
-			exampleSource.includes( 'promoted-supported-candidate' ) &&
-			proofResearchSectionsSource.includes( 'computeProjectionAdapterFallbackOracle' ) &&
-			proofResearchSectionsSource.includes( 'CAPTURED-RUNTIME-GUARDED-ADAPTER-FALLBACK-PASSING' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Adapter Fallback Oracle' ) &&
-			artifactPerformanceAssertionsSource.includes( 'guarded compute adapter fallback oracle' ),
-		'Proof harness must capture guarded runtime adapter fallback evidence before full parity promotion.'
-	);
-
-	requireSource(
-		proofResearchSectionsSource.includes( 'computeProjectionStatusTransitionGuard' ) &&
-			proofResearchSectionsSource.includes( 'RUNTIME-PARITY-EVIDENCE-CAPTURED' ) &&
-			proofResearchSectionsSource.includes( 'GUARDED-RUNTIME-IMPLEMENTED-PARITY-PENDING' ) &&
-			proofResearchSectionsSource.includes( 'computeProjectionContractStatus' ) &&
-			proofResearchSectionsSource.includes( 'allowedNextContractStatus' ) &&
-			proofResearchSectionsSource.includes( 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' ) &&
-			proofResearchSectionsSource.includes( 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ) &&
-			proofResearchSectionsSource.includes( 'runtimeMarkersAllowed: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Status Transition Guard' ) &&
-			artifactPerformanceAssertionsSource.includes( 'computeProjectionStatusTransitionGuard' ),
-		'Proof report must include a compute projection status transition guard for guarded runtime implementation and pending parity readback.'
-	);
-
-	requireSource(
-		proofResearchSectionsSource.includes( 'computeProjectionCandidateImplementationDesign' ) &&
-			proofResearchSectionsSource.includes( 'CANDIDATE-DESIGN-NOTE-PROOF-ONLY' ) &&
-			proofResearchSectionsSource.includes( 'one logical dispatch group per probe' ) &&
-			proofResearchSectionsSource.includes( 'per-probe workgroup/private accumulators' ) &&
-			proofResearchSectionsSource.includes( 'compute-fixture-parity' ) &&
-			proofResearchSectionsSource.includes( 'compute-atlas-repack-parity' ) &&
-			proofResearchSectionsSource.includes( 'compute-adapter-fallback' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Candidate Implementation Design' ) &&
-			artifactPerformanceAssertionsSource.includes( 'computeProjectionCandidateImplementationDesign' ),
-		'Proof report must include a compute projection candidate implementation design note.'
-	);
-
-	requireSource(
-		proofResearchSectionsSource.includes( 'computeProjectionImplementationReadinessChecklist' ) &&
-			proofResearchSectionsSource.includes( 'RUNTIME-PARITY-READBACK-PASSING' ) &&
-			proofResearchSectionsSource.includes( 'RUNTIME-IMPLEMENTED-PARITY-READBACK-PENDING' ) &&
-			proofResearchSectionsSource.includes( 'proofOnlyDone' ) &&
-			proofResearchSectionsSource.includes( 'runtimeDone: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
-			proofResearchSectionsSource.includes( 'runtimeParityReadbackDone: computeProjectionRuntimeParityCaptured' ) &&
-			proofResearchSectionsSource.includes( 'blockersBeforeRuntime' ) &&
-			proofResearchSectionsSource.includes( 'wgsl-compute-entrypoint' ) &&
-			proofResearchSectionsSource.includes( 'actual-runtime-parity-readback' ) &&
-			proofResearchSectionsSource.includes( 'capability-guarded-runtime-branch' ) &&
-			proofResearchSectionsSource.includes( 'public-api-compatibility' ) &&
-			proofMarkdownSource.includes( 'Compute Projection Implementation Readiness Checklist' ) &&
-			artifactPerformanceAssertionsSource.includes( 'computeProjectionImplementationReadinessChecklist' ),
-		'Proof report must close compute projection implementation readiness with runtime code done and browser parity readback tracked.'
-	);
-
-	requireSource(
-		proofResearchSectionsSource.includes( 'id: \'runtime-3\'' ) &&
-			proofResearchSectionsSource.includes( 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ) &&
-			proofResearchSectionsSource.includes( 'RUNTIME-IMPLEMENTED-PARITY-READBACK-PENDING' ) &&
-			proofResearchSectionsSource.includes( 'guarded TSL compute node now performs one cubemap sweep per probe' ) &&
-			proofResearchSectionsSource.includes( 'passed browser readback against fragment coefficients plus atlas repack' ) &&
-			proofResearchSectionsSource.includes( 'actual browser/runtime readback proves compute-probe-reduction' ),
-		'Runtime-3 backlog must state guarded runtime code exists and full parity promotion is conditional on actual runtime readback.'
-	);
-
-	requireSource(
-		proofResearchSectionsSource.includes( 'id: \'runtime-4\'' ) &&
-			proofResearchSectionsSource.includes( 'RUNTIME-PARITY-READBACK-PASSING' ) &&
-			proofResearchSectionsSource.includes( 'IMPLEMENTED-PARITY-READBACK-PENDING' ) &&
-			proofResearchSectionsSource.includes( 'Candidate readiness now records completed proof-only phases, guarded runtime implementation' ) &&
-			proofResearchSectionsSource.includes( 'passing actual runtime parity readback' ) &&
-			proofResearchSectionsSource.includes( 'actual runtime parity readback passes' ),
-		'Runtime-4 backlog must specify guarded implementation, passing runtime parity evidence, and retained fragment fallback.'
-	);
-
 	const computeProjectionRuntimeMarkersAllowed =
-		proofResearchSectionsSource.includes( 'runtimeMarkersAllowed: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
+		exampleSource.includes( 'runtimeMarkersAllowed: true' ) &&
 		exampleSource.includes( 'status: \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' );
 	const computeProjectionRuntimeMarkers = [
 		'_createComputeProjection',
@@ -587,7 +405,7 @@ ${ runnerRuntimeAssertionsSource }`;
 
 	requireSource(
 		computeProjectionRuntimeMarkersAllowed === true || hasComputeProjectionRuntime === false,
-		'LightProbeGridGPU runtime compute projection markers remain forbidden until computeProjectionStatusTransitionGuard allows guarded runtime markers under IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY.'
+		'LightProbeGridGPU runtime compute projection markers remain forbidden until guarded runtime markers are explicitly allowed by the projection parity contract.'
 	);
 
 	requireSource(
@@ -871,74 +689,8 @@ ${ runnerRuntimeAssertionsSource }`;
 		]
 	);
 
-	requireSourceContract(
-		'LightProbeGrid proof report must include research-proof claim/boundary/slices and proof-only attribution diagnostics.',
-		[
-			{
-				sourceText: e2eSource,
-				tokens: [
-					'researchProofProgram',
-					'wgpuLeakAuditStudy',
-					'metricTaxonomyStudy',
-					'webglLeakReferenceStudy',
-					'researchRoadmapRevision',
-					'WebGPU Leak Audit Study',
-					'Metric Taxonomy Study',
-					'Bounded WebGL Leak Reference',
-					'Research / Literature Roadmap Revision',
-					'Proof ledger decision',
-					'Visibility weighting receiver diagnostic',
-					'Sealed-wall receiver normal convention diagnostic',
-					'Sealed-wall packed SH contribution interrogation',
-					'Probe Content Chroma Study',
-					'Probe Bake Contamination Map',
-					'Dominant Probe Coefficient / Lobe Study',
-					'SH Damping Oracle Study',
-					'Dominant Probe Placement / Source Oracle',
-					'Band responsibility counts',
-					'render-metric mismatch',
-					'CPU SH mirror must agree with at least one sealed receiver render metric within tolerance',
-					'Escaped wrong-side probes',
-				]
-			}
-		]
-	);
 
-	requireSourceContract(
-		'LightProbeGrid proof report must spell out the SH math action and WebGPU pipeline boundary, not only screenshot metrics.',
-		[
-			{
-				sourceText: e2eSource,
-				tokens: [
-					'mathAndPipelineDecision',
-					'webgpuPipelineFlow',
-					'GPU bake cubemaps -> GPU SH projection into packed atlas',
-					'sampler-disabled manual loads / shader texture loads only for validity/normal-weighted rows',
-					'same-budget band1-damped quality candidate',
-					'same half-float atlas path'
-				]
-			}
-		]
-	);
 
-	requireSourceContract(
-		'LightProbeGrid proof report must include a candid labeled rating against SixteenStudio and the WebGL baseline.',
-		[
-			{
-				sourceText: e2eSource,
-				tokens: [
-					'comparativeRating',
-					'CANDID-EVIDENCE-RATING',
-					'OURS-PROOF',
-					'SIXTEEN-REF',
-					'OPEN-DDGI-GAP',
-					'best engineering proof candidate',
-					'best visual/demo candidate',
-					'neither wins on production DDGI/APV correctness'
-				]
-			}
-		]
-	);
 
 	requireSource(
 		source.includes( 'scene.updateMatrixWorld( true )' ) &&

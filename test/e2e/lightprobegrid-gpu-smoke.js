@@ -1,5 +1,6 @@
 import { runLightProbeGridGpuCoreSmokeAssertions } from './lightprobegrid-gpu-runner-core-assertions.js';
 import { runLightProbeGridGpuMatrixSmokeAssertions } from './lightprobegrid-gpu-runner-matrix-assertions.js';
+import { runLightProbeGridGpuProofGateAssertions } from './lightprobegrid-gpu-proof-gates.js';
 import { runLightProbeGridGpuRuntimeSmokeAssertions } from './lightprobegrid-gpu-runner-runtime-assertions.js';
 import { runLightProbeGridGpuVisibilitySmokeAssertions } from './lightprobegrid-gpu-runner-visibility-assertions.js';
 
@@ -164,6 +165,7 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 		assert,
 		results
 	} );
+	runLightProbeGridGpuProofGateAssertions( { assert, results } );
 
 	return results;
 
