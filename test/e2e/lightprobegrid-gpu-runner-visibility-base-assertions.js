@@ -3,40 +3,73 @@ export async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 	const { call, assert, results } = context;
 
 	const visibilityMomentInspection = await call( 'inspectVisibilityDepthMoments' );
-	assert( visibilityMomentInspection.mode === 'unavailable-proof-6-runtime-removed' &&
-		visibilityMomentInspection.available === false &&
-		visibilityMomentInspection.bytes === 0 &&
-		visibilityMomentInspection.evidenceStatus === 'OPEN',
-	'visibility moment inspection: runtime visibility/depth target must be explicitly unavailable during proof-6.' );
+	assert( visibilityMomentInspection.mode === 'moments' &&
+		visibilityMomentInspection.available === true &&
+		visibilityMomentInspection.bytes > 0 &&
+		visibilityMomentInspection.evidenceStatus === 'SUPPORTED',
+	'visibility moment inspection: expected private moment-backed visibilityDepthTarget with non-zero memory.' );
 	assert( Array.isArray( visibilityMomentInspection.samples ) &&
-		visibilityMomentInspection.samples.length === 0 &&
-		visibilityMomentInspection.stats.sampleCount === 0 &&
-		visibilityMomentInspection.stats.finiteSampleCount === 0 &&
-		visibilityMomentInspection.stats.hitSampleCount === 0,
-	'visibility moment inspection: unavailable proof-6 visibility target must not fake readback samples.' );
+		visibilityMomentInspection.samples.length > 0 &&
+		visibilityMomentInspection.stats.sampleCount === visibilityMomentInspection.samples.length &&
+		visibilityMomentInspection.stats.finiteSampleCount > 0 &&
+		visibilityMomentInspection.stats.hitSampleCount > 0,
+	'visibility moment inspection: expected finite direct readback samples with at least one hit-confidence sample.' );
+	assert( visibilityMomentInspection.encoding === 'radial-distance' &&
+		visibilityMomentInspection.stats.encoding === visibilityMomentInspection.encoding &&
+		visibilityMomentInspection.stats.bytes === visibilityMomentInspection.bytes &&
+		Number.isFinite( visibilityMomentInspection.stats.minMeanDistance ) &&
+		Number.isFinite( visibilityMomentInspection.stats.maxMeanDistance ) &&
+		Number.isFinite( visibilityMomentInspection.stats.minVariance ) &&
+		Number.isFinite( visibilityMomentInspection.stats.maxVariance ) &&
+		Number.isFinite( visibilityMomentInspection.stats.meanVariance ) &&
+		Number.isFinite( visibilityMomentInspection.stats.minHitConfidence ) &&
+		Number.isFinite( visibilityMomentInspection.stats.maxHitConfidence ) &&
+		Number.isFinite( visibilityMomentInspection.stats.meanHitConfidence ),
+	'visibility moment inspection: expected radial moment stats, variance distribution, hit confidence distribution, and byte accounting.' );
+	assert( visibilityMomentInspection.momentQualityProfile?.varianceMetric?.includes( 'radial-distance variance' ) &&
+		visibilityMomentInspection.momentQualityProfile?.activeRepackMode === 'five-tap-octa-neighborhood' &&
+		Array.isArray( visibilityMomentInspection.momentQualityProfile?.sweepPlan ),
+	'visibility moment inspection: expected honest private moment-quality profile and deferred sweep plan.' );
+	assert( visibilityMomentInspection.samples.every( sample =>
+		sample.finite === true &&
+			sample.momentEncoding === visibilityMomentInspection.encoding &&
+			Number.isFinite( sample.meanDistance ) &&
+			Number.isFinite( sample.meanSquaredDistance ) &&
+			Number.isFinite( sample.variance ) &&
+			Number.isFinite( sample.backfaceConfidence ) ),
+	'visibility moment inspection: expected every proof sample to expose finite radial-moment fields.' );
 	results.push( { step: 'visibility moment inspection', visibilityMomentInspection } );
 
 	const visibilityWeightingDiagnostic = await call( 'inspectVisibilityWeightingAtLeakReceivers' );
 	assert( [ 'SUPPORTED-DIRECTIONAL-SUPPRESSION', 'OPEN-CORRECT-SIDE-SUPPRESSED' ].includes( visibilityWeightingDiagnostic.status ),
 		'visibility weighting diagnostic: expected explicit supported/open receiver-level status.' );
-	assert( visibilityWeightingDiagnostic.visibilityDepth?.available === false &&
-		visibilityWeightingDiagnostic.visibilityDepth?.mode === 'unavailable-proof-6-runtime-removed',
-	'visibility weighting diagnostic: expected explicit proof-6 unavailable visibility target.' );
+	assert( visibilityWeightingDiagnostic.visibilityDepth?.available === true &&
+		visibilityWeightingDiagnostic.visibilityDepth?.mode === 'moments' &&
+		visibilityWeightingDiagnostic.visibilityDepth?.bytes > 0,
+	'visibility weighting diagnostic: expected moment-backed private visibility target.' );
 	assert( visibilityWeightingDiagnostic.left.rows.length === 8 &&
 		visibilityWeightingDiagnostic.right.rows.length === 8,
 	'visibility weighting diagnostic: expected eight trilinear neighbor probes per receiver.' );
 	assert( visibilityWeightingDiagnostic.left.rows.every( row =>
 		Number.isFinite( row.visibility ) &&
-		Number.isFinite( row.scalarWeight ) &&
-		Number.isFinite( row.visibilityWeight ) ) &&
+			Number.isFinite( row.scalarWeight ) &&
+			Number.isFinite( row.baseWeight ) &&
+			Number.isFinite( row.compatibleKernel ) &&
+			Number.isFinite( row.visibilityWeight ) ) &&
 		visibilityWeightingDiagnostic.right.rows.every( row =>
 			Number.isFinite( row.visibility ) &&
 			Number.isFinite( row.scalarWeight ) &&
+			Number.isFinite( row.baseWeight ) &&
+			Number.isFinite( row.compatibleKernel ) &&
 			Number.isFinite( row.visibilityWeight ) ),
 	'visibility weighting diagnostic: expected finite CPU-mirrored visibility weights.' );
 	assert( visibilityWeightingDiagnostic.summary.comparableReceiverCount > 0 &&
-		Number.isFinite( visibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ),
-	'visibility weighting diagnostic: expected bounded suppression summary.' );
+		Number.isFinite( visibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ) &&
+		Number.isFinite( visibilityWeightingDiagnostic.summary.visibilityMassMean ) &&
+		Number.isFinite( visibilityWeightingDiagnostic.summary.baseSumMean ) &&
+		Number.isFinite( visibilityWeightingDiagnostic.summary.visibleSumMean ) &&
+		Number.isFinite( visibilityWeightingDiagnostic.summary.wrongContributionRatioDelta ),
+	'visibility weighting diagnostic: expected bounded suppression summary, visibilityMass, base/visible sums, and wrong-side contribution ratios.' );
 	assert( visibilityWeightingDiagnostic.left.rows.every( row =>
 		typeof row.crossesDivider === 'boolean' &&
 		typeof row.escaped === 'boolean' &&
@@ -61,9 +94,10 @@ export async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 		sealedVisibilityWeightingDiagnostic.fixtureMode === 'sealed-wall' &&
 		sealedVisibilityWeightingDiagnostic.proofBoundary.includes( 'sealed-wall receiver centers' ),
 	'sealed visibility weighting diagnostic: expected explicit sealed-wall receiver-level status.' );
-	assert( sealedVisibilityWeightingDiagnostic.visibilityDepth?.available === false &&
-		sealedVisibilityWeightingDiagnostic.visibilityDepth?.mode === 'unavailable-proof-6-runtime-removed',
-	'sealed visibility weighting diagnostic: expected explicit proof-6 unavailable visibility target.' );
+	assert( sealedVisibilityWeightingDiagnostic.visibilityDepth?.available === true &&
+		sealedVisibilityWeightingDiagnostic.visibilityDepth?.mode === 'moments' &&
+		sealedVisibilityWeightingDiagnostic.visibilityDepth?.bytes > 0,
+	'sealed visibility weighting diagnostic: expected moment-backed private visibility target.' );
 	assert( sealedVisibilityWeightingDiagnostic.left.rows.length === 8 &&
 		sealedVisibilityWeightingDiagnostic.right.rows.length === 8 &&
 		sealedVisibilityWeightingDiagnostic.summary.comparableReceiverCount > 0,
@@ -71,8 +105,10 @@ export async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 	assert( typeof sealedVisibilityWeightingDiagnostic.interrogationFinding === 'string' &&
 		typeof sealedVisibilityWeightingDiagnostic.dominantEscapeReason.reason === 'string' &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.dominantEscapeReason.count ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ),
-	'sealed visibility weighting diagnostic: expected explicit failure hypothesis fields.' );
+		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ) &&
+		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.visibilityMassMean ) &&
+		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.visibleWrongContributionRatioMean ),
+	'sealed visibility weighting diagnostic: expected explicit failure hypothesis fields and visibilityMass contribution ratios.' );
 	assert( sealedVisibilityWeightingDiagnostic.escapeClassification.frontEdgeBypassEscapeCount === 0,
 		'sealed visibility weighting diagnostic: sealed wall must remove the finite-wall front-edge bypass from this diagnostic.' );
 	assert( sealedVisibilityWeightingDiagnostic.escapeClassification.wrongSideProbeCount > 0 &&

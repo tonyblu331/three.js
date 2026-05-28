@@ -37,12 +37,10 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 		const hitConfidenceThreshold = 0.5;
 		const visibilityWeightFloor = 0.0001;
 		const currentHitConfidencePolicy = {
-			label: 'threshold-0.5',
-			mode: 'threshold',
+			label: 'continuous',
+			mode: 'continuous',
 			threshold: hitConfidenceThreshold
 		};
-		const crushThreshold = 0.2;
-		const weightExponent = 2.0;
 		const dividerX = _lightProbeContext.leakFixture !== null ? _lightProbeContext.leakFixture.thinDivider.position.x : - 0.8667;
 		const componentNames = [ 'r', 'g', 'b', 'a' ];
 		const dividerBox = new THREE.Box3();
@@ -94,7 +92,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					meanSquaredDistance: Number.POSITIVE_INFINITY,
 					variance: minVariance,
 					hitConfidence: 0,
-					validity: 1
+					validity: 1,
+					backfaceConfidence: 0,
+					momentEncoding: 'unavailable'
 				};
 
 			}
@@ -112,7 +112,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				meanSquaredDistance,
 				variance,
 				hitConfidence: values[ 2 ],
-				validity: values[ 3 ]
+				validity: 1,
+				backfaceConfidence: values[ 3 ],
+				momentEncoding: 'radial-distance'
 			};
 
 		};
@@ -615,6 +617,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			probeSourceMap = _lightProbeContext.createProbeSourceMapData( resolution, probeValidity );
 			const probePosition = new THREE.Vector3();
 			const receiverPosition = new THREE.Vector3();
+			const receiverLocalPosition = new THREE.Vector3();
 			const samplePosition = new THREE.Vector3();
 			const receiverNormal = new THREE.Vector3();
 			const receiverQuaternion = new THREE.Quaternion();
@@ -634,7 +637,11 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				mesh.updateWorldMatrix( true, false );
 
-				if ( surfaceSample?.localPosition !== undefined ) {
+				if ( surfaceSample?.worldPosition !== undefined ) {
+
+					receiverPosition.copy( surfaceSample.worldPosition );
+
+				} else if ( surfaceSample?.localPosition !== undefined ) {
 
 					receiverPosition.copy( surfaceSample.localPosition ).applyMatrix4( mesh.matrixWorld );
 
@@ -644,12 +651,19 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				}
 
+				receiverLocalPosition.copy( receiverPosition );
+				mesh.worldToLocal( receiverLocalPosition );
 				mesh.getWorldQuaternion( receiverQuaternion );
 				receiverNormal.set( 0, 0, 1 ).applyQuaternion( receiverQuaternion ).normalize();
 				viewDirection.subVectors( _lightProbeContext.camera.position, receiverPosition ).normalize();
 
 				const activeNormalBias = samplingBias?.normalBias ?? _lightProbeContext.params.normalBias;
 				const activeViewBias = samplingBias?.viewBias ?? _lightProbeContext.params.viewBias;
+				const useRuntimeVisibilityPath = surfaceSample?.visibilityPath === 'gpu-runtime-positionworld-distance-bias';
+				const useRuntimeProbeMeta = surfaceSample?.probeMetaPath === 'gpu-runtime-probe-meta';
+				const runtimeVisibilityDistanceBias = useRuntimeVisibilityPath ?
+					_lightProbeContext.probeGrid.visibilityBias?.value ?? 0 :
+					0;
 				samplePosition.copy( receiverPosition ).add( new THREE.Vector3(
 					receiverNormal.x * probeSpacing.x * activeNormalBias + viewDirection.x * probeSpacing.x * activeViewBias,
 					receiverNormal.y * probeSpacing.y * activeNormalBias + viewDirection.y * probeSpacing.y * activeViewBias,
@@ -660,6 +674,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					receiverNormal.y * probeSpacing.y * activeNormalBias * visibilityBiasScale + viewDirection.y * probeSpacing.y * activeViewBias * visibilityBiasScale,
 					receiverNormal.z * probeSpacing.z * activeNormalBias * visibilityBiasScale + viewDirection.z * probeSpacing.z * activeViewBias * visibilityBiasScale
 				) );
+				const runtimeVisibilityReceiverPosition = useRuntimeVisibilityPath ?
+					receiverPosition :
+					visibilityReceiverPosition;
 				const probeCoord = new THREE.Vector3(
 					( samplePosition.x - _lightProbeContext.gridMin.x ) / ( _lightProbeContext.gridMax.x - _lightProbeContext.gridMin.x ),
 					( samplePosition.y - _lightProbeContext.gridMin.y ) / ( _lightProbeContext.gridMax.y - _lightProbeContext.gridMin.y ),
@@ -698,35 +715,45 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					const probeIndex = x + y * resolution + z * resolution * resolution;
 					_lightProbeContext.getGridProbePosition( probeIndex, resolution, probePosition );
 					probeDirection.subVectors( probePosition, receiverPosition ).normalize();
-					receiverVector.subVectors( visibilityReceiverPosition, probePosition );
+					receiverVector.subVectors( runtimeVisibilityReceiverPosition, probePosition );
 
 					const receiverDistance = receiverVector.length();
 					const receiverDirection = receiverVector.clone().normalize();
 					const moment = await readVisibilityMoment( receiverDirection, probeIndex );
-					const delta = Math.max( receiverDistance - moment.meanDistance, 0 );
+					const delta = Math.max( receiverDistance - moment.meanDistance - runtimeVisibilityDistanceBias, 0 );
 					const chebyshevVisibility = moment.variance / ( moment.variance + delta * delta );
-					const crushedVisibility = Math.max( ( chebyshevVisibility - crushThreshold ) / ( 1 - crushThreshold ), 0 );
-					const momentVisibility = Math.pow( crushedVisibility, weightExponent );
+					const momentVisibility = chebyshevVisibility;
 					const visibility = resolveHitConfidenceVisibility( moment.hitConfidence, momentVisibility, hitConfidencePolicy );
 					const normalWeight = ( ( receiverNormal.dot( probeDirection ) + 1 ) * 0.5 ) * 0.5 + 0.5;
-					const validityWeight = Math.max( probeValidity[ probeIndex ], probeValidityFloor );
+					const rawProbeValidity = probeValidity[ probeIndex ] ?? 1;
+					const validityWeight = Math.max( rawProbeValidity, probeValidityFloor );
+					const confidenceWeight = useRuntimeProbeMeta ? Math.max( 0, Math.min( rawProbeValidity, 1 ) ) : 1;
+					const layerCompatibility = 1;
 					const dilationOnlyWeight = neighbor.trilinearWeight * normalWeight;
-					const scalarWeight = dilationOnlyWeight * validityWeight;
-					const visibilityWeight = scalarWeight * visibility;
+					const scalarWeight = dilationOnlyWeight * validityWeight * confidenceWeight * layerCompatibility;
+					const kernelOffsetX = ( receiverPosition.x - probePosition.x ) / probeSpacing.x;
+					const kernelOffsetY = ( receiverPosition.y - probePosition.y ) / probeSpacing.y;
+					const kernelOffsetZ = ( receiverPosition.z - probePosition.z ) / probeSpacing.z;
+					const compatibleKernel = Math.pow(
+						2,
+						- ( kernelOffsetX * kernelOffsetX + kernelOffsetY * kernelOffsetY + kernelOffsetZ * kernelOffsetZ )
+					);
+					const baseWeight = scalarWeight * compatibleKernel;
+					const visibilityWeight = baseWeight * visibility;
 					const side = probePosition.x < dividerX ? 'left' : 'right';
 					const relationToReceiver = side === correctSide ? 'correct-side' : 'wrong-side';
-					const crossesDivider = ( probePosition.x - dividerX ) * ( visibilityReceiverPosition.x - dividerX ) <= 0;
-					const visibilitySegmentDividerAudit = auditDividerSegment( probePosition, visibilityReceiverPosition );
+					const crossesDivider = ( probePosition.x - dividerX ) * ( runtimeVisibilityReceiverPosition.x - dividerX ) <= 0;
+					const visibilitySegmentDividerAudit = auditDividerSegment( probePosition, runtimeVisibilityReceiverPosition );
 					const surfaceSegmentDividerAudit = auditDividerSegment( probePosition, receiverPosition );
-					const suppression = visibilityWeight / Math.max( scalarWeight, 0.0001 );
-					const escaped = relationToReceiver === 'wrong-side' && scalarWeight > 0.0001 && suppression > 0.9;
+					const suppression = visibilityWeight / Math.max( baseWeight, 0.0001 );
+					const escaped = relationToReceiver === 'wrong-side' && baseWeight > 0.0001 && suppression > 0.9;
 					let escapeReason = 'not-escaped';
 
 					if ( relationToReceiver === 'correct-side' ) {
 
 						escapeReason = 'correct-side';
 
-					} else if ( scalarWeight <= 0.0001 ) {
+					} else if ( baseWeight <= 0.0001 ) {
 
 						escapeReason = 'zero-scalar-weight';
 
@@ -742,7 +769,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 						escapeReason = 'front-edge-bypass';
 
-					} else if ( moment.hitConfidence <= hitConfidencePolicy.threshold ) {
+					} else if ( hitConfidencePolicy.mode === 'threshold' && moment.hitConfidence <= hitConfidencePolicy.threshold ) {
 
 						escapeReason = 'below-hit-threshold';
 
@@ -780,17 +807,22 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 						trilinearWeight: roundMetric( neighbor.trilinearWeight ),
 						normalWeight: roundMetric( normalWeight ),
 						validityWeight: roundMetric( validityWeight ),
+						confidenceWeight: roundMetric( confidenceWeight ),
+						layerCompatibility: roundMetric( layerCompatibility ),
+						compatibleKernel: roundMetric( compatibleKernel ),
 						dilationOnlyWeight: roundMetric( dilationOnlyWeight ),
 						receiverDistance: roundMetric( receiverDistance ),
 						meanDistance: roundMetric( moment.meanDistance ),
 						delta: roundMetric( delta ),
 						variance: roundMetric( moment.variance ),
 						hitConfidence: roundMetric( moment.hitConfidence ),
+						backfaceConfidence: roundMetric( moment.backfaceConfidence ),
+						momentEncoding: moment.momentEncoding,
 						chebyshevVisibility: roundMetric( chebyshevVisibility ),
-						crushedVisibility: roundMetric( crushedVisibility ),
 						momentVisibility: roundMetric( momentVisibility ),
 						visibility: roundMetric( visibility ),
 						scalarWeight: roundMetric( scalarWeight ),
+						baseWeight: roundMetric( baseWeight ),
 						visibilityWeight: roundMetric( visibilityWeight ),
 						suppression: roundMetric( suppression ),
 						escaped,
@@ -799,7 +831,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				}
 
-				const wrongSideRows = rows.filter( row => row.relationToReceiver === 'wrong-side' && row.scalarWeight > 0.0001 );
+				const wrongSideRows = rows.filter( row => row.relationToReceiver === 'wrong-side' && row.baseWeight > 0.0001 );
 				const escapedRows = wrongSideRows.filter( row => row.escaped === true );
 				const escapeReasons = escapedRows.reduce( ( reasons, row ) => {
 
@@ -813,8 +845,19 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					.reduce( ( total, row ) => total + row[ key ], 0 );
 				const scalarCorrect = sum( 'correct-side', 'scalarWeight' );
 				const scalarWrong = sum( 'wrong-side', 'scalarWeight' );
+				const baseCorrect = sum( 'correct-side', 'baseWeight' );
+				const baseWrong = sum( 'wrong-side', 'baseWeight' );
 				const visibilityCorrect = sum( 'correct-side', 'visibilityWeight' );
 				const visibilityWrong = sum( 'wrong-side', 'visibilityWeight' );
+				const baseSum = rows.reduce( ( total, row ) => total + row.baseWeight, 0 );
+				const visibleSum = rows.reduce( ( total, row ) => total + row.visibilityWeight, 0 );
+				const varianceValues = rows.map( row => row.variance ).filter( Number.isFinite );
+				const hitConfidenceValues = rows.map( row => row.hitConfidence ).filter( Number.isFinite );
+				const meanValue = ( values ) => values.length > 0 ?
+					values.reduce( ( total, value ) => total + value, 0 ) / values.length :
+					null;
+				const baseContributionSum = baseCorrect + baseWrong;
+				const visibleContributionSum = visibilityCorrect + visibilityWrong;
 
 				return {
 					label,
@@ -822,8 +865,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					sampleKind: surfaceSample?.sampleKind ?? 'center',
 					sampleLabel: surfaceSample?.sampleLabel ?? 'center',
 					sampleUv: surfaceSample?.uv ?? { u: 0.5, v: 0.5 },
+					sampleScreenPixel: surfaceSample?.screenPixel ?? null,
 					quadratureWeight: roundMetric( surfaceSample?.quadratureWeight ?? 1 ),
-					receiverLocalPosition: surfaceSample?.localPosition !== undefined ? roundVector( surfaceSample.localPosition ) : { x: 0, y: 0, z: 0 },
+					receiverLocalPosition: roundVector( receiverLocalPosition ),
 					receiverPosition: {
 						x: roundMetric( receiverPosition.x ),
 						y: roundMetric( receiverPosition.y ),
@@ -841,19 +885,53 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 						y: roundMetric( samplePosition.y ),
 						z: roundMetric( samplePosition.z )
 					},
+					probeCoord: {
+						x: roundMetric( probeCoord.x ),
+						y: roundMetric( probeCoord.y ),
+						z: roundMetric( probeCoord.z )
+					},
+					baseProbeCoord: {
+						x: roundMetric( base.x ),
+						y: roundMetric( base.y ),
+						z: roundMetric( base.z )
+					},
+					trilinearBlend: {
+						x: roundMetric( blend.x ),
+						y: roundMetric( blend.y ),
+						z: roundMetric( blend.z )
+					},
+					selectedProbeIndices: rows.map( row => row.probeIndex ),
 					visibilityBiasScale,
 					hitConfidencePolicy: hitConfidencePolicy.label,
+					runtimeVisibilityPath: useRuntimeVisibilityPath ? 'gpu-runtime-positionworld-distance-bias' : 'legacy-cpu-biased-visibility-position',
+					probeMetaPath: useRuntimeProbeMeta ? 'gpu-runtime-probe-meta' : 'legacy-cpu-validity-only-meta',
+					visibilityDistanceBias: roundMetric( runtimeVisibilityDistanceBias ),
 					visibilityReceiverPosition: {
-						x: roundMetric( visibilityReceiverPosition.x ),
-						y: roundMetric( visibilityReceiverPosition.y ),
-						z: roundMetric( visibilityReceiverPosition.z )
+						x: roundMetric( runtimeVisibilityReceiverPosition.x ),
+						y: roundMetric( runtimeVisibilityReceiverPosition.y ),
+						z: roundMetric( runtimeVisibilityReceiverPosition.z )
 					},
 					rows,
 					totals: {
 						scalarCorrect: roundMetric( scalarCorrect ),
 						scalarWrong: roundMetric( scalarWrong ),
+						baseCorrect: roundMetric( baseCorrect ),
+						baseWrong: roundMetric( baseWrong ),
 						visibilityCorrect: roundMetric( visibilityCorrect ),
 						visibilityWrong: roundMetric( visibilityWrong ),
+						baseSum: roundMetric( baseSum ),
+						visibleSum: roundMetric( visibleSum ),
+						visibilityMass: roundMetric( visibleSum / Math.max( baseSum, 0.0001 ) ),
+						baseWrongContributionRatio: roundMetric( baseWrong / Math.max( baseContributionSum, 0.0001 ) ),
+						visibleWrongContributionRatio: roundMetric( visibilityWrong / Math.max( visibleContributionSum, 0.0001 ) ),
+						baseCorrectContributionRatio: roundMetric( baseCorrect / Math.max( baseContributionSum, 0.0001 ) ),
+						visibleCorrectContributionRatio: roundMetric( visibilityCorrect / Math.max( visibleContributionSum, 0.0001 ) ),
+						varianceMin: varianceValues.length > 0 ? roundMetric( Math.min( ...varianceValues ) ) : null,
+						varianceMax: varianceValues.length > 0 ? roundMetric( Math.max( ...varianceValues ) ) : null,
+						varianceMean: varianceValues.length > 0 ? roundMetric( meanValue( varianceValues ) ) : null,
+						hitConfidenceMin: hitConfidenceValues.length > 0 ? roundMetric( Math.min( ...hitConfidenceValues ) ) : null,
+						hitConfidenceMax: hitConfidenceValues.length > 0 ? roundMetric( Math.max( ...hitConfidenceValues ) ) : null,
+						hitConfidenceMean: hitConfidenceValues.length > 0 ? roundMetric( meanValue( hitConfidenceValues ) ) : null,
 						correctSuppression: roundMetric( visibilityCorrect / Math.max( scalarCorrect, 0.0001 ) ),
 						wrongSuppression: roundMetric( visibilityWrong / Math.max( scalarWrong, 0.0001 ) )
 					},
@@ -895,12 +973,29 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				const averageComparable = ( key ) => comparableReceivers.reduce(
 					( total, receiver ) => total + receiver.totals[ key ], 0
 				) / Math.max( comparableReceivers.length, 1 );
+				const receiverRows = [ leftReceiver, rightReceiver ];
+				const averageReceiver = ( key ) => receiverRows.reduce(
+					( total, receiver ) => total + ( receiver.totals[ key ] ?? 0 ), 0
+				) / Math.max( receiverRows.length, 1 );
+				const minReceiver = ( key ) => Math.min( ...receiverRows.map( receiver => receiver.totals[ key ] ?? 0 ) );
+				const maxReceiver = ( key ) => Math.max( ...receiverRows.map( receiver => receiver.totals[ key ] ?? 0 ) );
 				const correctSuppressionMean = averageComparable( 'correctSuppression' );
 				const wrongSuppressionMean = averageComparable( 'wrongSuppression' );
 				const wrongMinusCorrectSuppression = wrongSuppressionMean - correctSuppressionMean;
+				const visibilityWrongContributionDelta = averageReceiver( 'visibleWrongContributionRatio' ) - averageReceiver( 'baseWrongContributionRatio' );
 
 				return {
 					comparableReceiverCount: comparableReceivers.length,
+					baseSumMean: roundMetric( averageReceiver( 'baseSum' ) ),
+					visibleSumMean: roundMetric( averageReceiver( 'visibleSum' ) ),
+					visibilityMassMean: roundMetric( averageReceiver( 'visibilityMass' ) ),
+					visibilityMassMin: roundMetric( minReceiver( 'visibilityMass' ) ),
+					visibilityMassMax: roundMetric( maxReceiver( 'visibilityMass' ) ),
+					baseWrongContributionRatioMean: roundMetric( averageReceiver( 'baseWrongContributionRatio' ) ),
+					visibleWrongContributionRatioMean: roundMetric( averageReceiver( 'visibleWrongContributionRatio' ) ),
+					wrongContributionRatioDelta: roundMetric( visibilityWrongContributionDelta ),
+					varianceMean: roundMetric( averageReceiver( 'varianceMean' ) ),
+					hitConfidenceMean: roundMetric( averageReceiver( 'hitConfidenceMean' ) ),
 					correctSuppressionMean: roundMetric( correctSuppressionMean ),
 					wrongSuppressionMean: roundMetric( wrongSuppressionMean ),
 					wrongMinusCorrectSuppression: roundMetric( wrongMinusCorrectSuppression ),

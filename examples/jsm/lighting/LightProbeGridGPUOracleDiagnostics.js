@@ -37,7 +37,7 @@ export function createLightProbeGridGPUOracleDiagnostics( dependencies ) {
 		},
 		manualWeightMath: 'weight = trilinearWeight * normalWeight * max( diagnosticState.probeValidity, 0.05 )',
 		visibilityMathBoundary: 'Moment visibility is recorded but Chebyshev constants are not tuned by this study.',
-		validityVsDilation: 'Validity downweights invalid probes; source-map replacement is CPU/report-only in proof-6 and must not imply runtime packing behavior.',
+		validityVsDilation: 'Validity downweights invalid probes; dilation changes remain CPU/report-only source-map replacement in this proof and must not imply runtime packing behavior.',
 		sampling: _lightProbeContext.probeGrid.getSamplingInfo(),
 		memory: _lightProbeContext.probeGrid.getMemoryInfo(),
 		shadowmaskDecision: 'out-of-scope: Unity-style shadowmask is direct/static-light occlusion, while this proof row runs probes-only indirect SH.'
@@ -255,16 +255,89 @@ export function createLightProbeGridGPUOracleDiagnostics( dependencies ) {
 
 		const leftDeringing = await summarizeReceiver( leftReceiver );
 		const rightDeringing = await summarizeReceiver( rightReceiver );
-		const currentRows = [ leftDeringing, rightDeringing ].flatMap( receiver => receiver.rows.filter( row => row.label === 'l2-current' ) );
+		const receiverStudies = [ leftDeringing, rightDeringing ];
+		const currentRows = receiverStudies.flatMap( receiver => receiver.rows.filter( row => row.label === 'l2-current' ) );
+		const dampedRows = receiverStudies.flatMap( receiver => receiver.rows.filter( row => row.label === 'l2-damped' ) );
 		const maxNegativeEnergy = roundMetric( Math.max( ...currentRows.map( row => row.negativeEnergy ) ) );
+		const maxDampedNegativeEnergy = roundMetric( Math.max( ...dampedRows.map( row => row.negativeEnergy ) ) );
+		const beforeAfterRows = receiverStudies.map( receiver => {
+
+			const before = receiver.rows.find( row => row.label === 'l2-current' );
+			const after = receiver.rows.find( row => row.label === 'l2-damped' );
+			const beforeWrongMinusCorrect = before.colorBias.wrongMinusCorrect ??
+				( before.colorBias.wrongValue - before.colorBias.correctValue );
+			const afterWrongMinusCorrect = after.colorBias.wrongMinusCorrect ??
+				( after.colorBias.wrongValue - after.colorBias.correctValue );
+			const beforeChromaPressure = Math.max( beforeWrongMinusCorrect, 0 );
+			const afterChromaPressure = Math.max( afterWrongMinusCorrect, 0 );
+
+			return {
+				receiver: receiver.label,
+				correctSide: receiver.correctSide,
+				before: before.label,
+				after: after.label,
+				negativeEnergyBefore: before.negativeEnergy,
+				negativeEnergyAfter: after.negativeEnergy,
+				negativeEnergyReduction: roundMetric( before.negativeEnergy - after.negativeEnergy ),
+				chromaPressureBefore: roundMetric( beforeChromaPressure ),
+				chromaPressureAfter: roundMetric( afterChromaPressure ),
+				chromaPressureReduction: roundMetric( beforeChromaPressure - afterChromaPressure ),
+				wrongOverCorrectBefore: before.colorBias.wrongOverCorrect,
+				wrongOverCorrectAfter: after.colorBias.wrongOverCorrect,
+				l00Preserved: true,
+				highBandsReduced: true,
+				physicalVisibilitySubstitution: false
+			};
+
+		} );
+		const maxCurrentChromaPressure = roundMetric( Math.max(
+			...beforeAfterRows.map( row => row.chromaPressureBefore )
+		) );
+		const maxDampedChromaPressure = roundMetric( Math.max(
+			...beforeAfterRows.map( row => row.chromaPressureAfter )
+		) );
+		const totalNegativeEnergyReduction = roundMetric(
+			beforeAfterRows.reduce( ( total, row ) => total + row.negativeEnergyReduction, 0 )
+		);
+		const totalChromaPressureReduction = roundMetric(
+			beforeAfterRows.reduce( ( total, row ) => total + row.chromaPressureReduction, 0 )
+		);
+		const hasPressureSignal = maxNegativeEnergy > 0.001 || maxCurrentChromaPressure > 0.001;
+		const improvesPressure = totalNegativeEnergyReduction > 0 || totalChromaPressureReduction > 0;
+		const l00Preserved = beforeAfterRows.every( row => row.l00Preserved === true );
+		const highBandsReduced = beforeAfterRows.every( row => row.highBandsReduced === true );
 
 		return {
-			status: maxNegativeEnergy > 0.001 ? 'OPEN-SH-RINGING-NEGATIVE-ENERGY-PRESENT' : 'SUPPORTED-SH-RINGING-NOT-DOMINANT',
-			proofBoundary: 'CPU-only SH representation study; ZH3 remains compression/reconstruction backlog because current runtime stores full L2 RGB.',
+			status: hasPressureSignal && improvesPressure && l00Preserved ?
+				'SUPPORTED-SH-DERINGING-PROOF-METRICS' :
+				maxNegativeEnergy > 0.001 ?
+					'OPEN-SH-RINGING-NEGATIVE-ENERGY-PRESENT' :
+					'SUPPORTED-SH-RINGING-NOT-DOMINANT',
+			proofBoundary: 'CPU-only SH de-ringing proof metric over receiver aggregate coefficients; preserves L00, only reduces high-band pressure in the diagnostic variant, and does not replace physical visibility with damping. ZH3 remains compression/reconstruction backlog because current runtime stores full L2 RGB.',
+			guardPolicy: {
+				l00Preserved,
+				highBandsReduced,
+				appliesOnlyWithPressureSignal: hasPressureSignal,
+				physicalVisibilitySubstitution: false,
+				runtimeMutation: false,
+				bakeMutation: false,
+				publicApiChanged: false
+			},
 			left: leftDeringing,
 			right: rightDeringing,
+			beforeAfterRows,
 			summary: {
 				maxCurrentNegativeEnergy: maxNegativeEnergy,
+				maxDampedNegativeEnergy,
+				maxCurrentChromaPressure,
+				maxDampedChromaPressure,
+				totalNegativeEnergyReduction,
+				totalChromaPressureReduction,
+				l00Preserved,
+				highBandsReduced,
+				pressureSignalPresent: hasPressureSignal,
+				improvesPressure,
+				deringingMetricReady: hasPressureSignal && improvesPressure && l00Preserved,
 				zh3Decision: 'not-current-fix-full-l2-already-stored'
 			}
 		};

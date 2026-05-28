@@ -33,7 +33,14 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 			Number.isFinite( sample.cpuLinearIrradianceTerms.final.b ) &&
 			Number.isFinite( sample.quadratureWeight ) &&
 			Number.isFinite( sample.sampleUv.u ) &&
-			Number.isFinite( sample.receiverPosition.x ) ) &&
+			Number.isFinite( sample.receiverPosition.x ) &&
+			Number.isFinite( sample.receiverNormal.z ) &&
+			Number.isFinite( sample.probeCoord.x ) &&
+			Number.isFinite( sample.baseProbeCoord.y ) &&
+			Number.isFinite( sample.trilinearBlend.z ) &&
+			Array.isArray( sample.selectedProbeIndices ) &&
+			sample.selectedProbeIndices.length === 8 &&
+			Number.isFinite( sample.visibilityMass ) ) &&
 		sealedReceiverSurfaceQuadratureDiagnostic.right.samples.every( sample =>
 			Number.isFinite( sample.visibilityWrongOverCorrect ) &&
 			sample.cpuLinearIrradianceTerms?.unit === 'linear-rgb-probe-irradiance' &&
@@ -42,7 +49,14 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 			Number.isFinite( sample.cpuLinearIrradianceTerms.final.b ) &&
 			Number.isFinite( sample.quadratureWeight ) &&
 			Number.isFinite( sample.sampleUv.v ) &&
-			Number.isFinite( sample.samplePosition.z ) ),
+			Number.isFinite( sample.samplePosition.z ) &&
+			Number.isFinite( sample.receiverNormal.x ) &&
+			Number.isFinite( sample.probeCoord.y ) &&
+			Number.isFinite( sample.baseProbeCoord.z ) &&
+			Number.isFinite( sample.trilinearBlend.x ) &&
+			Array.isArray( sample.selectedProbeIndices ) &&
+			sample.selectedProbeIndices.length === 8 &&
+			Number.isFinite( sample.baseWeightSum ) ),
 	'sealed visibility weighting diagnostic: expected finite CPU surface quadrature samples.' );
 
 	const sealedReceiverGpuDebugDiagnostic = sealedVisibilityWeightingDiagnostic.receiverGpuDebugDiagnostic;
@@ -53,7 +67,7 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 			sealedReceiverGpuDebugDiagnostic.proofBoundary.includes( 'Proof-6 unavailable GPU debug diagnostic' ) &&
 			Array.isArray( sealedReceiverGpuDebugDiagnostic.variants ) &&
 			sealedReceiverGpuDebugDiagnostic.variants.length === 0 &&
-			sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy?.summary?.offscreenSceneLinearContributionGate?.status === 'OPEN',
+			sealedReceiverGpuDebugDiagnostic.presentationStudy?.summary?.offscreenSceneLinearContributionGate?.status === 'OPEN',
 		'sealed visibility weighting diagnostic: unavailable runtime debug path must be explicit and proof-only.' );
 		results.push( { step: 'sealed receiver gpu debug unavailable', sealedReceiverGpuDebugDiagnostic } );
 		results.push( { step: 'sealed visibility weighting diagnostic', sealedVisibilityWeightingDiagnostic } );
@@ -79,6 +93,11 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 		sealedReceiverGpuDebugVariantLabels.includes( 'receiverWhiteCalibration' ) &&
 		sealedReceiverGpuDebugVariantLabels.includes( 'normalWorldReceiver' ) &&
 		sealedReceiverGpuDebugVariantLabels.includes( 'positionWorldGridReceiver' ) &&
+		sealedReceiverGpuDebugVariantLabels.includes( 'receiverPixelSamplePositionGrid' ) &&
+		sealedReceiverGpuDebugVariantLabels.includes( 'receiverPixelBaseProbeCoordGrid' ) &&
+		sealedReceiverGpuDebugVariantLabels.includes( 'receiverPixelTrilinearBlend' ) &&
+		sealedReceiverGpuDebugVariantLabels.includes( 'receiverPixelNeighbor0BaseWeight' ) &&
+		sealedReceiverGpuDebugVariantLabels.includes( 'receiverPixelNeighbor7VisibilityWeight' ) &&
 		sealedReceiverGpuDebugVariantLabels.includes( 'probeIrradianceScalar-scale-1' ) &&
 		sealedReceiverGpuDebugVariantLabels.includes( 'probeIrradianceVisibility-scale-1' ) &&
 		sealedReceiverGpuDebugVariantLabels.includes( 'probeScalarIrradianceTerm-scale-1' ) &&
@@ -89,13 +108,14 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 		sealedReceiverGpuDebugVariantLabels.includes( 'probeWeightVisibilityMix-scale-1' ) &&
 		sealedReceiverGpuDebugVariantLabels.includes( 'probeWeightVisibilityOverScalar-scale-1' ),
 	'sealed visibility weighting diagnostic: expected proof-only GPU receiver debug render diagnostic.' );
-	const offscreenContributionRows = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy?.summary.offscreenSceneLinearContributionRows ?? [];
+	const offscreenContributionRows = sealedReceiverGpuDebugDiagnostic.presentationStudy?.summary.offscreenSceneLinearContributionRows ?? [];
 	const offscreenContributionLabels = offscreenContributionRows.map( row => row.label );
-	const offscreenNeutralContributionRows = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy?.summary.offscreenSceneLinearNeutralContributionRows ?? [];
+	const offscreenNeutralContributionRows = sealedReceiverGpuDebugDiagnostic.presentationStudy?.summary.offscreenSceneLinearNeutralContributionRows ?? [];
 	const offscreenNeutralContributionLabels = offscreenNeutralContributionRows.map( row => row.label );
 	const offscreenRowsHaveFiniteDecomposition = rows => rows.every( row =>
 		row.mode === 'offscreen-half-float-linear-target' &&
 		typeof row.receiverAlbedoMode === 'string' &&
+		typeof row.receiverMaterialMode === 'string' &&
 		Number.isFinite( row.lighting?.directIntensity ) &&
 		Number.isFinite( row.lighting?.ambientIntensity ) &&
 		Number.isFinite( row.lighting?.probeIntensity ) &&
@@ -110,90 +130,180 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 				Number.isFinite( row.rgbChannelWrongOverCorrect.rightWrongRedOverCorrectGreen ) &&
 				Number.isFinite( row.leftReceiverMasked.chromaticity.r ) &&
 				Number.isFinite( row.rightReceiverMasked.chromaticity.g ) &&
+				row.maskOcclusionPolicy === 'depth-preserved-full-scene-mask' &&
+				Number.isFinite( row.legacyReceiverOnlyMaskDiagnostic?.wrongSideRatioDelta ) &&
 				row.leftReceiverMasked.samples > 0 &&
 				row.rightReceiverMasked.samples > 0
 			)
 		) );
 
-	assert( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy !== undefined &&
-		[ 'SUPPORTED-FINAL-VISIBLE-PATH-BOUNDED', 'OPEN-FINAL-VISIBLE-BSDF-PRESSURE', 'OPEN-FINAL-VISIBLE-COLOR-MAPPING-PRESSURE' ].includes( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.status ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.proofBoundary.includes( 'final visible receiver audit' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.length === 7 &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'standard-material-current-renderer' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'standard-material-aces-exposure-0.5' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'standard-material-aces-exposure-2.0' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'standard-material-no-tone-mapping' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'standard-material-linear-output-no-tone-mapping' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'meshbasic-final-irradiance-linear-debug' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.some( variant => variant.label === 'meshbasic-final-lambert-debug' ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants.every( variant =>
+	assert( sealedReceiverGpuDebugDiagnostic.presentationStudy !== undefined &&
+		[ 'SUPPORTED', 'OPEN-BSDF', 'OPEN-COLOR-MAPPING' ].includes( sealedReceiverGpuDebugDiagnostic.presentationStudy.status ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.proofBoundary.includes( 'presentation receiver audit' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.length === 7 &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'standard-material-current-renderer' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'standard-material-aces-exposure-0.5' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'standard-material-aces-exposure-2.0' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'standard-material-no-tone-mapping' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'standard-material-linear-output-no-tone-mapping' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'meshbasic-final-irradiance-linear-debug' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.some( variant => variant.label === 'meshbasic-final-lambert-debug' ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.variants.every( variant =>
 			Number.isFinite( variant.leakMetrics.maskedWrongSideColorRatio ) &&
 			Number.isFinite( variant.leakMetrics.maskedCorrectBounceRatio ) &&
 			variant.leakMetrics.maskedReceiverRegionMetricMode === 'receiver-id-mask-visible-pixels' &&
 			variant.pointMetrics.mode === 'projected-receiver-surface-3x3-point-samples' ) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.standardVsDebugMaskedDelta ) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.toneMappingMaskedDelta ) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.outputColorSpaceMaskedDelta ) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.exposureMaskedDelta ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.exposureSweep.length === 3 &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.exposureSweep.every( row =>
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.standardVsDebugMaskedDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.toneMappingMaskedDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.outputColorSpaceMaskedDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.exposureMaskedDelta ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.exposureSweep.length === 3 &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.exposureSweep.every( row =>
 			Number.isFinite( row.exposure ) &&
 			Number.isFinite( row.maskedWrongSideColorRatio ) &&
 			Number.isFinite( row.deltaFromCurrentMaskedWrongSide ) ) &&
-		typeof sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.status === 'string' &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.mode === 'offscreen-half-float-linear-target' &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.status === 'string' &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.mode === 'offscreen-half-float-linear-target' &&
 		(
-			sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.status !== 'SUPPORTED' ||
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.status !== 'SUPPORTED' ||
 			(
-				Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.maskedWrongSideColorRatio ) &&
-				Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.maskedCorrectBounceRatio ) &&
-				sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.leftReceiverMasked.samples > 0 &&
-				sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.rightReceiverMasked.samples > 0
+				Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.maskedWrongSideColorRatio ) &&
+				Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.maskedCorrectBounceRatio ) &&
+				sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.leftReceiverMasked.samples > 0 &&
+				sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget.rightReceiverMasked.samples > 0
 			)
 		) &&
 		Array.isArray( offscreenContributionRows ) &&
-		offscreenContributionRows.length === 4 &&
+		offscreenContributionRows.length === 7 &&
+		offscreenContributionLabels.includes( 'runtime-probe-indirect-scene-linear' ) &&
+		offscreenContributionLabels.includes( 'probe-indirect-after-albedo' ) &&
+		offscreenContributionLabels.includes( 'probe-indirect-lambert-bsdf' ) &&
 		offscreenContributionLabels.includes( 'probes-only' ) &&
 		offscreenContributionLabels.includes( 'direct-only' ) &&
 		offscreenContributionLabels.includes( 'ambient-only' ) &&
 		offscreenContributionLabels.includes( 'direct-plus-probes' ) &&
 		offscreenRowsHaveFiniteDecomposition( offscreenContributionRows ) &&
 		Array.isArray( offscreenNeutralContributionRows ) &&
-		offscreenNeutralContributionRows.length === 4 &&
+		offscreenNeutralContributionRows.length === 7 &&
+		offscreenNeutralContributionLabels.includes( 'neutral-runtime-probe-indirect-scene-linear' ) &&
+		offscreenNeutralContributionLabels.includes( 'neutral-probe-indirect-after-albedo' ) &&
+		offscreenNeutralContributionLabels.includes( 'neutral-probe-indirect-lambert-bsdf' ) &&
 		offscreenNeutralContributionLabels.includes( 'neutral-probes-only' ) &&
 		offscreenNeutralContributionLabels.includes( 'neutral-direct-only' ) &&
 		offscreenNeutralContributionLabels.includes( 'neutral-ambient-only' ) &&
 		offscreenNeutralContributionLabels.includes( 'neutral-direct-plus-probes' ) &&
 		offscreenRowsHaveFiniteDecomposition( offscreenNeutralContributionRows ) &&
-		typeof sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.status === 'string' &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.mode === 'offscreen-half-float-linear-target-contribution-isolation-original-receiver-albedo' &&
-		Array.isArray( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.warnings ) &&
-		typeof sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionSummary.status === 'string' &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionSummary.mode === 'offscreen-half-float-linear-target-contribution-isolation-neutral-receiver-albedo' &&
-		Array.isArray( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionSummary.warnings ) &&
-		[ 'SUPPORTED', 'OPEN' ].includes( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.status ) &&
-		sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.mode === 'proof-only-offscreen-scene-linear-contribution-gate' &&
-		Array.isArray( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.warnings ) &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.status === 'string' &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.mode === 'offscreen-half-float-linear-target-contribution-isolation-original-receiver-albedo' &&
+		Array.isArray( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.warnings ) &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary.status === 'string' &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary.mode === 'offscreen-half-float-linear-target-contribution-isolation-neutral-receiver-albedo' &&
+		Array.isArray( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary.warnings ) &&
+		[ 'SUPPORTED', 'OPEN' ].includes( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.status ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.mode === 'proof-only-offscreen-scene-linear-contribution-gate' &&
+		Array.isArray( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.warnings ) &&
 		(
-			sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta === null ||
-			Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta )
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta )
 		) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.thresholds.neutralProbesOnlyWrongSideMax ) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.thresholds.neutralProbesOnlyCorrectBounceMin ) &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.thresholds.neutralChromaticityWrongSidePressureMax ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.thresholds.neutralProbesOnlyWrongSideMax ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.thresholds.neutralProbesOnlyCorrectBounceMin ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate.thresholds.neutralChromaticityWrongSidePressureMax ) &&
 		(
-			sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.directAmbientMaskedDelta === null ||
-			Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.directAmbientMaskedDelta )
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.directAmbientMaskedDelta === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.directAmbientMaskedDelta )
 		) &&
 		(
-			sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta === null ||
-			Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta )
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.probesDirectPlusMaskedDelta )
 		) &&
-		typeof sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary.diagnosticConclusion === 'string' &&
-		Number.isFinite( sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.lambertVsStandardLinearMaskedDelta ) &&
-		typeof sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.bsdfIntegrationSupported === 'boolean' &&
-		typeof sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.diagnosticConclusion === 'string',
-	'sealed visibility weighting diagnostic: expected final visible material/tone-mapping/color-space audit.' );
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary.diagnosticConclusion === 'string' &&
+		[ 'OPEN-DEBUG-TARGET', 'OPEN-CPU-GPU', 'OPEN-BSDF', 'OPEN-COLOR-MAPPING', 'SUPPORTED' ].includes( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.sceneLinearMismatchClassifier.status ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.sceneLinearMismatchClassifier.mode === 'receiver-mask-debug-runtime-albedo-lambert-bsdf-tone-map-classifier' &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.sceneLinearMismatchClassifier.dominantMismatchSource === 'string' &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.sceneLinearMismatchClassifier.diagnosticConclusion === 'string' &&
+		(
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.runtimeProbeCpuDeltaMean === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.runtimeProbeCpuDeltaMean )
+		) &&
+		(
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.runtimeProbeCpuDeltaMax === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.runtimeProbeCpuDeltaMax )
+		) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy !== undefined &&
+		[ 'SUPPORTED-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-PARITY', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-MISMATCH', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-READBACK-FAILED' ].includes( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.status ) &&
+		sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.mode === 'gpu-read-visible-receiver-pixel-position-cpu-mirror' &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.dominantMismatchSource === 'string' &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.exactPixelAgreementSupported === 'boolean' &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.sampleCount ) &&
+		(
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.sampleCount === 0 ||
+			(
+				sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.leftSampleCount > 0 &&
+				sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.rightSampleCount > 0 &&
+				Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.cpuGpuWrongSideRatioDeltaMean ) &&
+				Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.cpuGpuWrongSideRatioDeltaMax ) &&
+				Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy.summary.finalIrradianceDeltaMax )
+			)
+		) &&
+		(
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorDeltaMean === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorDeltaMean )
+		) &&
+		(
+			sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorDeltaMax === null ||
+			Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorDeltaMax )
+		) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.lambertVsStandardLinearMaskedDelta ) &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.bsdfIntegrationSupported === 'boolean' &&
+		typeof sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.diagnosticConclusion === 'string',
+	'sealed visibility weighting diagnostic: expected presentation material/tone-mapping/color-space audit.' );
+
+	const visiblePixelCpuMirrorStudy = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy;
+
+	assert( visiblePixelCpuMirrorStudy !== undefined &&
+		Array.isArray( visiblePixelCpuMirrorStudy.samples ) &&
+		visiblePixelCpuMirrorStudy.samples.length === visiblePixelCpuMirrorStudy.summary.sampleCount &&
+		visiblePixelCpuMirrorStudy.samples.every( sample =>
+			sample.sampleKind === 'gpu-visible-receiver-pixel' &&
+			Number.isFinite( sample.screen.pixelX ) &&
+			Number.isFinite( sample.cpu.positionWorld.x ) &&
+			Number.isFinite( sample.gpu.positionWorldGrid.x ) &&
+			Number.isFinite( sample.cpu.samplePositionGrid.z ) &&
+			Number.isFinite( sample.gpu.samplePositionGrid.z ) &&
+			Number.isFinite( sample.deltas.samplePositionGrid.max ) &&
+			Number.isFinite( sample.deltas.visibilityMass ) &&
+			sample.neighborRows.length === 8 &&
+			sample.irradianceTerms.length === 3 &&
+			sample.irradianceTerms.some( term =>
+				term.label === 'finalIrradiance' &&
+				Number.isFinite( term.delta.max ) ) ),
+	'sealed visibility weighting diagnostic: expected GPU-read visible pixel CPU mirror diagnostics.' );
+
+	assert( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy !== undefined &&
+		[ 'SUPPORTED-RECEIVER-PIXEL-CPU-GPU-PARITY', 'OPEN-RECEIVER-PIXEL-CPU-GPU-MISMATCH' ].includes( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.status ) &&
+		sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.mode === 'projected-receiver-surface-same-pixel-cpu-gpu-debug-parity' &&
+		typeof sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.dominantMismatchSource === 'string' &&
+		typeof sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.pointParitySupported === 'boolean' &&
+		typeof sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.receiverMaskMismatch === 'boolean' &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxSamplePositionGridDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxNormalEncodedDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxProbeCoordGridDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxTrilinearBlendDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxScalarWeightDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxVisibilityWeightDelta ) &&
+		Number.isFinite( sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.summary.maxLinearIrradianceDelta ) &&
+		sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.samples.length === 18 &&
+		sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy.samples.every( sample =>
+			typeof sample.receiver === 'string' &&
+			typeof sample.sampleLabel === 'string' &&
+			Number.isFinite( sample.cpu.positionWorld.x ) &&
+			Number.isFinite( sample.cpu.samplePositionGrid.z ) &&
+			Number.isFinite( sample.gpu.samplePositionGrid.x ) &&
+			Number.isFinite( sample.deltas.samplePositionGrid.max ) &&
+			sample.neighborRows.length === 8 &&
+			sample.irradianceTerms.length === 3 ),
+	'sealed visibility weighting diagnostic: expected same-pixel CPU/GPU receiver parity diagnostics.' );
 
 	assert( sealedReceiverGpuDebugDiagnostic.variants.every( variant =>
 		typeof variant.label === 'string' &&
@@ -343,10 +453,21 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 				Number.isFinite( sample.cpuLinearIrradiance.r ) ) ) &&
 		typeof sealedVisibilityWeightingDiagnostic.samplingBiasStudy.summary.metricArtifactWarning === 'string',
 	'sealed visibility weighting diagnostic: expected sampling-bias study with selected probes and linear CPU irradiance.' );
-	assert( [ 'OPEN-SH-RINGING-NEGATIVE-ENERGY-PRESENT', 'SUPPORTED-SH-RINGING-NOT-DOMINANT' ].includes( sealedVisibilityWeightingDiagnostic.shDeringingStudy?.status ) &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.proofBoundary.includes( 'ZH3 remains compression' ) &&
+	assert( [ 'SUPPORTED-SH-DERINGING-PROOF-METRICS', 'OPEN-SH-RINGING-NEGATIVE-ENERGY-PRESENT', 'SUPPORTED-SH-RINGING-NOT-DOMINANT' ].includes( sealedVisibilityWeightingDiagnostic.shDeringingStudy?.status ) &&
+		sealedVisibilityWeightingDiagnostic.shDeringingStudy.proofBoundary.includes( 'preserves L00' ) &&
+		sealedVisibilityWeightingDiagnostic.shDeringingStudy.guardPolicy.l00Preserved === true &&
+		sealedVisibilityWeightingDiagnostic.shDeringingStudy.guardPolicy.physicalVisibilitySubstitution === false &&
+		sealedVisibilityWeightingDiagnostic.shDeringingStudy.guardPolicy.publicApiChanged === false &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.maxCurrentNegativeEnergy ) &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.left.rows.some( row => row.label === 'l0-only' ) &&
+		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.maxDampedNegativeEnergy ) &&
+		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.totalNegativeEnergyReduction ) &&
+		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.totalChromaPressureReduction ) &&
+		sealedVisibilityWeightingDiagnostic.shDeringingStudy.beforeAfterRows.every( row =>
+			row.l00Preserved === true &&
+			row.physicalVisibilitySubstitution === false &&
+			Number.isFinite( row.negativeEnergyBefore ) &&
+			Number.isFinite( row.negativeEnergyAfter ) ) &&
+	sealedVisibilityWeightingDiagnostic.shDeringingStudy.left.rows.some( row => row.label === 'l0-only' ) &&
 		sealedVisibilityWeightingDiagnostic.shDeringingStudy.left.rows.every( row =>
 			Number.isFinite( row.negativeEnergy ) &&
 			Number.isFinite( row.clampEnergyLoss ) &&

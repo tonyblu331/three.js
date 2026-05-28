@@ -2,6 +2,7 @@ import { Image } from './image.js';
 import { createLightProbeImageArtifactPressure, captureLightProbeImageRegions } from './lightprobegrid-gpu-image-metrics.js';
 import { createLightProbeProofMarkdown } from './lightprobegrid-gpu-proof-markdown.js';
 import { createLightProbeProofReport } from './lightprobegrid-gpu-proof-report.js';
+import { deriveVisibilityProofStatus, isMomentBackedVisibility } from './lightprobegrid-gpu-proof-visibility.js';
 import {
 	assertLightProbeProof,
 	validateLightProbeParitySnapshot,
@@ -48,17 +49,6 @@ const isFiniteCountHistogram = ( histogram, expectedSum ) =>
 	( expectedSum === 0 || Object.keys( histogram ).length > 0 ) &&
 	Object.values( histogram ).every( value => Number.isInteger( value ) && value >= 0 ) &&
 	histogramSum( histogram ) === expectedSum;
-
-const isMomentBackedVisibility = info => info !== null &&
-	info !== undefined &&
-	info.available === true &&
-	info.mode === 'moments' &&
-	info.texture !== null &&
-	info.bytes > 0 &&
-	info.stats !== null &&
-	info.stats !== undefined &&
-	info.stats.finiteSampleCount > 0 &&
-	info.stats.hitSampleCount > 0;
 
 const hasUniqueExactIds = ( rows, ids ) =>
 	Array.isArray( rows ) &&
@@ -247,11 +237,11 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED' :
 		surfaceContentSplitRows.length === 0 ?
 			'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED' :
-		surfaceContentMappedRows.length > 0 && surfaceContentUnmappedRows.length > 0 ?
-			'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' :
-			surfaceContentMappedRows.length > 0 ?
-				'OPEN-SURFACE-CONTENT-ATTRIBUTION-MAPPED' :
-				'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNMAPPED';
+			surfaceContentMappedRows.length > 0 && surfaceContentUnmappedRows.length > 0 ?
+				'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' :
+				surfaceContentMappedRows.length > 0 ?
+					'OPEN-SURFACE-CONTENT-ATTRIBUTION-MAPPED' :
+					'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNMAPPED';
 	const expectedSurfaceContentMappedCoverage = surfaceContentSplitSummary.leakSampleCount > 0 ?
 		roundMetric( surfaceContentMappedRows.length / surfaceContentSplitSummary.leakSampleCount ) :
 		1;
@@ -340,7 +330,6 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		( proof7bCoefficientL10OracleStudy?.summary?.residualWrongChannelPressure ?? 0 )
 	);
 	const expectedAggregateReduction = roundMetric( l10WrongChannelPressure - expectedAggregateWrongAfter );
-	const proof7cDispositionStudy = report.currentEvidence?.proof7cDispositionStudy;
 	const expectedProof7cDispositionStatus = proof7cStudy?.summary?.selected === false ?
 		'NOT-SELECTED-PROOF-7C-DISPOSITION' :
 		proof7cStudy?.status === 'SUPPORTED-PROOF-7C-CPU-STATIC-BLOCKER-AGGREGATE-WIN' ?
@@ -356,7 +345,7 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 				surfaceContentMappedRows.length > 0 && surfaceContentUnmappedRows.length > 0 ?
 					'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' :
 					surfaceContentMappedRows.length > 0 ?
-					'OPEN-SURFACE-CONTENT-MAPPED-BUCKET-FOLLOWUP' :
+						'OPEN-SURFACE-CONTENT-MAPPED-BUCKET-FOLLOWUP' :
 						'OPEN-SURFACE-CONTENT-UNMAPPED-BUCKET-FOLLOWUP';
 	assertLightProbeProof( file, Array.isArray( report.artifactMatrix.rows ) &&
 		Array.isArray( report.regionMatrix.rows ) &&
@@ -605,21 +594,36 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.wgpuLeakAuditStudy.verdict.cpuRenderAgreementGate ),
 		'grounding parity artifact: proof report must persist the WebGPU leak audit study with all required leak variants and per-neighbor rows.' );
 	const momentBackedVisibility = isMomentBackedVisibility( report.currentEvidence.visibilityMomentInspection );
+	const derivedVisibilityStatus = deriveVisibilityProofStatus(
+		report.currentEvidence.visibilityMomentInspection,
+		report.currentEvidence.visibilityMomentInspection.evidenceStatus
+	);
 	assertLightProbeProof( file,
 		report.currentEvidence.ddgiVisibilityDepthSpec !== undefined &&
 		report.currentEvidence.ddgiVisibilityDepthSpec.momentBacked === momentBackedVisibility &&
-		(
-			( momentBackedVisibility === true &&
-				report.currentEvidence.ddgiVisibilityDepthSpec.status === 'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS' ) ||
-			( momentBackedVisibility === false &&
-				report.currentEvidence.ddgiVisibilityDepthSpec.status === 'OPEN-VISIBILITY-MOMENTS-SCAFFOLD-DISABLED' )
-		),
+		report.currentEvidence.ddgiVisibilityDepthSpec.status === derivedVisibilityStatus.ddgiStatus &&
+		report.currentEvidence.visibilityLabel === derivedVisibilityStatus.visibilityLabel &&
+		report.currentEvidence.visibilityStatus === derivedVisibilityStatus.visibilityStatus,
 		'grounding parity artifact: proof report must not claim implemented DDGI-lite moments unless visibility readback is moment-backed.' );
+	assertLightProbeProof( file,
+		report.buildExecuted === false &&
+		typeof report.buildNotExecutedReason === 'string' &&
+		Array.isArray( report.testsExecuted ) &&
+		report.testsExecuted.includes( 'visibility moment inspection' ) &&
+		report.currentEvidence.finalColorDebugTargets?.directOnly === true &&
+		report.currentEvidence.finalColorDebugTargets?.indirectOnlySceneLinear === true &&
+		report.currentEvidence.finalColorDebugTargets?.indirectAfterAlbedo === true &&
+		report.currentEvidence.finalColorDebugTargets?.finalBeforeToneMapping === true &&
+		report.currentEvidence.finalColorDebugTargets?.finalAfterToneMapping === true &&
+		report.currentEvidence.finalColorDebugTargets?.receiverMaskOverlay === true &&
+		report.currentEvidence.projectionPath?.oldPathDescription === '9 coefficient pixels x cubemap sweep' &&
+		typeof report.currentEvidence.shGuard?.enabled === 'boolean',
+		'grounding parity artifact: proof report must persist no-build policy, executed proof steps, presentation debug targets, projection path, and SH guard metadata.' );
 	assertLightProbeProof( file,
 		report.currentEvidence.metricTaxonomyStudy?.status === 'DEFINED-PROMOTION-METRIC-SPLIT' &&
 		report.currentEvidence.metricTaxonomyStudy.metrics.length >= 6 &&
 		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'cpuGpuLinearIrradiance' && metric.promotionEligible === true ) &&
-		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'offscreenSceneLinearFinalVisible' && metric.promotionEligible === true ) &&
+		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'offscreenSceneLinearTarget' && metric.promotionEligible === true ) &&
 		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'preToneMaskedVisiblePixels' && metric.promotionEligible === 'provisional' ) &&
 		report.currentEvidence.metricTaxonomyStudy.metrics.some( metric => metric.key === 'presentationMaskedCanvasRatio' && metric.promotionEligible === false ) &&
 		typeof report.currentEvidence.metricTaxonomyStudy.gates.sceneLinearTargetGate === 'string' &&
@@ -628,14 +632,26 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		report.currentEvidence.metricTaxonomyStudy.gates.chebyshevTuning === 'UNCHANGED',
 		'grounding parity artifact: proof report must classify promotion-eligible, provisional, and presentation-only metric spaces before threshold tuning.' );
 	assertLightProbeProof( file,
-		report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement !== undefined &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.status ) &&
-		report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.mode === 'probe-indirect-only-scene-linear-vs-cpu-surface-sh' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.originalProbeOnlyAvailable === 'boolean' &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.neutralProbeOnlyAvailable === 'boolean' &&
-		report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.tolerance === report.currentEvidence.sealedRenderMetricMismatch.cpuRenderAgreementTolerance &&
-		typeof report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.diagnosticConclusion === 'string',
-		'grounding parity artifact: proof report must isolate probe-only scene-linear render agreement before using final visible color as proof.' );
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement !== undefined &&
+		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.status ) &&
+		[ 'probe-indirect-only-scene-linear-vs-cpu-surface-sh', 'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.mode ) &&
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.comparisonSourceLabel === 'runtime-probe-indirect-scene-linear' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.originalProbeOnlyAvailable === 'boolean' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.neutralProbeOnlyAvailable === 'boolean' &&
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.tolerance === report.currentEvidence.sealedRenderMetricMismatch.cpuRenderAgreementTolerance &&
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier !== undefined &&
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier.mode === 'receiver-mask-debug-runtime-albedo-lambert-bsdf-tone-map-classifier' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.sceneLinearMismatchClassifier.dominantMismatchSource === 'string' &&
+		report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStudy !== undefined &&
+		[ 'SUPPORTED-RECEIVER-PIXEL-CPU-GPU-PARITY', 'OPEN-RECEIVER-PIXEL-CPU-GPU-MISMATCH' ].includes( report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStudy.status ) &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityDominantMismatchSource === 'string' &&
+		report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStudy !== undefined &&
+		[ 'SUPPORTED-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-PARITY', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-MISMATCH', 'OPEN-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-READBACK-FAILED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStudy.status ) &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorDominantMismatchSource === 'string' &&
+		Array.isArray( report.currentEvidence.leakComparisons.sealedWall.promotionBlockers ) &&
+		report.currentEvidence.leakComparisons.sealedWall.promotionRequirements.probeIndirectGate === 'SUPPORTED' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.diagnosticConclusion === 'string',
+		'grounding parity artifact: proof report must isolate probe-only scene-linear render agreement before using presentation color as proof.' );
 	assertLightProbeProof( file,
 		report.currentEvidence.webglLeakReferenceStudy?.status === 'OPEN-NOT-COMPARABLE' &&
 		report.currentEvidence.webglLeakReferenceStudy.reference.label === lightProbeWebGLReferenceLabel &&
@@ -1361,8 +1377,8 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 				proof7bCoefficientL10OracleStudy.summary.residualWrongChannelPressure <= 0.001 &&
 				proof7bCoefficientL10OracleStudy.summary.residualCorrectChannelPreservation >
 					proof7bCoefficientL10OracleStudy.summary.residualWrongChannelPressure ?
-					'SUPPORTED-PROBE50-LOCAL-CORRECTION-AGGREGATE-RESIDUAL-GUARD' :
-					'OPEN-PROBE50-LOCAL-CORRECTION-AGGREGATE-RESIDUAL-GUARD' ) &&
+				'SUPPORTED-PROBE50-LOCAL-CORRECTION-AGGREGATE-RESIDUAL-GUARD' :
+				'OPEN-PROBE50-LOCAL-CORRECTION-AGGREGATE-RESIDUAL-GUARD' ) &&
 		probe50LocalCorrectionAggregateResidualGuardStudy.proofBoundary.includes( 'CPU/report-only aggregate residual guard' ) &&
 		probe50LocalCorrectionAggregateResidualGuardStudy.noRuntimePromotion === true &&
 		probe50LocalCorrectionAggregateResidualGuardStudy.summary.runtimePromotionAllowed === false &&
@@ -1415,8 +1431,8 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		probe50L10ZDesignBoundConstraintsStudy.status ===
 			( probe50L10ZDesignBoundConstraintRows.length > 0 &&
 				probe50L10ZDesignBoundConstraintRows.every( row => row.satisfied === true ) ?
-					'SUPPORTED-PROOF-ONLY-PROBE50-L10Z-DESIGN-BOUND-CONSTRAINTS' :
-					'OPEN-PROOF-ONLY-PROBE50-L10Z-DESIGN-BOUND-CONSTRAINTS' ) &&
+				'SUPPORTED-PROOF-ONLY-PROBE50-L10Z-DESIGN-BOUND-CONSTRAINTS' :
+				'OPEN-PROOF-ONLY-PROBE50-L10Z-DESIGN-BOUND-CONSTRAINTS' ) &&
 		probe50L10ZDesignBoundConstraintsStudy.proofBoundary.includes( 'CPU/report-only design-bound constraints review' ) &&
 		probe50L10ZDesignBoundConstraintsStudy.noRuntimePromotion === true &&
 		probe50L10ZDesignBoundConstraintsStudy.summary.runtimePromotionAllowed === false &&
@@ -1779,6 +1795,14 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementMode === 'string' &&
 		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermAgreementGate ) &&
 		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWeightTermAgreementMode === 'string' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityStatus === 'string' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityDominantMismatchSource === 'string' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorStatus === 'string' &&
+		typeof report.currentEvidence.sealedRenderMetricMismatch.visiblePixelCpuMirrorDominantMismatchSource === 'string' &&
+		(
+			report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityLegacyMaskWrongSideDelta === null ||
+			Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.receiverPixelParityLegacyMaskWrongSideDelta )
+		) &&
 		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugAgreementMode === 'string' &&
 		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugComparableVariantCount ) &&
 		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.gpuDebugLinearIrradianceTermVariantCount ) &&
@@ -1787,9 +1811,10 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 		typeof report.currentEvidence.sealedRenderMetricMismatch.gpuDebugWhiteCalibrationVisible === 'boolean' &&
 		Number.isFinite( report.currentEvidence.sealedRenderMetricMismatch.invertedNormalCenterDelta ) &&
 		typeof report.currentEvidence.sealedRenderMetricMismatch.normalConventionCleared === 'boolean' &&
-		report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement !== undefined &&
-		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.status ) &&
-		report.currentEvidence.sealedRenderMetricMismatch.finalVisibleProbeOnlySceneLinearCpuAgreement.mode === 'probe-indirect-only-scene-linear-vs-cpu-surface-sh',
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement !== undefined &&
+		[ 'OPEN', 'SUPPORTED' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.status ) &&
+		[ 'probe-indirect-only-scene-linear-vs-cpu-surface-sh', 'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' ].includes( report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.mode ) &&
+		report.currentEvidence.sealedRenderMetricMismatch.presentation.probeIndirectCpuAgreement.comparisonSourceLabel === 'runtime-probe-indirect-scene-linear',
 		'grounding parity artifact: proof report must persist sealed-wall normal convention, SH contribution, receiver-surface quadrature, GPU debug, and render-metric mismatch diagnostics.' );
 	const reportPath = path.join( lightProbeParityArtifactDir, 'proof-report.json' );
 	const tablePath = path.join( lightProbeParityArtifactDir, 'proof-table.md' );

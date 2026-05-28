@@ -1,3 +1,5 @@
+import { deriveVisibilityProofStatus, isMomentBackedVisibility } from './lightprobegrid-gpu-proof-visibility.js';
+
 export function createLightProbeResearchReportSections( context ) {
 
 	const {
@@ -125,9 +127,9 @@ export function createLightProbeResearchReportSections( context ) {
 		'CAPTURED-RUNTIME-PARITY-EVIDENCE' :
 		computeProjectionOpenEvidence.length === 1 && computeProjectionOpenEvidence[ 0 ] === 'compute-runtime-readback-parity' ?
 			'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' :
-		computeProjectionCapturedEvidence.length > 0 ?
-			'PARTIALLY-CAPTURED' :
-			'SPECIFIED-NOT-CAPTURED';
+			computeProjectionCapturedEvidence.length > 0 ?
+				'PARTIALLY-CAPTURED' :
+				'SPECIFIED-NOT-CAPTURED';
 	const computeProjectionContractStatus = projectionParity?.computeProjectionParityContract?.status ??
 		'PLANNED-NOT-IMPLEMENTED';
 	const computeProjectionPreviousContractStatus = projectionParity?.computeProjectionParityContract?.previousStatus ??
@@ -281,19 +283,19 @@ export function createLightProbeResearchReportSections( context ) {
 			status: computeProjectionRuntimeParityCaptured ?
 				'RUNTIME-PARITY-EVIDENCE-CAPTURED' :
 				computeProjectionContractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' ?
-				'GUARDED-RUNTIME-IMPLEMENTED-PARITY-PENDING' :
-				computeProjectionEvidencePlanStatus === 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ?
-					'GUARDED-PROOF-CAPTURED-RUNTIME-BLOCKED' :
-					'GUARDED-PROOF-INCOMPLETE-RUNTIME-BLOCKED',
+					'GUARDED-RUNTIME-IMPLEMENTED-PARITY-PENDING' :
+					computeProjectionEvidencePlanStatus === 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ?
+						'GUARDED-PROOF-CAPTURED-RUNTIME-BLOCKED' :
+						'GUARDED-PROOF-INCOMPLETE-RUNTIME-BLOCKED',
 			currentContractStatus: computeProjectionEffectiveContractStatus,
 			evidencePlanStatus: computeProjectionEvidencePlanStatus,
 			allowedNextContractStatus: computeProjectionRuntimeParityCaptured ?
 				computeProjectionRuntimeStatusRequired :
 				[ 'PARITY-CANDIDATE-NOT-RUNTIME', 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' ].includes( computeProjectionContractStatus ) ?
-				computeProjectionRuntimeStatusRequired :
-				computeProjectionEvidencePlanStatus === 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ?
-					'PARITY-CANDIDATE-NOT-RUNTIME' :
-					'PLANNED-NOT-IMPLEMENTED',
+					computeProjectionRuntimeStatusRequired :
+					computeProjectionEvidencePlanStatus === 'CAPTURED-PROOF-ONLY-RUNTIME-READBACK-PENDING' ?
+						'PARITY-CANDIDATE-NOT-RUNTIME' :
+						'PLANNED-NOT-IMPLEMENTED',
 			runtimeStatusRequired: computeProjectionRuntimeStatusRequired,
 			runtimeMarkersAllowed: computeProjectionContractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
 			publicApiChangeAllowed: false,
@@ -440,17 +442,8 @@ export function createLightProbeResearchReportSections( context ) {
 		timingSources,
 		timingSourceCounts
 	};
-	const isMomentBackedVisibility = ( info ) => info !== null &&
-		info !== undefined &&
-		info.available === true &&
-		info.mode === 'moments' &&
-		info.texture !== null &&
-		info.bytes > 0 &&
-		info.stats !== null &&
-		info.stats !== undefined &&
-		info.stats.finiteSampleCount > 0 &&
-		info.stats.hitSampleCount > 0;
 	const momentBackedVisibility = isMomentBackedVisibility( visibilityMomentInspection );
+	const visibilityProofStatus = deriveVisibilityProofStatus( visibilityMomentInspection, visibilityMomentInspection.evidenceStatus );
 	const mathAndPipelineDecision = {
 		rootCauseHypothesis: 'The muddy density-reference artifact is dominated by low-order / 9-coefficient SH representation pressure: a 6^3 / 32px bake captures sharper high-contrast lighting, then the low-order SH representation stores it as only 9 coefficients. Full L1 directionality can create negative/dark lobes after evaluation and non-negative clamp.',
 		action: 'Use a same-budget band1-damped quality candidate: preserve L0 mean irradiance, keep L2 at 0.55, reduce L1 directional overshoot to 0.6, and keep global probeIntensity unchanged.',
@@ -608,7 +601,7 @@ export function createLightProbeResearchReportSections( context ) {
 			},
 			{
 				axis: 'Leak controls',
-				ours: 'Normal/view bias, scalar probeValidity, and normal-weighted manual blend; explicitly not real visibility.',
+				ours: 'Normal/view bias, scalar probeValidity, private radial distance moments, and proof-only guarded visibilityMass; explicitly not public DDGI.',
 				sixteenStudio: 'No normalBias/viewBias/leakReductionMode/probeValidity evidence found in inspected file.',
 				webglBaseline: 'No visibility/depth leak control contract.',
 				standing: 'Ours is ahead on leak scaffolding but still not DDGI.',
@@ -616,11 +609,11 @@ export function createLightProbeResearchReportSections( context ) {
 			},
 			{
 				axis: 'Visibility/depth moments',
-				ours: 'Runtime-1 scaffold exists: private metadata, memory accounting, and visibilityDepthMode=not-baked; no receiver-distance moment bake yet.',
+				ours: 'Private visibilityDepthTarget exists and is moment-backed: RenderTarget3D octa slices store radial-distance mean, squared radial distance, hit confidence, and reserved/backface confidence.',
 				sixteenStudio: 'Missing in inspected implementation.',
 				webglBaseline: 'Missing.',
-				standing: 'Ours is slightly ahead only because it labels the gap and reports the missing layer; everyone is below production DDGI/APV.',
-				action: 'Treat this as the primary gap before making wall-leak claims; do not score the scaffold as solved visibility.'
+				standing: 'Ours has the strongest private proof slice in this comparison, but everyone is still below production DDGI/APV.',
+				action: 'Treat moment existence as necessary but not sufficient; promotion still depends on sealed-wall improvement, bounce preservation, and CPU/render agreement.'
 			},
 			{
 				axis: 'Docs parity',
@@ -649,8 +642,8 @@ export function createLightProbeResearchReportSections( context ) {
 		],
 		bugsAndGaps: [
 			'Docs gap: a full public LightProbeGridGPU page is still deferred until the API boundary is stable; the existing LightProbeGrid page only labels the WebGPU addon as proof-scoped.',
-			'Implementation gap: current probeValidity is scalar classification metadata, not receiver-distance visibility.',
-			'Verifier gap: zero-thickness wall rows must stay OPEN until moment-backed visibility participates in runtime weighting.',
+			'Implementation gap: current probeValidity is scalar classification metadata; the private log-moment layer is separate proof-only visibility data.',
+			'Verifier gap: zero-thickness wall rows must stay OPEN until moment-backed guarded rows improve leak without killing bounce.',
 			'Integration gap: ours is self-contained via createIrradianceNode(); Sixteen branch shows a separate LightProbeGridNode path that may be worth evaluating later.',
 			'Research gap: SixteenStudio evidence should be cited as WebGPU SH packaging/Sponza precedent only, not DDGI prior art.'
 		],
@@ -671,15 +664,15 @@ export function createLightProbeResearchReportSections( context ) {
 			scale: '0-10, where 10 means upstream-ready for the named axis; this is an engineering review score, not a popularity score.',
 			evidenceLabels: [
 				'OURS-PROOF: local Cornell verifier, proof report, source gates, and regenerated screenshots/metrics.',
-				'OURS-RUNTIME1: local private visibility/depth scaffold reports not-baked and refuses to call scalar validity visibility.',
+				'OURS-RUNTIME1: local private visibility/depth target reports mode=moments with finite log-moment readback and refuses to call scalar validity visibility.',
 				'SIXTEEN-REF: refs/remotes/sixteenstudio/feat/webgpu-lightprobes-sponza at e8d975a347e0d1e4756c8d51fdbe1887b1f0b210.',
 				'WEBGL-BASELINE: established LightProbeGrid docs/source and captured WebGL reference screenshot row.',
-				'OPEN-DDGI-GAP: no inspected implementation has moment-backed receiver visibility, relocation, dilation, or adaptive APV bricks.'
+				'OPEN-DDGI-GAP: no inspected implementation has production relocation, dilation, adaptive APV bricks, transfer-scene proof, or public DDGI parity.'
 			],
 			rows: [
 				{
 					axis: 'Runtime implementation maturity',
-					ours: { score: 6.5, label: 'OURS-RUNTIME1', rationale: 'GPU-resident atlas, explicit memory/sampling reporting, leak scaffold, and bake coalescing; still missing real visibility/depth bake.' },
+					ours: { score: 6.8, label: 'OURS-RUNTIME1', rationale: 'GPU-resident atlas, explicit memory/sampling reporting, private log-moment target, guarded visibilityMass, and bake coalescing; still proof-scoped.' },
 					sixteenStudio: { score: 5.5, label: 'SIXTEEN-REF', rationale: 'Solid WebGPU SH-atlas draft with Sponza pressure, but fewer guardrails and no inspected leak/visibility scaffold.' },
 					webglBaseline: { score: 8.0, label: 'WEBGL-BASELINE', rationale: 'More established baseline API, but not the WebGPU target and not DDGI.' }
 				},
@@ -697,7 +690,7 @@ export function createLightProbeResearchReportSections( context ) {
 				},
 				{
 					axis: 'Leak / visibility honesty',
-					ours: { score: 6.0, label: 'OPEN-DDGI-GAP', rationale: 'Normal/view bias, validity rows, and visibility scaffold are honest about not being DDGI; real moments still absent.' },
+					ours: { score: 6.5, label: 'OPEN-DDGI-GAP', rationale: 'Normal/view bias, scalar validity, private radial moments, and visibilityMass are honest about being a guarded proof slice, not public DDGI.' },
 					sixteenStudio: { score: 3.5, label: 'OPEN-DDGI-GAP', rationale: 'No inspected evidence of validity, depth moments, or leak-specific verifier rows.' },
 					webglBaseline: { score: 3.0, label: 'OPEN-DDGI-GAP', rationale: 'Baseline SH grid is useful diffuse GI, not a leak-solving visibility system.' }
 				},
@@ -709,7 +702,7 @@ export function createLightProbeResearchReportSections( context ) {
 				},
 				{
 					axis: 'DDGI/APV readiness',
-					ours: { score: 4.0, label: 'OPEN-DDGI-GAP', rationale: 'Best roadmap and scaffold in this comparison, but no moments, relocation, dilation, adaptive bricks, or production visibility.' },
+					ours: { score: 4.5, label: 'OPEN-DDGI-GAP', rationale: 'Best roadmap and private moment proof in this comparison, but no relocation, dilation, adaptive bricks, transfer-scene proof, or production visibility.' },
 					sixteenStudio: { score: 2.0, label: 'OPEN-DDGI-GAP', rationale: 'No inspected DDGI/APV features beyond SH probe-grid rendering.' },
 					webglBaseline: { score: 2.0, label: 'OPEN-DDGI-GAP', rationale: 'Useful baseline but not architected as DDGI/APV.' }
 				}
@@ -719,7 +712,7 @@ export function createLightProbeResearchReportSections( context ) {
 				sixteenStudio: { score: 5.0, label: 'best visual/demo candidate', verdict: 'Stronger Sponza demo and integration shape; weaker proof discipline and no verified visibility/depth layer.' },
 				webglBaseline: { score: 6.4, label: 'stable baseline, wrong renderer target', verdict: 'Most mature baseline API, but it is not the WebGPU implementation and not DDGI.' }
 			},
-			candidVerdict: 'If the question is “which WebGPU branch should drive the next engineering pass?”, ours wins on proof and leak-roadmap discipline, SixteenStudio wins on demo/integration feel, and neither wins on DDGI/APV correctness until real visibility/depth moments exist.'
+			candidVerdict: 'If the question is “which WebGPU branch should drive the next engineering pass?”, ours wins on proof and private moment-backed leak-roadmap discipline, SixteenStudio wins on demo/integration feel, and neither wins on production DDGI/APV correctness.'
 		},
 		linePlacementRules: [
 			'Proof-only comparisons belong in test/e2e/lightprobegrid-gpu-proof-report.js because they are verifier evidence, not runtime behavior.',
@@ -732,7 +725,7 @@ export function createLightProbeResearchReportSections( context ) {
 	};
 
 	const visibilityDepthRoadmap = {
-		status: 'RUNTIME-1-SCAFFOLD-STARTED',
+		status: momentBackedVisibility ? 'RUNTIME-1-MOMENTS-PRIVATE-PROOF' : 'RUNTIME-1-SCAFFOLD-STARTED',
 		problem: 'The current leak-reduction path has normal/view bias and optional scalar probe validity, but a scalar validity channel cannot answer whether a receiver is occluded from a probe through a thin wall or zero-thickness separator.',
 		designThesis: 'Add a private DDGI-lite visibility/depth layer beside the SH irradiance atlas. Keep the fast unweighted path on hardware texture.sample(); only opt-in visibility rows take the manual eight-neighbor load path.',
 		privateDataContract: [
@@ -740,7 +733,7 @@ export function createLightProbeResearchReportSections( context ) {
 			'Store at least first and second distance moments per probe direction bucket or octahedral texel so runtime can perform Chebyshev/variance-style visibility weighting.',
 			'Keep scalar probe validity as classification metadata only; do not rename it to visibility because it has no receiver-distance test.',
 			'Report visibility texture bytes, bake pass count, and update dependency order from getMemoryInfo() / proof artifacts before enabling new claims.',
-			'Runtime-1 starts with private metadata and memory/sampling reporting only; visibilityDepthMode remains not-baked until a receiver-distance moment pass exists.'
+			'Runtime-1 now stores private radial distance moments when the verifier bake runs; if the target is missing, visibilityDepthMode must stay not-baked/open rather than claim visibility.'
 		],
 		bakePlan: [
 			'During cubemap bake, produce distance/depth moments from the same probe viewpoints used for SH projection.',
@@ -749,12 +742,12 @@ export function createLightProbeResearchReportSections( context ) {
 		],
 		runtimePlan: [
 			'Default/unweighted mode remains a single hardware-filtered SH atlas sample.',
-			'Visibility mode loads the eight neighboring probes manually, applies normal and view bias, evaluates probe-to-receiver distance against stored moments, applies variance visibility and weight crushing, then normalizes before SH evaluation.',
-			'If the sum of visibility weights collapses, fall back to bounded irradiance rather than amplifying one unreliable probe.'
+			'Guarded proof mode loads the eight neighboring probes manually, computes base = tri * validity * normalWeight * compatibleKernel, evaluates receiver radial distance against stored moments, and blends Chebyshev visibility continuously by hit confidence.',
+			'The guarded shader normalizes SH by visible weights, then multiplies final irradiance by visibilityMass = visibleSum / baseSum so visibility attenuates energy instead of amplifying one surviving probe.'
 		],
 		verifierAdditions: [
 			'Keep current finite thin-wall rows as front-edge regression/stress gates and add sealed-wall counterparts that can carry promotion evidence only if moments reduce wrong-side color without erasing correct bounce.',
-			'Keep zero-thickness rows marked OPEN until moment data actually participates in the runtime weighting.',
+			'Keep zero-thickness rows marked OPEN unless moment-backed guarded rows improve leak without erasing correct bounce.',
 			'Add virtual-offset/dilation rows only after the moment layer exists; otherwise the verifier would be testing heuristic occupancy, not visibility.',
 			'Add source checks that reject public API/preset expansion and reject replacing the unweighted hardware-sampling path.'
 		],
@@ -783,11 +776,11 @@ export function createLightProbeResearchReportSections( context ) {
 	};
 
 	const ddgiVisibilityDepthSpec = {
-		status: momentBackedVisibility ?
-			'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS' :
-			'OPEN-VISIBILITY-MOMENTS-SCAFFOLD-DISABLED',
+		status: visibilityProofStatus.ddgiStatus,
 		scope: 'Private runtime path only; no public API option, no public docs claim, no production DDGI/APV parity claim.',
 		momentBacked: momentBackedVisibility,
+		visibilityLabel: visibilityProofStatus.visibilityLabel,
+		visibilityStatus: visibilityProofStatus.visibilityStatus,
 		currentEvidence: {
 			available: visibilityMomentInspection.available,
 			mode: visibilityMomentInspection.mode,
@@ -802,23 +795,23 @@ export function createLightProbeResearchReportSections( context ) {
 			resolution: '8x8 per probe',
 			format: 'RGBA half-float',
 			channels: {
-				r: 'mean receiver distance from probe',
-				g: 'mean squared receiver distance from probe',
+				r: 'mean radial receiver distance from probe',
+				g: 'mean squared radial receiver distance plus minimum variance',
 				b: 'hit/confidence flag',
-				a: 'validity/reserved'
+				a: 'backface/reserved confidence'
 			}
 		},
 		bake: [
 			'Existing irradiance cubemap -> SH projection -> packed atlas flow stays intact.',
 			'Each probe then renders a private distance cubemap with overrideMaterial.',
-			'Distance cubemap is repacked into the probe visibility layer using octahedral direction mapping.',
+			'Distance cubemap is repacked into the probe visibility layer using octahedral direction mapping and a five-tap octa/cubemap neighborhood average.',
 			'Bake timings report visibilityCubemapMs, visibilityRepackMs, and visibilityDepthMode.'
 		],
 		runtime: [
 			'leakReductionMode=off remains hardware-filtered SH atlas sampling and never samples visibilityDepthTexture.',
-			'Manual weighted sampling accumulates scalar-validity samples and moment-visibility samples separately.',
-			'Moment visibility uses receiver distance, stored distance moments, hit/confidence, minimum variance, Chebyshev-style visibility, and weight crushing.',
-			'If moment weights collapse, shader blends back to the scalar normal/validity path instead of amplifying a single probe.'
+			'Manual guarded sampling accumulates scalar base weights and moment-visible weights separately.',
+			'Moment visibility uses receiver radial distance, stored radial distance moments, hit confidence, minimum variance, and Chebyshev-style visibility.',
+			'The shader normalizes SH by visible weights and then applies visibilityMass = visibleSum / baseSum to avoid one-probe amplification.'
 		],
 		nonGoals: [
 			'No relocation.',
@@ -922,14 +915,14 @@ export function createLightProbeResearchReportSections( context ) {
 			{
 				id: 'slice-b-moment-readback',
 				status: 'THIS-PATCH',
-				files: [ 'examples/jsm/lighting/LightProbeGridGPUTestHarness.js', 'test/e2e/lightprobegrid-gpu-smoke.js' ],
+				files: [ 'examples/jsm/lighting/LightProbeGridGPU.js', 'examples/jsm/lighting/LightProbeGridGPUTestHarness.js', 'test/e2e/lightprobegrid-gpu-smoke.js' ],
 				purpose: 'Read the private visibilityDepthTarget so proof can distinguish missing data from weak weighting.'
 			},
 			{
 				id: 'slice-c-runtime-weighting',
-				status: 'NEXT',
+				status: 'THIS-PATCH',
 				files: [ 'examples/jsm/lighting/LightProbeGridGPU.js' ],
-				purpose: 'Tune weighting only after readback proves baked moments are sane; otherwise fix bake/repack first.'
+				purpose: 'Private guarded path compares scalar base weights against moment-visible weights and applies visibilityMass without changing the public fast path.'
 			},
 			{
 				id: 'slice-d-transfer-scenes',
@@ -958,7 +951,7 @@ export function createLightProbeResearchReportSections( context ) {
 		],
 		proofLedgerDecision: 'Continue private verifier-gated DDGI-lite. Do not promote public API/docs. Next pressure goes to moment readback diagnostics first, then weighting math, then transfer scene validation.',
 		nextPressure: visibilityWeightingDiagnostic.status === 'OPEN-CORRECT-SIDE-SUPPRESSED' ?
-			`Current comparable-receiver CPU mirror shows wrong-side probes are not suppressed more than correct-side probes; ${ visibilityWeightingDiagnostic.escapeClassification.wrongSideEscapedCount }/${ visibilityWeightingDiagnostic.escapeClassification.wrongSideProbeCount } wrong-side probes escape (${ Object.keys( visibilityWeightingDiagnostic.escapeClassification.escapeReasons ).join( ', ' ) || 'no-escape-reason' }); bias sweep best scale is ${ visibilityWeightingDiagnostic.bestBiasScale.visibilityBiasScale }, hit-confidence policy sweep best is ${ visibilityWeightingDiagnostic.bestHitConfidencePolicy.policy.label }, and policy decision is ${ visibilityWeightingDiagnostic.hitConfidencePolicyDecision }. The finite thin-wall row stays a front-edge stress row; sealed-wall promotion fixture status is ${ leakMatrix.comparisons.sealedWall.status } with wrong-side improvement ratio ${ leakMatrix.comparisons.sealedWall.visibilityWrongSideImprovementRatio } and correct-bounce preservation ${ leakMatrix.comparisons.sealedWall.visibilityCorrectBouncePreservation }.` :
+			`Current comparable-receiver CPU mirror shows wrong-side probes are not suppressed more than correct-side probes; ${ visibilityWeightingDiagnostic.escapeClassification.wrongSideEscapedCount }/${ visibilityWeightingDiagnostic.escapeClassification.wrongSideProbeCount } wrong-side probes escape (${ Object.keys( visibilityWeightingDiagnostic.escapeClassification.escapeReasons ).join( ', ' ) || 'no-escape-reason' }); bias sweep best scale is ${ visibilityWeightingDiagnostic.bestBiasScale.visibilityBiasScale }, hit-confidence policy sweep best is ${ visibilityWeightingDiagnostic.bestHitConfidencePolicy.policy.label }, and policy decision is ${ visibilityWeightingDiagnostic.hitConfidencePolicyDecision }. The finite thin-wall row stays a front-edge stress row; sealed-wall promotion fixture status is ${ leakMatrix.comparisons.sealedWall.status } with wrong-side improvement ratio ${ leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement } and correct-bounce preservation ${ leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation }.` :
 			`If moment readback is finite with hits but sealed-wall promotion remains OPEN, interrogate ${ sealedFailureDomain }, render-metric mismatch status ${ sealedRenderMetricMismatch.status }, CPU/render agreement gate ${ sealedRenderMetricMismatch.cpuRenderAgreementGate }, receiver normal convention ${ sealedReceiverNormalDiagnostic.status }, and receiver-surface metric isolation before increasing resolution or tuning Chebyshev.`
 	};
 
@@ -1081,11 +1074,11 @@ export function createLightProbeResearchReportSections( context ) {
 				status: surfaceAttributionBranchDecision?.selectedBranch === 'proof-7c' ?
 					proof7cDispositionStudy?.status === 'CLOSED-PROOF-7C-DISPOSITION-NO-RUNTIME-PROMOTION' ?
 						'DONE-NO-PROMOTION' :
-					proof7cSurfaceStaticBlockerOracleStudy?.status?.startsWith( 'SUPPORTED-PROOF-7C' ) ?
-						'DONE' :
-						proof7cSurfaceStaticBlockerOracleStudy?.status?.startsWith( 'OPEN-PROOF-7C' ) ?
-							'OPEN' :
-							'NEXT' :
+						proof7cSurfaceStaticBlockerOracleStudy?.status?.startsWith( 'SUPPORTED-PROOF-7C' ) ?
+							'DONE' :
+							proof7cSurfaceStaticBlockerOracleStudy?.status?.startsWith( 'OPEN-PROOF-7C' ) ?
+								'OPEN' :
+								'NEXT' :
 					'BLOCKED-BY-PROOF-6',
 				title: 'CPU static-blocker/SDF oracle if correct-side probes still leak',
 				output: proof7cSurfaceStaticBlockerOracleStudy !== undefined ?
@@ -1132,11 +1125,11 @@ export function createLightProbeResearchReportSections( context ) {
 				mappedBakeContentSourcePolicyOracleStudy?.status === 'OPEN-MAPPED-BAKE-CONTENT-SOURCE-POLICY-ORACLE' &&
 				unmappedCoefficientAttributionInstrumentationStudy?.status === 'OPEN-UNMAPPED-COEFFICIENT-ATTRIBUTION-INSTRUMENTATION' ?
 					`Dual proof-only follow-up is materialized: ${ mappedBakeContentSourcePolicyOracleStudy.summary.sampleCount } mapped bake-content/source-policy rows and ${ unmappedCoefficientAttributionInstrumentationStudy.summary.sampleCount } unmapped coefficient-attribution rows.` :
-				surfaceContentAttributionFollowupStudy?.status === 'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' ?
-					`${ surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction }` :
-					surfaceContentAttributionSplitStudy?.status === 'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' ?
-						`proof-7c is OPEN and surface content attribution is split: mapped ${ surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount }, unmapped ${ surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount }; keep the next step proof-only.` :
-					'proof-7c CPU/static-blocker oracle is evaluated and still OPEN; inspect bake content, probe density, or surface placement before runtime blocker work.' :
+					surfaceContentAttributionFollowupStudy?.status === 'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' ?
+						`${ surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction }` :
+						surfaceContentAttributionSplitStudy?.status === 'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' ?
+							`proof-7c is OPEN and surface content attribution is split: mapped ${ surfaceContentAttributionSplitStudy.summary.mappedLeakSampleCount }, unmapped ${ surfaceContentAttributionSplitStudy.summary.unmappedLeakSampleCount }; keep the next step proof-only.` :
+							'proof-7c CPU/static-blocker oracle is evaluated and still OPEN; inspect bake content, probe density, or surface placement before runtime blocker work.' :
 				'If correct-side paths dominate but still leak through the wall, evaluate proof-7c as CPU static-blocker/SDF oracle.',
 			'For projection performance, the guarded runtime implementation phase is in place: contract is IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY, compute-probe-reduction can run behind capability/fallback guards, and full IMPLEMENTED-WITH-PARITY-EVIDENCE remains pending actual runtime readback.',
 			'Keep Chebyshev, runtime visibility moments, public API, and docs promotion unchanged until an oracle produces aggregate evidence.'

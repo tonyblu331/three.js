@@ -140,6 +140,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		};
 
 	};
+
 	const createProjectionStaticWork = ( resolution, cubemapSize ) => {
 
 		const totalProbes = resolution * resolution * resolution;
@@ -166,11 +167,13 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		};
 
 	};
+
 	const roundVector = ( vector ) => ( {
 		x: roundMetric( vector.x ),
 		y: roundMetric( vector.y ),
 		z: roundMetric( vector.z )
 	} );
+
 	const materialSideLabel = ( side ) => {
 
 		if ( side === THREE.FrontSide ) return 'FrontSide';
@@ -814,6 +817,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			};
 
 		};
+
 		const fallbackScenarios = [
 			resolveComputeProjectionFallbackDecision( {
 				label: 'runtime-implemented-adapter-supported',
@@ -1205,16 +1209,26 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			requestedBackend,
 			selectedBackend: timings.projectionBackend,
 			projectionBackendRequest: timings.projectionBackendRequest,
+			sceneUpdateMs: timings.sceneUpdateMs,
 			projectionMs: timings.projectionMs,
+			computeShProjectionMs: timings.computeShProjectionMs ?? timings.projectionMs,
 			cubemapMs: timings.cubemapMs,
+			radianceCubemapCaptureMs: timings.radianceCubemapCaptureMs ?? timings.cubemapMs,
 			copyMs: timings.copyMs,
+			atlasRepackMs: timings.atlasRepackMs ?? timings.copyMs,
+			distanceCubemapCaptureMs: timings.distanceCubemapCaptureMs ?? timings.visibilityCubemapMs ?? 0,
+			visibilityRepackMs: timings.visibilityRepackMs ?? 0,
+			verifierReadbackMs: timings.verifierReadbackMs ?? 0,
 			totalBakeMs: timings.totalBakeMs,
 			wallClockTotalMs,
 			projectionCubemapSweepsPerProbe: timings.projectionCubemapSweepsPerProbe,
 			projectionTexelVisits: timings.projectionTexelVisits,
 			timingSource: timings.timingSource ?? 'unavailable',
+			timingSourceKind: timings.timingSourceKind ?? 'unavailable',
+			gpuTimestampStatus: timings.gpuTimestampStatus ?? 'unavailable',
 			projectionTimingSource: timings.projectionTimingSource ?? timings.timingSource ?? 'unavailable',
 			deterministicTimerDetected: timings.deterministicTimerDetected === true,
+			timingBuckets: timings.timingBuckets ?? null,
 			computeProjectionFallbackReason: timings.computeProjectionFallbackReason ?? null
 		} );
 
@@ -1252,12 +1266,21 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					selectedBackends: Array.from( new Set( runs.map( run => run.selectedBackend ) ) ),
 					warmupRuns: warmups,
 					measuredRuns: runs,
+					sceneUpdateMs: summarizeMetric( runs.map( run => run.sceneUpdateMs ) ),
 					projectionMs: summarizeMetric( runs.map( run => run.projectionMs ) ),
+					computeShProjectionMs: summarizeMetric( runs.map( run => run.computeShProjectionMs ) ),
 					cubemapMs: summarizeMetric( runs.map( run => run.cubemapMs ) ),
+					radianceCubemapCaptureMs: summarizeMetric( runs.map( run => run.radianceCubemapCaptureMs ) ),
 					copyMs: summarizeMetric( runs.map( run => run.copyMs ) ),
+					atlasRepackMs: summarizeMetric( runs.map( run => run.atlasRepackMs ) ),
+					distanceCubemapCaptureMs: summarizeMetric( runs.map( run => run.distanceCubemapCaptureMs ) ),
+					visibilityRepackMs: summarizeMetric( runs.map( run => run.visibilityRepackMs ) ),
+					verifierReadbackMs: summarizeMetric( runs.map( run => run.verifierReadbackMs ) ),
 					totalBakeMs: summarizeMetric( runs.map( run => run.wallClockTotalMs ) ),
 					probeGridTotalBakeMs: summarizeMetric( runs.map( run => run.totalBakeMs ) ),
 					timingSources: Array.from( new Set( runs.map( run => run.timingSource ) ) ),
+					timingSourceKinds: Array.from( new Set( runs.map( run => run.timingSourceKind ) ) ),
+					gpuTimestampStatuses: Array.from( new Set( runs.map( run => run.gpuTimestampStatus ) ) ),
 					projectionTimingSources: Array.from( new Set( runs.map( run => run.projectionTimingSource ) ) ),
 					deterministicTimerDetected: runs.some( run => run.deterministicTimerDetected === true ),
 					allRunsSelectedExpectedBackend: runs.every( run => run.selectedBackend === expectedBackend ),
@@ -1625,22 +1648,50 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const target = _lightProbeContext.probeGrid.visibilityDepthTarget ?? null;
 		const resolution = info.resolution ?? 0;
 		const textureDepth = info.texture?.depth ?? _lightProbeContext.probeGrid.totalProbes ?? 0;
-		const unavailable = ( reason ) => ( {
-			...info,
-			proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
-			samples: [],
-			stats: {
+		const createMomentQualityProfile = ( stats = null ) => ( {
+			status: stats !== null && stats.finiteSampleCount > 0 ? 'CAPTURED-RADIAL-MOMENT-READBACK' : 'OPEN-NO-MOMENT-READBACK',
+			encoding: info.encoding ?? 'unavailable',
+			activeResolution: resolution,
+			activeRepackMode: 'five-tap-octa-neighborhood',
+			samplePolicy: 'center-plus-four-neighbor octa texel averaging from radial distance cubemap',
+			varianceMetric: 'radial-distance variance; do not label as log variance until encoding changes',
+			sweepPlan: [
+				{ visibilityDepthResolution: 4, repackMode: 'single-sample', status: 'DEFERRED' },
+				{ visibilityDepthResolution: 8, repackMode: 'five-tap', status: resolution === 8 ? 'ACTIVE' : 'AVAILABLE-CURRENT-CODEPATH' },
+				{ visibilityDepthResolution: 16, repackMode: 'future-multi-sample', status: 'DEFERRED' }
+			],
+			stats
+		} );
+
+		const unavailable = ( reason ) => {
+
+			const stats = {
 				sampleCount: 0,
 				finiteSampleCount: 0,
 				hitSampleCount: 0,
 				minMeanDistance: null,
 				maxMeanDistance: null,
 				minVariance: null,
-				maxVariance: null
-			},
-			evidenceStatus: 'OPEN',
-			reason
-		} );
+				maxVariance: null,
+				meanVariance: null,
+				minHitConfidence: null,
+				maxHitConfidence: null,
+				meanHitConfidence: null,
+				bytes: info.bytes ?? 0,
+				encoding: info.encoding ?? 'unavailable'
+			};
+
+			return {
+				...info,
+				proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
+				samples: [],
+				stats,
+				momentQualityProfile: createMomentQualityProfile( stats ),
+				evidenceStatus: 'OPEN',
+				reason
+			};
+
+		};
 
 		if ( target === null || info.available !== true || info.mode !== 'moments' || resolution <= 0 || textureDepth <= 0 ) {
 
@@ -1673,12 +1724,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			const meanDistance = decodeReadbackValue( data[ 0 ], data );
 			const meanSquaredDistance = decodeReadbackValue( data[ 1 ], data );
 			const hitConfidence = decodeReadbackValue( data[ 2 ], data );
-			const validity = decodeReadbackValue( data[ 3 ], data );
+			const backfaceConfidence = decodeReadbackValue( data[ 3 ], data );
 			const variance = meanSquaredDistance - meanDistance * meanDistance;
 			const finite = Number.isFinite( meanDistance ) &&
 				Number.isFinite( meanSquaredDistance ) &&
 				Number.isFinite( hitConfidence ) &&
-				Number.isFinite( validity ) &&
+				Number.isFinite( backfaceConfidence ) &&
 				Number.isFinite( variance );
 
 			samples.push( {
@@ -1687,7 +1738,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				meanSquaredDistance: roundMetric( meanSquaredDistance ),
 				variance: roundMetric( Math.max( variance, 0 ) ),
 				hitConfidence: roundMetric( hitConfidence ),
-				validity: roundMetric( validity ),
+				validity: roundMetric( backfaceConfidence ),
+				backfaceConfidence: roundMetric( backfaceConfidence ),
+				momentEncoding: info.encoding,
 				finite
 			} );
 
@@ -1697,20 +1750,34 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const hitSamples = finiteSamples.filter( sample => sample.hitConfidence > 0 );
 		const meanDistances = finiteSamples.map( sample => sample.meanDistance );
 		const variances = finiteSamples.map( sample => sample.variance );
+		const hitConfidences = finiteSamples.map( sample => sample.hitConfidence );
+
+		const stats = {
+			sampleCount: samples.length,
+			finiteSampleCount: finiteSamples.length,
+			hitSampleCount: hitSamples.length,
+			minMeanDistance: meanDistances.length > 0 ? roundMetric( Math.min( ...meanDistances ) ) : null,
+			maxMeanDistance: meanDistances.length > 0 ? roundMetric( Math.max( ...meanDistances ) ) : null,
+			minVariance: variances.length > 0 ? roundMetric( Math.min( ...variances ) ) : null,
+			maxVariance: variances.length > 0 ? roundMetric( Math.max( ...variances ) ) : null,
+			meanVariance: variances.length > 0 ?
+				roundMetric( variances.reduce( ( total, value ) => total + value, 0 ) / variances.length ) :
+				null,
+			minHitConfidence: hitConfidences.length > 0 ? roundMetric( Math.min( ...hitConfidences ) ) : null,
+			maxHitConfidence: hitConfidences.length > 0 ? roundMetric( Math.max( ...hitConfidences ) ) : null,
+			meanHitConfidence: hitConfidences.length > 0 ?
+				roundMetric( hitConfidences.reduce( ( total, value ) => total + value, 0 ) / hitConfidences.length ) :
+				null,
+			bytes: info.bytes ?? 0,
+			encoding: info.encoding ?? 'unavailable'
+		};
 
 		return {
 			...info,
 			proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
 			samples,
-			stats: {
-				sampleCount: samples.length,
-				finiteSampleCount: finiteSamples.length,
-				hitSampleCount: hitSamples.length,
-				minMeanDistance: meanDistances.length > 0 ? roundMetric( Math.min( ...meanDistances ) ) : null,
-				maxMeanDistance: meanDistances.length > 0 ? roundMetric( Math.max( ...meanDistances ) ) : null,
-				minVariance: variances.length > 0 ? roundMetric( Math.min( ...variances ) ) : null,
-				maxVariance: variances.length > 0 ? roundMetric( Math.max( ...variances ) ) : null
-			},
+			stats,
+			momentQualityProfile: createMomentQualityProfile( stats ),
 			evidenceStatus: finiteSamples.length === samples.length && hitSamples.length > 0 ? 'SUPPORTED' : 'OPEN'
 		};
 
@@ -1948,11 +2015,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		const colorCanvasSample = captureCanvasSample();
 		const previousBackground = _lightProbeContext.scene.background;
-		const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
-		const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
-		const previousVisibility = [];
+		const previousMaterials = [];
 		const leftMaskMaterial = new THREE.MeshBasicMaterial( { color: 0xff0000, toneMapped: false } );
 		const rightMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x00ff00, toneMapped: false } );
+		const occluderMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x000000, toneMapped: false } );
 
 		try {
 
@@ -1960,40 +2026,51 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				if ( object.isMesh !== true ) return;
 
-				previousVisibility.push( { object, visible: object.visible } );
-				object.visible = object === _lightProbeContext.leakFixture.leftReceiver ||
-					object === _lightProbeContext.leakFixture.rightReceiver;
+				previousMaterials.push( { object, material: object.material } );
+
+				if ( object === _lightProbeContext.leakFixture.leftReceiver ) {
+
+					object.material = leftMaskMaterial;
+
+				} else if ( object === _lightProbeContext.leakFixture.rightReceiver ) {
+
+					object.material = rightMaskMaterial;
+
+				} else {
+
+					object.material = occluderMaskMaterial;
+
+				}
 
 			} );
 
 			_lightProbeContext.scene.background = new THREE.Color( 0x000000 );
-			_lightProbeContext.leakFixture.leftReceiver.material = leftMaskMaterial;
-			_lightProbeContext.leakFixture.rightReceiver.material = rightMaskMaterial;
-			_lightProbeContext.leakFixture.leftReceiver.visible = true;
-			_lightProbeContext.leakFixture.rightReceiver.visible = true;
 
 			const maskCanvasSample = captureCanvasSample();
+			const leftReceiverMasked = createMaskedReceiverMetric( colorCanvasSample, maskCanvasSample, 'left' );
+			const rightReceiverMasked = createMaskedReceiverMetric( colorCanvasSample, maskCanvasSample, 'right' );
 
 			return {
 				mode: 'receiver-id-mask-visible-pixels',
-				leftReceiverMasked: createMaskedReceiverMetric( colorCanvasSample, maskCanvasSample, 'left' ),
-				rightReceiverMasked: createMaskedReceiverMetric( colorCanvasSample, maskCanvasSample, 'right' )
+				occlusionMode: 'depth-preserved-full-scene-mask',
+				maskOccluderPolicy: 'non-receiver meshes render black and keep depth so the mask samples the same visible pixels as the color pass',
+				leftReceiverMasked,
+				rightReceiverMasked
 			};
 
 		} finally {
 
-			_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
-			_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
 			_lightProbeContext.scene.background = previousBackground;
 
-			for ( const state of previousVisibility ) {
+			for ( const state of previousMaterials ) {
 
-				state.object.visible = state.visible;
+				state.object.material = state.material;
 
 			}
 
 			leftMaskMaterial.dispose();
 			rightMaskMaterial.dispose();
+			occluderMaskMaterial.dispose();
 
 		}
 
@@ -2297,7 +2374,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		return {
 			available: false,
-			mode: 'unavailable-proof-6-runtime-removed',
+			mode: 'unavailable',
 			resolution: 0,
 			moments: 0,
 			bytes: 0,
@@ -2310,9 +2387,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				minMeanDistance: null,
 				maxMeanDistance: null,
 				minVariance: null,
-				maxVariance: null
-			},
-			proofBoundary: 'Runtime visibility/depth sampling is inactive for proof-6; visibility evidence must remain CPU/report-only until a future approved runtime phase.'
+				maxVariance: null,
+				meanVariance: null,
+				minHitConfidence: null,
+				maxHitConfidence: null,
+				meanHitConfidence: null
+			}
 		};
 
 	};
@@ -2550,11 +2630,17 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		backend: _lightProbeContext.probeGrid.getMemoryInfo().backend,
 		estimatedGpuBytes: _lightProbeContext.probeGrid.getMemoryInfo(),
 		visibilityDepth: readVisibilityDepthInfo(),
+		sceneUpdateMs: nextTimings.sceneUpdateMs,
 		cubemapMs: nextTimings.cubemapMs,
+		radianceCubemapCaptureMs: nextTimings.radianceCubemapCaptureMs,
 		projectionMs: nextTimings.projectionMs,
+		computeShProjectionMs: nextTimings.computeShProjectionMs,
 		copyMs: nextTimings.copyMs,
+		atlasRepackMs: nextTimings.atlasRepackMs,
 		visibilityCubemapMs: nextTimings.visibilityCubemapMs,
+		distanceCubemapCaptureMs: nextTimings.distanceCubemapCaptureMs,
 		visibilityRepackMs: nextTimings.visibilityRepackMs,
+		verifierReadbackMs: nextTimings.verifierReadbackMs,
 		visibilityDepthMode: nextTimings.visibilityDepthMode,
 		projectionBackendRequest: nextTimings.projectionBackendRequest,
 		projectionBackend: nextTimings.projectionBackend,
@@ -2565,6 +2651,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		totalBakeMs: nextTimings.totalBakeMs,
 		wallClockTotalBakeMs: nextTimings.wallClockTotalBakeMs,
 		timingSource: nextTimings.timingSource,
+		timingSourceKind: nextTimings.timingSourceKind,
+		gpuTimestampStatus: nextTimings.gpuTimestampStatus,
+		timingBuckets: nextTimings.timingBuckets,
 		deterministicTimerDetected: nextTimings.deterministicTimerDetected,
 		frameMs: _lightProbeContext.timings.frameMs
 	} );
@@ -2958,16 +3047,25 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					regions,
 					artifactPressure,
 					bakeTexelBudget: createBakeTexelBudget(),
+					sceneUpdateMs: _lightProbeContext.timings.sceneUpdateMs,
 					cubemapMs: _lightProbeContext.timings.cubemapMs,
+					radianceCubemapCaptureMs: _lightProbeContext.timings.radianceCubemapCaptureMs,
 					projectionMs: _lightProbeContext.timings.projectionMs,
+					computeShProjectionMs: _lightProbeContext.timings.computeShProjectionMs,
 					copyMs: _lightProbeContext.timings.copyMs,
+					atlasRepackMs: _lightProbeContext.timings.atlasRepackMs,
 					visibilityCubemapMs: _lightProbeContext.timings.visibilityCubemapMs,
+					distanceCubemapCaptureMs: _lightProbeContext.timings.distanceCubemapCaptureMs,
 					visibilityRepackMs: _lightProbeContext.timings.visibilityRepackMs,
+					verifierReadbackMs: _lightProbeContext.timings.verifierReadbackMs,
 					visibilityDepthMode: _lightProbeContext.timings.visibilityDepthMode,
 					projectionBackend: _lightProbeContext.timings.projectionBackend,
 					totalBakeMs: _lightProbeContext.timings.totalBakeMs,
 					wallClockTotalBakeMs: _lightProbeContext.timings.wallClockTotalBakeMs,
 					timingSource: _lightProbeContext.timings.timingSource,
+					timingSourceKind: _lightProbeContext.timings.timingSourceKind,
+					gpuTimestampStatus: _lightProbeContext.timings.gpuTimestampStatus,
+					timingBuckets: _lightProbeContext.timings.timingBuckets,
 					deterministicTimerDetected: _lightProbeContext.timings.deterministicTimerDetected,
 					frameMs: _lightProbeContext.timings.frameMs
 				} );
@@ -3426,7 +3524,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				setLeakFixtureMode( leakCase.fixtureMode );
 
 				await _lightProbeContext.recreateAndBakeRequired( `leak matrix ${ leakCase.label }` );
-				
+
+				const guardedVisibilityProofMode = leakCase.leakReductionMode === 'normal' && leakCase.disableVisibilityDepth !== true ?
+					'guarded' :
+					'off';
+
+				if ( typeof _lightProbeContext.probeGrid._setGuardedVisibilityProofMode === 'function' ) {
+
+					_lightProbeContext.probeGrid._setGuardedVisibilityProofMode( guardedVisibilityProofMode );
+					_lightProbeContext.syncProbeGridBindings();
+
+				}
+
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
 				const leakMetrics = captureLeakRegionMetrics();
@@ -3454,7 +3563,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					viewBias: _lightProbeContext.params.viewBias,
 					leakReductionMode: _lightProbeContext.params.leakReductionMode,
 					useProbeValidity: _lightProbeContext.params.useProbeValidity,
-					visibilityDepthEnabled: false,
+					visibilityDepthEnabled: guardedVisibilityProofMode === 'guarded',
+					guardedVisibilityProofMode,
 					lightingMode: _lightProbeContext.params.lightingMode,
 					materialType: _lightProbeContext.params.materialType,
 					precision: _lightProbeContext.probeGrid.getPrecisionInfo( _lightProbeContext.renderer ),
@@ -3463,13 +3573,25 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					occupancy: _lightProbeContext.collectProbeOccupancy( _lightProbeContext.params.resolution ),
 					leakMetrics,
 					preToneLeakMetrics,
+					sceneUpdateMs: _lightProbeContext.timings.sceneUpdateMs,
 					cubemapMs: _lightProbeContext.timings.cubemapMs,
+					radianceCubemapCaptureMs: _lightProbeContext.timings.radianceCubemapCaptureMs,
 					projectionMs: _lightProbeContext.timings.projectionMs,
+					computeShProjectionMs: _lightProbeContext.timings.computeShProjectionMs,
 					copyMs: _lightProbeContext.timings.copyMs,
+					atlasRepackMs: _lightProbeContext.timings.atlasRepackMs,
+					visibilityCubemapMs: _lightProbeContext.timings.visibilityCubemapMs,
+					distanceCubemapCaptureMs: _lightProbeContext.timings.distanceCubemapCaptureMs,
+					visibilityRepackMs: _lightProbeContext.timings.visibilityRepackMs,
+					verifierReadbackMs: _lightProbeContext.timings.verifierReadbackMs,
+					visibilityDepthMode: _lightProbeContext.timings.visibilityDepthMode,
 					projectionBackend: _lightProbeContext.timings.projectionBackend,
 					totalBakeMs: _lightProbeContext.timings.totalBakeMs,
 					wallClockTotalBakeMs: _lightProbeContext.timings.wallClockTotalBakeMs,
 					timingSource: _lightProbeContext.timings.timingSource,
+					timingSourceKind: _lightProbeContext.timings.timingSourceKind,
+					gpuTimestampStatus: _lightProbeContext.timings.gpuTimestampStatus,
+					timingBuckets: _lightProbeContext.timings.timingBuckets,
 					deterministicTimerDetected: _lightProbeContext.timings.deterministicTimerDetected,
 					frameMs: _lightProbeContext.timings.frameMs
 				} );
@@ -3500,7 +3622,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const sealedCorrectBouncePreservation = ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCorrectBounce );
 		const sealedPreToneMaskedWrongSideImprovement = improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedWrongSide );
 		const sealedPreToneMaskedCorrectBouncePreservation = ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedCorrectBounce );
-		const sealedPromotionStatus = sealedWrongSideImprovement >= 0.05 && sealedCorrectBouncePreservation >= 0.9 ?
+		const sealedMaskedWrongSideImprovement = improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedWrongSide );
+		const sealedPromotionStatus = sealedWrongSideImprovement >= 0.05 &&
+			sealedMaskedWrongSideImprovement >= 0.05 &&
+			sealedCorrectBouncePreservation >= 0.9 ?
 			'SUPPORTED-BY-SEALED-FIXTURE' :
 			'OPEN';
 		const sealedLinearPromotionStatus = sealedPreToneMaskedWrongSideImprovement >= 0.05 && sealedPreToneMaskedCorrectBouncePreservation >= 0.9 ?
@@ -3513,13 +3638,21 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				thinWall: {
 					normalWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-normal-weighted', readWrongSide ),
 					validityWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readWrongSide ),
-					visibilityWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-validity-weighted', 'leak-thin-wall-visibility-scaffold-disabled', readWrongSide ),
 					normalCorrectBouncePreservation: ratio( 'leak-thin-wall-unweighted', 'leak-thin-wall-normal-weighted', readCorrectBounce ),
 					validityCorrectBouncePreservation: ratio( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readCorrectBounce ),
-					visibilityCorrectBouncePreservation: ratio( 'leak-thin-wall-validity-weighted', 'leak-thin-wall-visibility-scaffold-disabled', readCorrectBounce ),
 					validityDarkPixelRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readDarkPixelRatio ),
 					validityCellEdgeContrastDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readCellEdgeContrast ),
-					visibilityDisabledControlDelta: signedDelta( 'leak-thin-wall-validity-weighted', 'visibility-disabled-control', readWrongSide )
+					visibility: {
+						wrongSide: {
+							delta: signedDelta( 'leak-thin-wall-validity-weighted', 'leak-thin-wall-visibility-scaffold-disabled', readWrongSide )
+						},
+						correctBounce: {
+							preservation: ratio( 'leak-thin-wall-validity-weighted', 'leak-thin-wall-visibility-scaffold-disabled', readCorrectBounce )
+						},
+						disabledControl: {
+							delta: signedDelta( 'leak-thin-wall-validity-weighted', 'visibility-disabled-control', readWrongSide )
+						}
+					}
 				},
 				sealedWall: {
 					status: sealedPromotionStatus,
@@ -3529,26 +3662,50 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					fixtureBoundary: 'Sealed divider spans the probe-grid depth so this row tests moment visibility without the known finite-wall front-edge bypass.',
 					validityWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-unweighted', 'leak-sealed-wall-validity-weighted', readWrongSide ),
 					validityCorrectBouncePreservation: ratio( 'leak-sealed-wall-unweighted', 'leak-sealed-wall-validity-weighted', readCorrectBounce ),
-					visibilityWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readWrongSide ),
-					visibilityCenterWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCenterWrongSide ),
-					visibilitySurfaceWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readSurfaceWrongSide ),
-					visibilityMaskedWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedWrongSide ),
-					visibilityPreToneMaskedWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedWrongSide ),
-					visibilityWrongSideImprovementRatio: sealedWrongSideImprovement,
-					visibilityCenterWrongSideImprovementRatio: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCenterWrongSide ),
-					visibilitySurfaceWrongSideImprovementRatio: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readSurfaceWrongSide ),
-					visibilityMaskedWrongSideImprovementRatio: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedWrongSide ),
-					visibilityPreToneMaskedWrongSideImprovementRatio: sealedPreToneMaskedWrongSideImprovement,
-					visibilityCorrectBouncePreservation: sealedCorrectBouncePreservation,
-					visibilityMaskedCorrectBouncePreservation: ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedCorrectBounce ),
-					visibilityPreToneMaskedCorrectBouncePreservation: sealedPreToneMaskedCorrectBouncePreservation
+					visibility: {
+						wrongSide: {
+							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readWrongSide ),
+							improvement: sealedWrongSideImprovement
+						},
+						centerWrongSide: {
+							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCenterWrongSide ),
+							improvement: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCenterWrongSide )
+						},
+						surfaceWrongSide: {
+							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readSurfaceWrongSide ),
+							improvement: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readSurfaceWrongSide )
+						},
+						maskedWrongSide: {
+							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedWrongSide ),
+							improvement: sealedMaskedWrongSideImprovement
+						},
+						preToneMaskedWrongSide: {
+							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedWrongSide ),
+							improvement: sealedPreToneMaskedWrongSideImprovement
+						},
+						correctBounce: {
+							preservation: sealedCorrectBouncePreservation
+						},
+						maskedCorrectBounce: {
+							preservation: ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedCorrectBounce )
+						},
+						preToneMaskedCorrectBounce: {
+							preservation: sealedPreToneMaskedCorrectBouncePreservation
+						}
+					}
 				},
 				zeroThickness: {
 					status: 'OPEN',
 					validityWrongSideColorRatioDelta: signedDelta( 'leak-zero-thickness-unweighted', 'leak-zero-thickness-validity-weighted', readWrongSide ),
 					validityCorrectBouncePreservation: ratio( 'leak-zero-thickness-unweighted', 'leak-zero-thickness-validity-weighted', readCorrectBounce ),
-					visibilityWrongSideColorRatioDelta: signedDelta( 'leak-zero-thickness-validity-weighted', 'leak-zero-thickness-visibility-scaffold-disabled', readWrongSide ),
-					visibilityCorrectBouncePreservation: ratio( 'leak-zero-thickness-validity-weighted', 'leak-zero-thickness-visibility-scaffold-disabled', readCorrectBounce )
+					visibility: {
+						wrongSide: {
+							delta: signedDelta( 'leak-zero-thickness-validity-weighted', 'leak-zero-thickness-visibility-scaffold-disabled', readWrongSide )
+						},
+						correctBounce: {
+							preservation: ratio( 'leak-zero-thickness-validity-weighted', 'leak-zero-thickness-visibility-scaffold-disabled', readCorrectBounce )
+						}
+					}
 				}
 			},
 			restored: {

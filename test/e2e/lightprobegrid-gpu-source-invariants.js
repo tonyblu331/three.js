@@ -1,4 +1,5 @@
 import { lightProbeWebGLReferenceLabel } from './lightprobegrid-gpu-smoke-config.js';
+import { deriveVisibilityProofStatus, isMomentBackedVisibility } from './lightprobegrid-gpu-proof-visibility.js';
 import * as fs from 'fs/promises';
 
 export async function checkSmokeSourceInvariants( file, smokeHarness ) {
@@ -16,6 +17,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		oracleDiagnosticsSource,
 		smokeRunnerSource,
 		proofReportSource,
+		proofVisibilitySource,
 		proofResearchSectionsSource,
 		proofMarkdownSource,
 		proofDiagnosticsMarkdownSource,
@@ -51,6 +53,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUOracleDiagnostics.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-report.js', 'utf8' ),
+		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-visibility.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-research-sections.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-markdown.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-diagnostics-markdown.js', 'utf8' ),
@@ -85,6 +88,7 @@ ${ receiverDiagnosticsSource }
 ${ oracleDiagnosticsSource }`;
 	const e2eSource = `${ smokeRunnerSource }
 ${ proofReportSource }
+${ proofVisibilitySource }
 ${ proofResearchSectionsSource }
 ${ proofMarkdownSource }
 ${ proofDiagnosticsMarkdownSource }
@@ -111,6 +115,28 @@ ${ runnerRuntimeAssertionsSource }`;
 		if ( condition === false ) throw new Error( `${ file }: ${ message }` );
 
 	};
+
+	const invalidMomentFixtures = [
+		{ available: false, mode: 'moments', texture: {}, bytes: 128, stats: { finiteSampleCount: 1, hitSampleCount: 1 } },
+		{ available: true, mode: 'moments', texture: {}, bytes: 0, stats: { finiteSampleCount: 1, hitSampleCount: 1 } },
+		{ available: true, mode: 'moments', texture: null, bytes: 128, stats: { finiteSampleCount: 1, hitSampleCount: 1 } }
+	];
+
+	requireSource(
+		invalidMomentFixtures.every( fixture =>
+			isMomentBackedVisibility( fixture ) === false &&
+			deriveVisibilityProofStatus( fixture, 'SUPPORTED' ).visibilityLabel !== 'visibility-moments' &&
+			deriveVisibilityProofStatus( fixture, 'SUPPORTED' ).ddgiStatus !== 'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS'
+		) &&
+			deriveVisibilityProofStatus( {
+				available: true,
+				mode: 'moments',
+				texture: {},
+				bytes: 128,
+				stats: { finiteSampleCount: 1, hitSampleCount: 1 }
+			}, 'OPEN' ).ddgiStatus !== 'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS',
+		'Moment-backed visibility gate must reject available=false, bytes=0, texture=null, and raw OPEN evidence.'
+	);
 
 	const requireSourceContract = ( message, checks ) => {
 
@@ -265,8 +291,8 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'fragment-coefficient-projection' ) &&
 			exampleSource.includes( 'requiredPromotionEvidence' ) &&
 			exampleSource.includes( 'REQUIRED-BEFORE-FULL-PARITY-PROMOTION' ) &&
-			exampleSource.includes( "status: 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY'" ) &&
-			exampleSource.includes( "previousStatus: 'PARITY-CANDIDATE-NOT-RUNTIME'" ) &&
+			exampleSource.includes( 'status: \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
+			exampleSource.includes( 'previousStatus: \'PARITY-CANDIDATE-NOT-RUNTIME\'' ) &&
 			exampleSource.includes( 'candidatePlanningAllowed: true' ) &&
 			exampleSource.includes( 'runtimeMarkersAllowed: true' ) &&
 			exampleSource.includes( 'PENDING-BROWSER-E2E' ) &&
@@ -306,8 +332,8 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'computeProjectionCandidateOracle' ) &&
 			exampleSource.includes( 'PROOF-ONLY-MOCK-PARITY-PASSING' ) &&
 			exampleSource.includes( 'does-not-promote-runtime' ) &&
-			proofReportSource.includes( "getSmokeStep( smokeResults, 'projection parity' ).projectionParity" ) &&
-			proofReportSource.includes( "getSmokeStep( smokeResults, 'atlas packing' ).atlasPacking" ) &&
+			proofReportSource.includes( 'getSmokeStep( smokeResults, \'projection parity\' ).projectionParity' ) &&
+			proofReportSource.includes( 'getSmokeStep( smokeResults, \'atlas packing\' ).atlasPacking' ) &&
 			proofResearchSectionsSource.includes( 'computeProjectionCandidateOracle' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Candidate Oracle' ) &&
 			artifactSource.includes( 'proof-only compute projection candidate oracle' ),
@@ -333,7 +359,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'atlasMaxDelta' ) &&
 			exampleSource.includes( 'coefficientTolerance' ) &&
 			exampleSource.includes( 'atlasTolerance' ) &&
-			proofReportSource.includes( "getSmokeStep( smokeResults, 'compute projection runtime parity' ).computeProjectionRuntimeParity" ) &&
+			proofReportSource.includes( 'getSmokeStep( smokeResults, \'compute projection runtime parity\' ).computeProjectionRuntimeParity' ) &&
 			proofResearchSectionsSource.includes( 'computeProjectionRuntimeParityEvidence' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Runtime Readback Parity' ) &&
 			artifactSource.includes( 'computeProjectionRuntimeParityEvidence' ),
@@ -350,8 +376,8 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' ) &&
 			exampleSource.includes( 'CAPTURED-NON-DETERMINISTIC-PERFORMANCE-NOW' ) &&
 			source.includes( 'non-deterministic-performance-now' ) &&
-			runnerCoreAssertionsSource.includes( "call( 'inspectComputeProjectionProfiling' )" ) &&
-			proofReportSource.includes( "getSmokeStep( smokeResults, 'compute projection profiling' ).computeProjectionProfiling" ) &&
+			runnerCoreAssertionsSource.includes( 'call( \'inspectComputeProjectionProfiling\' )' ) &&
+			proofReportSource.includes( 'getSmokeStep( smokeResults, \'compute projection profiling\' ).computeProjectionProfiling' ) &&
 			proofResearchSectionsSource.includes( 'computeProjectionProfilingEvidence' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Diagnostic Profiling' ) &&
 			artifactSource.includes( 'computeProjectionProfilingEvidence' ),
@@ -359,11 +385,11 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		cubeTextureNodeSource.includes( "builder.shaderStage !== 'compute'" ) &&
+		cubeTextureNodeSource.includes( 'builder.shaderStage !== \'compute\'' ) &&
 			cubeTextureNodeSource.includes( 'materialEnvRotation.mul( uvNode )' ) &&
-			webgpuBuildSource.includes( "builder.shaderStage !== 'compute'" ) &&
+			webgpuBuildSource.includes( 'builder.shaderStage !== \'compute\'' ) &&
 			webgpuBuildSource.includes( 'materialEnvRotation.mul( uvNode )' ) &&
-			runnerCoreAssertionsSource.includes( "computeFallbackReason !== \"Cannot read properties of null (reading 'environment')\"" ),
+			runnerCoreAssertionsSource.includes( 'computeFallbackReason !== "Cannot read properties of null (reading \'environment\')"' ),
 		'CubeTextureNode must keep explicit compute cubemap sampling from pulling scene/material environment rotation, and the runtime gate must reject null-environment fallback regressions.'
 	);
 
@@ -389,7 +415,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'allowedNextContractStatus' ) &&
 			proofResearchSectionsSource.includes( 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' ) &&
 			proofResearchSectionsSource.includes( 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ) &&
-			proofResearchSectionsSource.includes( "runtimeMarkersAllowed: computeProjectionContractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY'" ) &&
+			proofResearchSectionsSource.includes( 'runtimeMarkersAllowed: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
 			proofMarkdownSource.includes( 'Compute Projection Status Transition Guard' ) &&
 			artifactSource.includes( 'computeProjectionStatusTransitionGuard' ),
 		'Proof report must include a compute projection status transition guard for guarded runtime implementation and pending parity readback.'
@@ -413,7 +439,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofResearchSectionsSource.includes( 'RUNTIME-PARITY-READBACK-PASSING' ) &&
 			proofResearchSectionsSource.includes( 'RUNTIME-IMPLEMENTED-PARITY-READBACK-PENDING' ) &&
 			proofResearchSectionsSource.includes( 'proofOnlyDone' ) &&
-			proofResearchSectionsSource.includes( "runtimeDone: computeProjectionContractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY'" ) &&
+			proofResearchSectionsSource.includes( 'runtimeDone: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
 			proofResearchSectionsSource.includes( 'runtimeParityReadbackDone: computeProjectionRuntimeParityCaptured' ) &&
 			proofResearchSectionsSource.includes( 'blockersBeforeRuntime' ) &&
 			proofResearchSectionsSource.includes( 'wgsl-compute-entrypoint' ) &&
@@ -426,7 +452,7 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		proofResearchSectionsSource.includes( "id: 'runtime-3'" ) &&
+		proofResearchSectionsSource.includes( 'id: \'runtime-3\'' ) &&
 			proofResearchSectionsSource.includes( 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ) &&
 			proofResearchSectionsSource.includes( 'RUNTIME-IMPLEMENTED-PARITY-READBACK-PENDING' ) &&
 			proofResearchSectionsSource.includes( 'guarded TSL compute node now performs one cubemap sweep per probe' ) &&
@@ -436,7 +462,7 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		proofResearchSectionsSource.includes( "id: 'runtime-4'" ) &&
+		proofResearchSectionsSource.includes( 'id: \'runtime-4\'' ) &&
 			proofResearchSectionsSource.includes( 'RUNTIME-PARITY-READBACK-PASSING' ) &&
 			proofResearchSectionsSource.includes( 'IMPLEMENTED-PARITY-READBACK-PENDING' ) &&
 			proofResearchSectionsSource.includes( 'Candidate readiness now records completed proof-only phases, guarded runtime implementation' ) &&
@@ -446,8 +472,8 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	const computeProjectionRuntimeMarkersAllowed =
-		proofResearchSectionsSource.includes( "runtimeMarkersAllowed: computeProjectionContractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY'" ) &&
-		exampleSource.includes( "status: 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY'" );
+		proofResearchSectionsSource.includes( 'runtimeMarkersAllowed: computeProjectionContractStatus === \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
+		exampleSource.includes( 'status: \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' );
 	const computeProjectionRuntimeMarkers = [
 		'_createComputeProjection',
 		'computeProjectionPipeline',
@@ -502,9 +528,40 @@ ${ runnerRuntimeAssertionsSource }`;
 		exampleSource.includes( 'inspectVisibilityDepthMoments' ) &&
 			exampleSource.includes( 'readVisibilityDepthInfo()' ) &&
 			exampleSource.includes( 'return probeGrid.getVisibilityDepthInfo();' ) &&
-			exampleSource.includes( 'unavailable-proof-6-runtime-removed' ) &&
-			exampleSource.includes( 'Runtime visibility/depth sampling is inactive for proof-6' ),
-		'Cornell harness must report runtime visibility/depth as unavailable during proof-6 and call probeGrid.getVisibilityDepthInfo() directly if the private getter exists.'
+			exampleSource.includes( 'visibilityDepthTarget' ) &&
+			exampleSource.includes( 'info.mode !== \'moments\'' ) &&
+			exampleSource.includes( 'meanDistance' ) &&
+			exampleSource.includes( 'variance' ) &&
+			exampleSource.includes( 'readback-only verifier for private DDGI-lite visibility/depth moments' ),
+		'Cornell harness must directly inspect the private visibilityDepthTarget and call probeGrid.getVisibilityDepthInfo() for moment-backed proof gates.'
+	);
+
+	requireSource(
+		proofVisibilitySource.includes( 'export function isMomentBackedVisibility( info )' ) &&
+			proofVisibilitySource.includes( 'info.available === true' ) &&
+			proofVisibilitySource.includes( 'info.mode === \'moments\'' ) &&
+			proofVisibilitySource.includes( 'info.texture !== null' ) &&
+			proofVisibilitySource.includes( 'info.bytes > 0' ) &&
+			proofVisibilitySource.includes( 'info.stats.finiteSampleCount > 0' ) &&
+			proofVisibilitySource.includes( 'info.stats.hitSampleCount > 0' ) &&
+			proofVisibilitySource.includes( 'visibilityLabel: momentBacked ? \'visibility-moments\' : \'visibility-scaffold-disabled\'' ) &&
+			proofVisibilitySource.includes( 'ddgiStatus: momentBacked && rawOpen === false ?' ) &&
+			e2eSource.includes( 'buildExecuted: false' ) &&
+			e2eSource.includes( 'OPEN-COLOR-MAPPING' ),
+		'Proof helpers must gate visibility-moments and IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS on strict moment-backed evidence, and report open color mapping honestly.'
+	);
+
+	const atlasPathStart = source.indexOf( '\n\t_createAtlasIrradianceNode() {' );
+	const atlasPathEnd = source.indexOf( '_createManualIrradianceNode()', atlasPathStart );
+	const atlasPathSource = source.slice( atlasPathStart, atlasPathEnd );
+
+	requireSource(
+		atlasPathSource.includes( 'texture3D( this.atlasTarget.texture )' ) &&
+			atlasPathSource.includes( 'probesSH.sample' ) &&
+			atlasPathSource.includes( 'visibilityDepthTarget' ) === false &&
+			atlasPathSource.includes( 'visibilityDepthWeighting' ) === false &&
+			atlasPathSource.includes( '_createManualIrradianceDebugNode' ) === false,
+		'Fast SH atlas path must remain hardware-filtered and must not reference visibility moments, weighting uniforms, or debug branches.'
 	);
 
 	requireSourceContract(
@@ -635,10 +692,11 @@ ${ runnerRuntimeAssertionsSource }`;
 					'leak-sealed-wall-visibility-scaffold-disabled',
 					'sealed-promotion-visibility-scaffold-disabled',
 					'sealedWall',
-					'visibilityWrongSideImprovementRatio',
+					'improvement: sealedWrongSideImprovement',
 					'leak-zero-thickness-visibility-scaffold-disabled',
 					'visibility-disabled-control',
-					'visibilityWrongSideColorRatioDelta',
+					'wrongSide: {',
+					'delta: signedDelta',
 					'readVisibilityDepthInfo()',
 					'leak-zero-thickness-unweighted',
 					'leak-zero-thickness-validity-weighted',
@@ -763,7 +821,7 @@ ${ runnerRuntimeAssertionsSource }`;
 					'OPEN-DDGI-GAP',
 					'best engineering proof candidate',
 					'best visual/demo candidate',
-					'neither wins on DDGI/APV correctness until real visibility/depth moments exist'
+					'neither wins on production DDGI/APV correctness'
 				]
 			}
 		]

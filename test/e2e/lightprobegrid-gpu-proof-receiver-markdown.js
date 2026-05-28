@@ -729,15 +729,15 @@ export function appendLightProbeProofReceiverDiagnosticsMarkdown( lines, report 
 
 	lines.push(
 		'',
-		'### Final visible material / color-space audit',
-		`- Status: ${ sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.status }`,
-		`- Conclusion: ${ sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.diagnosticConclusion }`,
+		'### Presentation material / color-space audit',
+		`- Status: ${ sealedReceiverGpuDebugDiagnostic.presentationStudy.status }`,
+		`- Conclusion: ${ sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.diagnosticConclusion }`,
 		'',
 		'| Variant | Material | Tone mapping | Output color-space | Masked wrong-side | Surface wrong-side | Tight-point mean |',
 		'|---|---|---|---|---:|---:|---:|'
 	);
 
-	for ( const variant of sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.variants ) {
+	for ( const variant of sealedReceiverGpuDebugDiagnostic.presentationStudy.variants ) {
 
 		lines.push( [
 			variant.label,
@@ -751,29 +751,30 @@ export function appendLightProbeProofReceiverDiagnosticsMarkdown( lines, report 
 
 	}
 
-	const offscreenSceneLinearTarget = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearTarget;
-	const offscreenSceneLinearContributionRows = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionRows ?? [];
-	const offscreenSceneLinearContributionSummary = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary ?? {
+	const offscreenSceneLinearTarget = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearTarget;
+	const offscreenSceneLinearContributionRows = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionRows ?? [];
+	const offscreenSceneLinearContributionSummary = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionSummary ?? {
 		status: 'OPEN-NOT-RECORDED',
 		mode: 'offscreen-half-float-linear-target-contribution-isolation',
 		diagnosticConclusion: 'Contribution isolation rows were not recorded.'
 	};
-	const offscreenSceneLinearNeutralContributionRows = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionRows ?? [];
-	const offscreenSceneLinearNeutralContributionSummary = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionSummary ?? {
+	const offscreenSceneLinearNeutralContributionRows = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionRows ?? [];
+	const offscreenSceneLinearNeutralContributionSummary = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearNeutralContributionSummary ?? {
 		status: 'OPEN-NOT-RECORDED',
 		mode: 'offscreen-half-float-linear-target-contribution-isolation-neutral-receiver-albedo',
 		diagnosticConclusion: 'Neutral receiver contribution isolation rows were not recorded.'
 	};
-	const offscreenSceneLinearContributionGate = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate ?? {
+	const offscreenSceneLinearContributionGate = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.offscreenSceneLinearContributionGate ?? {
 		status: 'OPEN-NOT-RECORDED',
 		mode: 'proof-only-offscreen-scene-linear-contribution-gate',
 		thresholds: {},
 		diagnosticConclusion: 'Contribution gate was not recorded.'
 	};
+	const visiblePixelCpuMirrorStudy = sealedReceiverGpuDebugDiagnostic.presentationStudy.summary.visiblePixelCpuMirrorStudy ?? null;
 
 	lines.push(
 		'',
-		'### Offscreen scene-linear final-visible target',
+		'### Offscreen scene-linear presentation target',
 		`- Status: ${ offscreenSceneLinearTarget.status }`,
 		`- Mode: ${ offscreenSceneLinearTarget.mode }`,
 		`- Type: ${ offscreenSceneLinearTarget.type }`,
@@ -790,6 +791,7 @@ export function appendLightProbeProofReceiverDiagnosticsMarkdown( lines, report 
 		`- Contribution gate thresholds: wrong <= ${ offscreenSceneLinearContributionGate.thresholds.neutralProbesOnlyWrongSideMax ?? 'n/a' }, correct >= ${ offscreenSceneLinearContributionGate.thresholds.neutralProbesOnlyCorrectBounceMin ?? 'n/a' }, chroma <= ${ offscreenSceneLinearContributionGate.thresholds.neutralChromaticityWrongSidePressureMax ?? 'n/a' }`,
 		`- Neutral-vs-original probe delta: ${ offscreenSceneLinearContributionGate.neutralVsOriginalProbeDelta ?? 'n/a' }`,
 		`- Contribution gate warnings: ${ offscreenSceneLinearContributionGate.warnings?.length > 0 ? offscreenSceneLinearContributionGate.warnings.join( ' / ' ) : 'none' }`,
+		`- GPU-read visible-pixel CPU mirror: ${ visiblePixelCpuMirrorStudy?.status ?? 'n/a' } source ${ visiblePixelCpuMirrorStudy?.summary?.dominantMismatchSource ?? 'n/a' } samples ${ visiblePixelCpuMirrorStudy?.summary?.sampleCount ?? 'n/a' } delta mean ${ visiblePixelCpuMirrorStudy?.summary?.cpuGpuWrongSideRatioDeltaMean ?? 'n/a' } delta max ${ visiblePixelCpuMirrorStudy?.summary?.cpuGpuWrongSideRatioDeltaMax ?? 'n/a' }`,
 		'',
 		'| Contribution | Albedo | Status | Direct | Ambient | Probe | Masked wrong-side | Correct bounce | Chroma pressure | Max-channel wrong/correct | Luminance wrong/correct | Energy wrong/correct |',
 		'|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|'

@@ -40,18 +40,32 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 	assert( benchmark.estimatedGpuBytes.coefficientBytes > 0, 'benchmark: expected coefficient memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.atlasBytes > 0, 'benchmark: expected atlas memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.probeValidityBytes > 0, 'benchmark: expected probe validity memory estimate.' );
-	assert( benchmark.visibilityDepth?.available === false &&
-		benchmark.visibilityDepth?.mode === 'unavailable-proof-6-runtime-removed' &&
-		benchmark.visibilityDepth?.bytes === 0,
-	'benchmark: expected proof-6 runtime visibility/depth metadata to be explicitly unavailable.' );
+	assert( benchmark.visibilityDepth?.available === true &&
+		benchmark.visibilityDepth?.mode === 'moments' &&
+		benchmark.visibilityDepth?.bytes > 0,
+	'benchmark: expected private moment-backed visibility/depth metadata.' );
 	assert( benchmark.precision.requestedPrecision === 'half float', 'benchmark: expected requested precision metadata.' );
 	assert( Number.isFinite( benchmark.totalBakeMs ) &&
 		benchmark.totalBakeMs > 0 &&
 		benchmark.timingSource !== 'unavailable',
 	'benchmark: expected positive total bake timing with a known timing source.' );
+	assert( [ 'gpu-timestamp', 'performance.now diagnostic', 'unavailable' ].includes( benchmark.timingSourceKind ),
+		'benchmark: expected explicit timing source kind.' );
+	assert( [ 'gpu-timestamp', 'unavailable' ].includes( benchmark.gpuTimestampStatus ),
+		'benchmark: expected explicit GPU timestamp status.' );
 	assert( Number.isFinite( benchmark.cubemapMs ), 'benchmark: expected finite cubemap timing.' );
 	assert( Number.isFinite( benchmark.projectionMs ), 'benchmark: expected finite projection timing.' );
 	assert( Number.isFinite( benchmark.copyMs ), 'benchmark: expected finite copy timing.' );
+	assert( benchmark.timingBuckets !== undefined &&
+		benchmark.timingBuckets.source === benchmark.timingSourceKind &&
+		Number.isFinite( benchmark.timingBuckets.sceneUpdateMs ) &&
+		Number.isFinite( benchmark.timingBuckets.radianceCubemapCaptureMs ) &&
+		Number.isFinite( benchmark.timingBuckets.distanceCubemapCaptureMs ) &&
+		Number.isFinite( benchmark.timingBuckets.computeShProjectionMs ) &&
+		Number.isFinite( benchmark.timingBuckets.visibilityRepackMs ) &&
+		Number.isFinite( benchmark.timingBuckets.atlasRepackMs ) &&
+		benchmark.timingBuckets.verifierReadbackTimingSource === 'unavailable',
+	'benchmark: expected honest proof-only timing buckets with readback/runtime timing marked unavailable.' );
 	assert( Number.isFinite( benchmark.frameMs ), 'benchmark: expected finite frame timing.' );
 	results.push( { step: 'benchmark case', benchmark } );
 

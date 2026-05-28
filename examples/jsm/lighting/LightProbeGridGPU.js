@@ -49,6 +49,7 @@ import {
 	uniform,
 	uvec2,
 	uv,
+	vec2,
 	viewportCoordinate,
 	vec3,
 	vec4
@@ -58,6 +59,11 @@ const SH_COEFFICIENTS = 9;
 const PACKED_SH_TEXTURES = 7;
 const ATLAS_PADDING = 1;
 const PROBE_VALIDITY_FLOOR = 0.05;
+const VISIBILITY_DEPTH_RESOLUTION = 8;
+const VISIBILITY_DEPTH_MAX_DISTANCE = 20;
+const VISIBILITY_MIN_VARIANCE = 0.0004;
+const VISIBILITY_DISTANCE_BIAS = 0.02;
+const DEFAULT_PROBE_LAYER_MASK = 1;
 const BACKEND_LABELS = {
 	projection: 'fragment',
 	atlas: 'render-pass',
@@ -84,6 +90,7 @@ const getBakeTimingNow = () => {
 		timingPerformance.now();
 
 };
+
 const isDeterministicPerformanceNow = () => {
 
 	const timingPerformance = getBakeTimingPerformance();
@@ -93,9 +100,16 @@ const isDeterministicPerformanceNow = () => {
 		timingPerformance.now() === 0;
 
 };
+
 const getBakeTimingSource = () => isDeterministicPerformanceNow() ?
 	'non-deterministic-performance-now' :
 	'performance-now';
+
+const getBakeTimingSourceKind = ( timingSource ) => timingSource === 'gpu-timestamp' ?
+	'gpu-timestamp' :
+	timingSource === 'unavailable' ?
+		'unavailable' :
+		'performance.now diagnostic';
 
 /**
  * GPU-resident L2 spherical harmonics irradiance probe grid.
@@ -103,15 +117,13 @@ const getBakeTimingSource = () => isDeterministicPerformanceNow() ?
  * Each probe stores 9 RGB L2 spherical harmonics coefficients. That is 27 scalar
  * values, packed into 7 RGBA atlas sub-volumes because ceil( 27 / 4 ) = 7.
  * During bake, cubemap samples are projected with solid angle weighting. At
- * runtime, hardware filtering provides trilinear interpolation for filterable
- * textures. Optional leak reduction performs a manual nearest-load blend only
- * when per-neighbor weights are required.
- * Optional leak reduction translates DDGI-style wrap weighting and APV-style
- * surface bias into a small manual neighbor blend. It is not a full DDGI
- * visibility system: the atlas keeps a constant validity channel for future
- * geometry classification unless explicit validity data is provided, and
- * weights probes behind the receiver normal less
- * aggressively.
+ * runtime, the default path uses hardware-filtered atlas sampling. Optional
+ * leak reduction performs a manual nearest-load blend only when per-neighbor
+ * weights are required. Private proof hooks can additionally read a
+ * moment-backed visibility target, apply a default ellipsoid support kernel,
+ * and attenuate normalized SH irradiance with visibility mass. That guarded
+ * visibility path is verifier-only and is not exposed as public DDGI/API
+ * surface yet.
  *
  * Every packed sub-volume has one copied padding slice on both Z boundaries so
  * trilinear filtering cannot bleed into the next SH sub-volume in the atlas.
@@ -209,6 +221,27 @@ class LightProbeGridGPU extends Object3D {
 		this.probeValidityTextureWidth = 0;
 		this.probeValidityTextureHeight = 0;
 		this.invalidProbeCount = 0;
+		this.visibilityDepthResolution = VISIBILITY_DEPTH_RESOLUTION;
+		this.visibilityDepthTarget = null;
+		this.visibilityDistanceTarget = null;
+		this.visibilityDistanceCamera = null;
+		this.visibilityDistanceMaterial = null;
+		this.visibilityRepackScene = null;
+		this.visibilityRepackCamera = null;
+		this.visibilityRepackMesh = null;
+		this.visibilityRepackMaterial = null;
+		this.visibilityRepackProbeIndex = uniform( 0 );
+		this.visibilityProbePosition = uniform( new Vector3() );
+		this.visibilityProbeSpacing = uniform( 1 );
+		this.visibilityMaxDistance = uniform( VISIBILITY_DEPTH_MAX_DISTANCE );
+		this.visibilityBias = uniform( VISIBILITY_DISTANCE_BIAS );
+		this.visibilityDepthWeighting = uniform( 1 );
+		this.receiverLayerMask = uniform( DEFAULT_PROBE_LAYER_MASK, 'uint' );
+		this.visibilityDepthMode = 'not-baked';
+		this.visibilityCubemapMs = 0;
+		this.visibilityRepackMs = 0;
+		this._guardedVisibilityProofMode = 'off';
+		this._probeKernelProofData = null;
 
 		/**
 		 * The atlas texture containing the packed SH coefficients.
@@ -362,6 +395,7 @@ class LightProbeGridGPU extends Object3D {
 		if ( this.repackComputeProjectionMaterial !== null ) this.repackComputeProjectionMaterial.dispose();
 		if ( this.projectionMesh !== null ) this.projectionMesh.geometry.dispose();
 		if ( this.repackMesh !== null ) this.repackMesh.geometry.dispose();
+		if ( this.visibilityRepackMesh !== null ) this.visibilityRepackMesh.geometry.dispose();
 		if ( this.helper !== null ) {
 
 			this.helper.geometry.dispose();
@@ -374,6 +408,10 @@ class LightProbeGridGPU extends Object3D {
 		if ( this.computeProjectionTexture !== null ) this.computeProjectionTexture.dispose();
 		if ( this.atlasTarget !== null ) this.atlasTarget.dispose();
 		if ( this.probeValidityTexture !== null ) this.probeValidityTexture.dispose();
+		if ( this.visibilityDepthTarget !== null ) this.visibilityDepthTarget.dispose();
+		if ( this.visibilityDistanceTarget !== null ) this.visibilityDistanceTarget.dispose();
+		if ( this.visibilityDistanceMaterial !== null ) this.visibilityDistanceMaterial.dispose();
+		if ( this.visibilityRepackMaterial !== null ) this.visibilityRepackMaterial.dispose();
 
 		this.projectionMaterial = null;
 		this.computeProjectionNode = null;
@@ -387,6 +425,10 @@ class LightProbeGridGPU extends Object3D {
 		this.repackScene = null;
 		this.repackCamera = null;
 		this.repackMesh = null;
+		this.visibilityRepackScene = null;
+		this.visibilityRepackCamera = null;
+		this.visibilityRepackMesh = null;
+		this.visibilityRepackMaterial = null;
 		this.helper = null;
 		this.cubeRenderTarget = null;
 		this.cubeCamera = null;
@@ -395,6 +437,13 @@ class LightProbeGridGPU extends Object3D {
 		this.probeValidityTexture = null;
 		this.probeValidityTextureWidth = 0;
 		this.probeValidityTextureHeight = 0;
+		this.visibilityDepthTarget = null;
+		this.visibilityDistanceTarget = null;
+		this.visibilityDistanceCamera = null;
+		this.visibilityDistanceMaterial = null;
+		this.visibilityDepthMode = 'not-baked';
+		this.visibilityCubemapMs = 0;
+		this.visibilityRepackMs = 0;
 		this.texture = null;
 
 	}
@@ -424,6 +473,21 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
+	_getMinProbeSpacing() {
+
+		_gridSize.subVectors( this.max, this.min );
+
+		return Math.max(
+			Math.min(
+				_gridSize.x / ( this.resolution - 1 ),
+				_gridSize.y / ( this.resolution - 1 ),
+				_gridSize.z / ( this.resolution - 1 )
+			),
+			0.0001
+		);
+
+	}
+
 	createLightsNode( sceneLights = [] ) {
 
 		return lights( [ ...sceneLights, new IrradianceNode( this.createIrradianceNode() ) ] );
@@ -450,6 +514,10 @@ class LightProbeGridGPU extends Object3D {
 		const computeCoefficientBytes = this.computeProjectionTexture !== null ? coefficientBytes : 0;
 		const atlasBytes = this.resolution * this.resolution * this.atlasDepth * rgbaBytes;
 		const probeValidityBytes = this.probeValidityTextureWidth * this.probeValidityTextureHeight * 4 * 4;
+		const visibilityDepthBytes = this.visibilityDepthTarget !== null ?
+			this.visibilityDepthResolution * this.visibilityDepthResolution * this.totalProbes * rgbaBytes :
+			0;
+		const visibilityDistanceBytes = this.visibilityDistanceTarget !== null ? cubemapBytes : 0;
 
 		return {
 			cubemapBytes,
@@ -457,7 +525,9 @@ class LightProbeGridGPU extends Object3D {
 			computeCoefficientBytes,
 			atlasBytes,
 			probeValidityBytes,
-			total: cubemapBytes + coefficientBytes + computeCoefficientBytes + atlasBytes + probeValidityBytes,
+			visibilityDepthBytes,
+			visibilityDistanceBytes,
+			total: cubemapBytes + coefficientBytes + computeCoefficientBytes + atlasBytes + probeValidityBytes + visibilityDepthBytes + visibilityDistanceBytes,
 			bytesPerChannel,
 			backend: {
 				...BACKEND_LABELS,
@@ -475,9 +545,77 @@ class LightProbeGridGPU extends Object3D {
 			leakReductionMode: this.leakReductionMode,
 			probeValidityMode: this.probeValiditySource === null ? 'constant' : 'custom',
 			invalidProbeCount: this.invalidProbeCount,
+			probeMeta: {
+				validityChannel: 'probeMeta.r',
+				confidenceChannel: 'probeMeta.g',
+				layerMaskChannel: 'probeMeta.b',
+				defaultLayerMask: DEFAULT_PROBE_LAYER_MASK,
+				receiverLayerMask: this.receiverLayerMask.value
+			},
+			visibilityDepthMode: this.visibilityDepthMode,
+			visibilityDepthResolution: this.visibilityDepthResolution,
+			visibilityDepthWeighting: this.visibilityDepthWeighting.value,
+			guardedVisibilityProofMode: this._guardedVisibilityProofMode,
+			probeKernelProofMode: this._probeKernelProofData === null ? 'default-ellipsoid' : 'custom-proof-data',
+			probeKernelDefaultRegionId: 0,
+			probeKernelDefaultLayerMask: 1,
+			probeKernelDefaultSoftness: 1,
 			manualIrradianceSampling: this._usesManualIrradianceSampling(),
 			weightedProbeSampling: this._usesWeightedProbeSampling()
 		};
+
+	}
+
+	getVisibilityDepthInfo() {
+
+		const memory = this.getMemoryInfo();
+		const available = this.visibilityDepthTarget !== null && this.visibilityDepthMode === 'moments';
+
+		return {
+			available,
+			mode: this.visibilityDepthMode,
+			encoding: 'radial-distance',
+			resolution: available ? this.visibilityDepthResolution : 0,
+			moments: available ? 2 : 0,
+			bytes: available ? memory.visibilityDepthBytes : 0,
+			texture: available ? {
+				width: this.visibilityDepthResolution,
+				height: this.visibilityDepthResolution,
+				depth: this.totalProbes
+			} : null,
+			samples: [],
+			stats: {
+				sampleCount: 0,
+				finiteSampleCount: 0,
+				hitSampleCount: 0,
+				minMeanDistance: null,
+				maxMeanDistance: null,
+				minVariance: null,
+				maxVariance: null
+			},
+			hitConfidenceChannel: 'b',
+			backfaceConfidenceChannel: 'a'
+		};
+
+	}
+
+	_setGuardedVisibilityProofMode( mode ) {
+
+		if ( mode !== 'off' && mode !== 'guarded' ) {
+
+			throw new Error( 'LightProbeGridGPU: guarded visibility proof mode must be "off" or "guarded".' );
+
+		}
+
+		this._guardedVisibilityProofMode = mode;
+		return this._guardedVisibilityProofMode;
+
+	}
+
+	_setProbeKernelProofData( data ) {
+
+		this._probeKernelProofData = data ?? null;
+		return this._probeKernelProofData;
 
 	}
 
@@ -582,6 +720,12 @@ class LightProbeGridGPU extends Object3D {
 
 	_createManualIrradianceNode() {
 
+		return this._createManualIrradianceDebugNode( 'finalIrradiance' );
+
+	}
+
+	_createManualIrradianceDebugNode( debugMode = 'finalIrradiance' ) {
+
 		const resolution = this.resolution;
 		const resolutionMinusOne = resolution - 1;
 		const gridMinNode = vec3( this.min.x, this.min.y, this.min.z );
@@ -591,6 +735,9 @@ class LightProbeGridGPU extends Object3D {
 			this.max.z - this.min.z
 		);
 		const packedLoad = texture3D( this.atlasTarget.texture ).setSampler( false );
+		const useGuardedVisibility = this._guardedVisibilityProofMode === 'guarded' && this.visibilityDepthTarget !== null;
+		const visibilityLoad = useGuardedVisibility ? texture3D( this.visibilityDepthTarget.texture ).setSampler( false ) : null;
+		const probeMetaTextureWidth = this.probeValidityTextureWidth;
 
 		const loadPackedSamples = ( coord ) => {
 
@@ -610,6 +757,34 @@ class LightProbeGridGPU extends Object3D {
 
 		};
 
+		const loadProbeMeta = ( probeIndex ) => textureLoad( this.probeValidityTexture, ivec2(
+			probeIndex.mod( probeMetaTextureWidth ),
+			probeIndex.div( probeMetaTextureWidth )
+		) );
+
+		const loadVisibilityMoment = useGuardedVisibility ? ( coord, direction ) => {
+
+			const probeIndex = int( coord.x ).add( int( coord.y ).mul( resolution ) ).add( int( coord.z ).mul( resolution * resolution ) );
+			const dir = this._safeNormalize( direction );
+			const denominator = dir.x.abs().add( dir.y.abs() ).add( dir.z.abs() ).max( 0.0001 );
+			const octX = dir.x.div( denominator ).toVar();
+			const octY = dir.y.div( denominator ).toVar();
+
+			If( dir.z.lessThan( 0 ), () => {
+
+				const oldX = octX.toVar();
+				octX.assign( float( 1 ).sub( octY.abs() ).mul( oldX.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
+				octY.assign( float( 1 ).sub( oldX.abs() ).mul( octY.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
+
+			} );
+
+			const ix = int( clamp( octX.mul( 0.5 ).add( 0.5 ).mul( this.visibilityDepthResolution ), 0, this.visibilityDepthResolution - 1 ) );
+			const iy = int( clamp( octY.mul( 0.5 ).add( 0.5 ).mul( this.visibilityDepthResolution ), 0, this.visibilityDepthResolution - 1 ) );
+
+			return visibilityLoad.load( ivec3( ix, iy, probeIndex ) );
+
+		} : null;
+
 		const sampleManual = Fn( () => {
 
 			const probeSpacing = gridExtentNode.div( resolutionMinusOne );
@@ -626,7 +801,13 @@ class LightProbeGridGPU extends Object3D {
 			const z1 = int( clamp( base.z.add( 1 ), 0, resolutionMinusOne ) );
 
 			const weightedSamples = [];
+			const scalarSamples = [];
+			const debugProbeBaseWeights = [];
+			const debugProbeVisibilityWeights = [];
+			const debugProbeVisibilities = [];
+			const debugProbeIndices = [];
 			const totalWeight = float( 0 ).toVar();
+			const baseWeight = float( 0 ).toVar();
 			const normal = normalWorld.normalize();
 			const wx0 = blend.x.oneMinus();
 			const wy0 = blend.y.oneMinus();
@@ -635,18 +816,60 @@ class LightProbeGridGPU extends Object3D {
 			for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
 
 				weightedSamples.push( vec4( 0 ).toVar() );
+				scalarSamples.push( vec4( 0 ).toVar() );
 
 			}
 
-			const addProbe = ( coord, trilinearWeight ) => {
+			for ( let i = 0; i < 8; i ++ ) {
+
+				debugProbeBaseWeights.push( float( 0 ).toVar() );
+				debugProbeVisibilityWeights.push( float( 0 ).toVar() );
+				debugProbeVisibilities.push( float( 0 ).toVar() );
+				debugProbeIndices.push( float( 0 ).toVar() );
+
+			}
+
+			const addProbe = ( coord, trilinearWeight, debugSlot ) => {
 
 				const sample = loadPackedSamples( coord );
+				const probeIndex = int( coord.x ).add( int( coord.y ).mul( resolution ) ).add( int( coord.z ).mul( resolution * resolution ) );
+				const meta = loadProbeMeta( probeIndex );
 				const probePosition = gridMinNode.add( coord.toFloat().div( resolutionMinusOne ).mul( gridExtentNode ) );
 				const probeDirection = this._safeNormalize( probePosition.sub( positionWorld ) );
 				const wrapShading = normal.dot( probeDirection ).add( 1 ).mul( 0.5 );
 				const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
-				const validityWeight = sample[ 6 ].w.max( PROBE_VALIDITY_FLOOR );
-				const weight = trilinearWeight.mul( normalWeight ).mul( validityWeight );
+				const validityWeight = meta.x.max( PROBE_VALIDITY_FLOOR );
+				const confidenceWeight = meta.y.clamp( 0, 1 );
+				const sameLayer = meta.z.toUint().bitAnd( this.receiverLayerMask ).notEqual( uint( 0 ) ).select( float( 1 ), float( 0 ) );
+				const kernelOffset = positionWorld.sub( probePosition ).div( probeSpacing.max( vec3( 0.0001 ) ) );
+				const compatibleKernel = useGuardedVisibility ? kernelOffset.dot( kernelOffset ).negate().exp2() : float( 1 );
+				const layerCompatibility = useGuardedVisibility ? sameLayer : float( 1 );
+				const base = trilinearWeight.mul( normalWeight ).mul( validityWeight ).mul( confidenceWeight ).mul( layerCompatibility ).mul( compatibleKernel );
+				const visibility = float( 1 ).toVar();
+
+				if ( useGuardedVisibility ) {
+
+					const receiverDirection = positionWorld.sub( probePosition );
+					const receiverDistance = receiverDirection.length();
+					const moment = loadVisibilityMoment( coord, receiverDirection );
+					const variance = max( moment.y.sub( moment.x.mul( moment.x ) ), VISIBILITY_MIN_VARIANCE );
+					const delta = max( receiverDistance.sub( moment.x ).sub( this.visibilityBias ), 0 );
+					const chebyshev = variance.div( variance.add( delta.mul( delta ) ) );
+
+					const hitConfidence = moment.z.clamp( 0, 1 );
+					const momentVisibility = float( 1 ).sub( hitConfidence ).add( chebyshev.mul( hitConfidence ) ).clamp( 0, 1 );
+					const visibilityMix = this.visibilityDepthWeighting.clamp( 0, 1 );
+
+					visibility.assign( float( 1 ).sub( visibilityMix ).add( momentVisibility.mul( visibilityMix ) ).clamp( 0, 1 ) );
+
+				}
+
+				const weight = base.mul( visibility );
+
+				debugProbeBaseWeights[ debugSlot ].assign( base );
+				debugProbeVisibilityWeights[ debugSlot ].assign( weight );
+				debugProbeVisibilities[ debugSlot ].assign( visibility );
+				debugProbeIndices[ debugSlot ].assign( probeIndex.toFloat() );
 
 				for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
 
@@ -654,25 +877,37 @@ class LightProbeGridGPU extends Object3D {
 					// negative ringing, so evaluating each probe first would break hardware
 					// filtering equivalence.
 					weightedSamples[ i ].addAssign( sample[ i ].mul( weight ) );
+					scalarSamples[ i ].addAssign( sample[ i ].mul( base ) );
 
 				}
 
 				totalWeight.addAssign( weight );
+				baseWeight.addAssign( base );
 
 			};
 
-			addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ) );
-			addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ) );
-			addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ) );
-			addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ) );
-			addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ) );
-			addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ) );
-			addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ) );
-			addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ) );
+			addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ), 0 );
+			addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ), 1 );
+			addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ), 2 );
+			addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ), 3 );
+			addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ), 4 );
+			addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ), 5 );
+			addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ), 6 );
+			addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ), 7 );
 
 			const safeWeight = totalWeight.max( 0.0001 );
-
-			return this._evaluatePackedSH(
+			const safeBaseWeight = baseWeight.max( 0.0001 );
+			const visibilityMass = useGuardedVisibility ? totalWeight.div( baseWeight.max( 0.0001 ) ).clamp( 0, 1 ) : float( 1 );
+			const scalarIrradiance = this._evaluatePackedSH(
+				scalarSamples[ 0 ].div( safeBaseWeight ),
+				scalarSamples[ 1 ].div( safeBaseWeight ),
+				scalarSamples[ 2 ].div( safeBaseWeight ),
+				scalarSamples[ 3 ].div( safeBaseWeight ),
+				scalarSamples[ 4 ].div( safeBaseWeight ),
+				scalarSamples[ 5 ].div( safeBaseWeight ),
+				scalarSamples[ 6 ].div( safeBaseWeight )
+			).mul( this.probeIntensity );
+			const visibilityIrradiance = this._evaluatePackedSH(
 				weightedSamples[ 0 ].div( safeWeight ),
 				weightedSamples[ 1 ].div( safeWeight ),
 				weightedSamples[ 2 ].div( safeWeight ),
@@ -681,6 +916,32 @@ class LightProbeGridGPU extends Object3D {
 				weightedSamples[ 5 ].div( safeWeight ),
 				weightedSamples[ 6 ].div( safeWeight )
 			).mul( this.probeIntensity );
+			const finalVisibilityIrradiance = visibilityIrradiance.mul( visibilityMass );
+			const visibilityBlend = this.visibilityDepthWeighting.clamp( 0, 1 );
+			const finalIrradiance = scalarIrradiance.mul( float( 1 ).sub( visibilityBlend ) ).add( finalVisibilityIrradiance.mul( visibilityBlend ) );
+			const probeIndexScale = float( resolution * resolution * resolution - 1 ).max( 1 );
+
+			if ( debugMode === 'samplePositionGrid' ) return clamp( samplePosition.sub( gridMinNode ).div( gridExtentNode ), 0, 1 );
+			if ( debugMode === 'baseProbeCoordGrid' ) return base.div( resolutionMinusOne );
+			if ( debugMode === 'trilinearBlend' ) return blend;
+			if ( debugMode === 'probeCoordGrid' ) return probeCoord.div( resolutionMinusOne );
+
+			for ( let i = 0; i < 8; i ++ ) {
+
+				if ( debugMode === `neighbor${ i }BaseWeight` ) return vec3( debugProbeBaseWeights[ i ] );
+				if ( debugMode === `neighbor${ i }VisibilityWeight` ) return vec3( debugProbeVisibilityWeights[ i ] );
+				if ( debugMode === `neighbor${ i }Visibility` ) return vec3( debugProbeVisibilities[ i ] );
+				if ( debugMode === `neighbor${ i }ProbeIndex` ) return vec3( debugProbeIndices[ i ].div( probeIndexScale ) );
+
+			}
+
+			if ( debugMode === 'scalarWeight' ) return vec3( baseWeight );
+			if ( debugMode === 'visibilityWeight' ) return vec3( totalWeight );
+			if ( debugMode === 'visibilityMix' || debugMode === 'visibilityOverScalar' ) return vec3( visibilityMass );
+			if ( debugMode === 'scalarIrradiance' ) return scalarIrradiance;
+			if ( debugMode === 'visibilityIrradiance' ) return visibilityIrradiance;
+
+			return finalIrradiance;
 
 		} );
 
@@ -875,6 +1136,7 @@ class LightProbeGridGPU extends Object3D {
 		const currentScissorTest = renderer.getScissorTest();
 		const currentAutoClear = renderer.autoClear;
 		const currentMatrixWorldAutoUpdate = scene.matrixWorldAutoUpdate;
+		const currentOverrideMaterial = scene.overrideMaterial;
 		const hasShadowMap = renderer.shadowMap !== undefined;
 		const currentShadowAutoUpdate = hasShadowMap ? renderer.shadowMap.autoUpdate : undefined;
 		const currentProbeIntensity = this.probeIntensity.value;
@@ -885,7 +1147,10 @@ class LightProbeGridGPU extends Object3D {
 
 		let cubemapMs = 0;
 		let projectionMs = 0;
+		let sceneUpdateMs = 0;
 		let copyMs = 0;
+		let visibilityCubemapMs = 0;
+		let visibilityRepackMs = 0;
 		let retryHalfFloat = false;
 		let retryFragmentProjection = false;
 		const projectionBackendOverride = this._validateProjectionBackendOverride( options.projectionBackendOverride ?? this._projectionBackendOverride );
@@ -901,8 +1166,10 @@ class LightProbeGridGPU extends Object3D {
 
 		try {
 
+			const sceneUpdateStart = getBakeTimingNow();
 			scene.updateMatrixWorld( true );
 			scene.matrixWorldAutoUpdate = false;
+			sceneUpdateMs += getBakeTimingNow() - sceneUpdateStart;
 
 			if ( hasShadowMap ) {
 
@@ -923,6 +1190,9 @@ class LightProbeGridGPU extends Object3D {
 
 				this.getProbePosition( i, _probePosition );
 				this.cubeCamera.position.copy( _probePosition );
+				this.visibilityDistanceCamera.position.copy( _probePosition );
+				this.visibilityProbePosition.value.copy( _probePosition );
+				this.visibilityProbeSpacing.value = this._getMinProbeSpacing();
 
 				let phaseStart = getBakeTimingNow();
 				renderer.autoClear = true;
@@ -942,6 +1212,16 @@ class LightProbeGridGPU extends Object3D {
 				}
 
 				projectionMs += getBakeTimingNow() - phaseStart;
+
+				phaseStart = getBakeTimingNow();
+				scene.overrideMaterial = this.visibilityDistanceMaterial;
+				this.visibilityDistanceCamera.update( renderer, scene );
+				scene.overrideMaterial = currentOverrideMaterial;
+				visibilityCubemapMs += getBakeTimingNow() - phaseStart;
+
+				phaseStart = getBakeTimingNow();
+				await this._repackVisibilityDepth( renderer, i );
+				visibilityRepackMs += getBakeTimingNow() - phaseStart;
 
 			}
 
@@ -981,6 +1261,7 @@ class LightProbeGridGPU extends Object3D {
 			renderer.setScissorTest( currentScissorTest );
 			renderer.autoClear = currentAutoClear;
 			scene.matrixWorldAutoUpdate = currentMatrixWorldAutoUpdate;
+			scene.overrideMaterial = currentOverrideMaterial;
 
 			if ( hasShadowMap ) renderer.shadowMap.autoUpdate = currentShadowAutoUpdate;
 
@@ -994,10 +1275,49 @@ class LightProbeGridGPU extends Object3D {
 		if ( retryFragmentProjection ) return this._bake( renderer, scene, options );
 		if ( retryHalfFloat ) return this._bake( renderer, scene, options );
 
+		const roundedSceneUpdateMs = Number( sceneUpdateMs.toFixed( 2 ) );
+		const roundedCubemapMs = Number( cubemapMs.toFixed( 2 ) );
+		const roundedProjectionMs = Number( projectionMs.toFixed( 2 ) );
+		const roundedCopyMs = Number( copyMs.toFixed( 2 ) );
+		const timingSourceKind = getBakeTimingSourceKind( timingSource );
+
+		this.visibilityCubemapMs = Number( visibilityCubemapMs.toFixed( 2 ) );
+		this.visibilityRepackMs = Number( visibilityRepackMs.toFixed( 2 ) );
+
+		const timingBuckets = {
+			sceneUpdateMs: roundedSceneUpdateMs,
+			radianceCubemapCaptureMs: roundedCubemapMs,
+			distanceCubemapCaptureMs: this.visibilityCubemapMs,
+			computeShProjectionMs: roundedProjectionMs,
+			visibilityRepackMs: this.visibilityRepackMs,
+			atlasRepackMs: roundedCopyMs,
+			verifierReadbackMs: 0,
+			runtimeFastAtlasMs: null,
+			runtimeGuardedGatherMs: null,
+			runtimeMomentTextureLoadMs: null,
+			runtimeKernelMathMs: null,
+			runtimeVisibilityMassMs: null,
+			runtimeShEvaluationMs: null,
+			source: timingSourceKind,
+			legacySource: timingSource,
+			verifierReadbackTimingSource: 'unavailable',
+			runtimeTimingSource: 'unavailable'
+		};
+
 		return {
-			cubemapMs: Number( cubemapMs.toFixed( 2 ) ),
-			projectionMs: Number( projectionMs.toFixed( 2 ) ),
-			copyMs: Number( copyMs.toFixed( 2 ) ),
+			sceneUpdateMs: roundedSceneUpdateMs,
+			cubemapMs: roundedCubemapMs,
+			radianceCubemapCaptureMs: roundedCubemapMs,
+			projectionMs: roundedProjectionMs,
+			computeShProjectionMs: roundedProjectionMs,
+			copyMs: roundedCopyMs,
+			atlasRepackMs: roundedCopyMs,
+			visibilityCubemapMs: this.visibilityCubemapMs,
+			distanceCubemapCaptureMs: this.visibilityCubemapMs,
+			visibilityRepackMs: this.visibilityRepackMs,
+			verifierReadbackMs: 0,
+			verifierReadbackTimingSource: 'unavailable',
+			visibilityDepthMode: this.visibilityDepthMode,
 			projectionBackendRequest: projectionBackendOverride,
 			projectionBackend: this._activeProjectionBackend,
 			projectionBackendForced: projectionBackendOverride !== 'auto',
@@ -1009,8 +1329,11 @@ class LightProbeGridGPU extends Object3D {
 			computeProjectionFallbackReason: this.computeProjectionFallbackReason,
 			totalBakeMs: Number( ( getBakeTimingNow() - totalStart ).toFixed( 2 ) ),
 			timingSource,
+			timingSourceKind,
+			gpuTimestampStatus: 'unavailable',
 			projectionTimingSource: timingSource,
 			deterministicTimerDetected,
+			timingBuckets,
 			precision: this.getPrecisionInfo( renderer )
 		};
 
@@ -1049,6 +1372,20 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
+	async _repackVisibilityDepth( renderer, probeIndex ) {
+
+		this.visibilityDepthTarget.viewport.set( 0, 0, this.visibilityDepthResolution, this.visibilityDepthResolution );
+		this.visibilityDepthTarget.scissor.set( 0, 0, this.visibilityDepthResolution, this.visibilityDepthResolution );
+		this.visibilityDepthTarget.scissorTest = false;
+		this.visibilityRepackProbeIndex.value = probeIndex;
+
+		renderer.autoClear = false;
+		renderer.setRenderTarget( this.visibilityDepthTarget, probeIndex );
+		renderer.render( this.visibilityRepackScene, this.visibilityRepackCamera );
+		this.visibilityDepthMode = 'moments';
+
+	}
+
 	_createResources( renderer = null ) {
 
 		const oldHelperVisible = this.helper?.visible ?? false;
@@ -1067,6 +1404,11 @@ class LightProbeGridGPU extends Object3D {
 		} );
 
 		this.cubeCamera = new CubeCamera( 0.05, 20, this.cubeRenderTarget );
+		this.visibilityDistanceTarget = new CubeRenderTarget( this.cubemapSize, {
+			type: this._getTextureType(),
+			generateMipmaps: false
+		} );
+		this.visibilityDistanceCamera = new CubeCamera( 0.05, VISIBILITY_DEPTH_MAX_DISTANCE, this.visibilityDistanceTarget );
 		this.coefficientTarget = new RenderTarget( SH_COEFFICIENTS, this.totalProbes, {
 			format: RGBAFormat,
 			type: this._getTextureType(),
@@ -1091,6 +1433,19 @@ class LightProbeGridGPU extends Object3D {
 			depthBuffer: false
 		} );
 		this.texture = this.atlasTarget.texture;
+		this.visibilityDepthTarget = new RenderTarget3D(
+			this.visibilityDepthResolution,
+			this.visibilityDepthResolution,
+			this.totalProbes,
+			{
+				format: RGBAFormat,
+				type: this._getTextureType(),
+				minFilter: NearestFilter,
+				magFilter: NearestFilter,
+				generateMipmaps: false,
+				depthBuffer: false
+			}
+		);
 
 		this._createProbeValidityTexture();
 		this.projectionMaterial = this._createProjectionMaterial();
@@ -1098,6 +1453,8 @@ class LightProbeGridGPU extends Object3D {
 		this.repackFragmentMaterial = this._createRepackMaterial( this.coefficientTarget.texture );
 		this.repackComputeProjectionMaterial = this._createRepackMaterial( this.computeProjectionTexture );
 		this.repackMaterial = this.repackFragmentMaterial;
+		this.visibilityDistanceMaterial = this._createVisibilityDistanceMaterial();
+		this.visibilityRepackMaterial = this._createVisibilityRepackMaterial();
 
 		if ( this.projectionScene === null ) {
 
@@ -1117,8 +1474,18 @@ class LightProbeGridGPU extends Object3D {
 
 		}
 
+		if ( this.visibilityRepackScene === null ) {
+
+			this.visibilityRepackCamera = new OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
+			this.visibilityRepackMesh = new Mesh( new PlaneGeometry( 2, 2 ), this.visibilityRepackMaterial );
+			this.visibilityRepackScene = new Scene();
+			this.visibilityRepackScene.add( this.visibilityRepackMesh );
+
+		}
+
 		this.projectionMesh.material = this.projectionMaterial;
 		this.repackMesh.material = this.repackMaterial;
+		this.visibilityRepackMesh.material = this.visibilityRepackMaterial;
 		this._createHelper();
 		this.helper.visible = oldHelperVisible;
 
@@ -1150,6 +1517,8 @@ class LightProbeGridGPU extends Object3D {
 			const offset = i * 4;
 
 			data[ offset ] = validity;
+			data[ offset + 1 ] = validity;
+			data[ offset + 2 ] = DEFAULT_PROBE_LAYER_MASK;
 			data[ offset + 3 ] = 1;
 
 			if ( validity < 1 ) this.invalidProbeCount ++;
@@ -1227,6 +1596,97 @@ class LightProbeGridGPU extends Object3D {
 
 		this.helper.instanceMatrix.needsUpdate = true;
 		this._applyHelperDepthMode();
+
+	}
+
+	_createVisibilityDistanceMaterial() {
+
+		const material = new MeshBasicNodeMaterial();
+		const distance = positionWorld.sub( this.visibilityProbePosition ).length();
+		const normalizedDistance = distance.div( this.visibilityMaxDistance ).clamp( 0, 1 );
+
+		material.colorNode = vec3( normalizedDistance );
+		material.toneMapped = false;
+
+		return material;
+
+	}
+
+	_createVisibilityRepackMaterial() {
+
+		const pixelSize = float( 1 ).div( this.visibilityDepthResolution );
+		const halfPixel = pixelSize.mul( 0.5 );
+		const negativeHalfPixel = float( 0 ).sub( halfPixel );
+		const distanceCube = this.visibilityDistanceTarget.texture;
+
+		const octaDirection = Fn( ( { octUv } ) => {
+
+			const p = octUv.clamp( 0, 1 ).mul( 2 ).sub( 1 );
+			const x = p.x.toVar();
+			const y = p.y.toVar();
+			const z = float( 1 ).sub( x.abs() ).sub( y.abs() ).toVar();
+
+			If( z.lessThan( 0 ), () => {
+
+				const oldX = x.toVar();
+				x.assign( float( 1 ).sub( y.abs() ).mul( oldX.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
+				y.assign( float( 1 ).sub( oldX.abs() ).mul( y.greaterThanEqual( 0 ).select( float( 1 ), float( - 1 ) ) ) );
+
+			} );
+
+			return vec3( x, y, z ).normalize();
+
+		} );
+
+		const sampleRadialDistance = Fn( ( { octUv } ) => {
+
+			const dir = octaDirection( { octUv } );
+			const normalizedDistance = cubeTexture( distanceCube, dir, 0 ).r.clamp( 0, 1 );
+			const receiverDistance = normalizedDistance.mul( this.visibilityMaxDistance );
+			const hitConfidence = normalizedDistance.greaterThan( pixelSize.mul( 0.5 ) ).select( float( 1 ), float( 0 ) );
+
+			return vec4( receiverDistance, receiverDistance.mul( receiverDistance ), hitConfidence, float( 0 ) );
+
+		} );
+
+		const repack = Fn( () => {
+
+			const center = uv();
+			const sampleCenter = sampleRadialDistance( { octUv: center } );
+			const samplePositiveX = sampleRadialDistance( { octUv: center.add( vec2( halfPixel, 0 ) ) } );
+			const sampleNegativeX = sampleRadialDistance( { octUv: center.add( vec2( negativeHalfPixel, 0 ) ) } );
+			const samplePositiveY = sampleRadialDistance( { octUv: center.add( vec2( 0, halfPixel ) ) } );
+			const sampleNegativeY = sampleRadialDistance( { octUv: center.add( vec2( 0, negativeHalfPixel ) ) } );
+			const hitSum = sampleCenter.z
+				.add( samplePositiveX.z )
+				.add( sampleNegativeX.z )
+				.add( samplePositiveY.z )
+				.add( sampleNegativeY.z );
+			const safeHitSum = hitSum.max( 1 );
+			const meanDistance = sampleCenter.x.mul( sampleCenter.z )
+				.add( samplePositiveX.x.mul( samplePositiveX.z ) )
+				.add( sampleNegativeX.x.mul( sampleNegativeX.z ) )
+				.add( samplePositiveY.x.mul( samplePositiveY.z ) )
+				.add( sampleNegativeY.x.mul( sampleNegativeY.z ) )
+				.div( safeHitSum );
+			const meanSquaredDistance = sampleCenter.y.mul( sampleCenter.z )
+				.add( samplePositiveX.y.mul( samplePositiveX.z ) )
+				.add( sampleNegativeX.y.mul( sampleNegativeX.z ) )
+				.add( samplePositiveY.y.mul( samplePositiveY.z ) )
+				.add( sampleNegativeY.y.mul( sampleNegativeY.z ) )
+				.div( safeHitSum )
+				.add( VISIBILITY_MIN_VARIANCE );
+			const hitConfidence = hitSum.div( 5 ).clamp( 0, 1 );
+
+			return vec4( meanDistance, meanSquaredDistance, hitConfidence, float( 0 ) );
+
+		} );
+
+		const material = new NodeMaterial();
+		material.fragmentNode = repack();
+		material.toneMapped = false;
+
+		return material;
 
 	}
 

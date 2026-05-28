@@ -119,11 +119,17 @@
 			};
 
 			const timings = {
+				sceneUpdateMs: 0,
 				cubemapMs: 0,
+				radianceCubemapCaptureMs: 0,
 				projectionMs: 0,
+				computeShProjectionMs: 0,
 				copyMs: 0,
+				atlasRepackMs: 0,
 				visibilityCubemapMs: 0,
+				distanceCubemapCaptureMs: 0,
 				visibilityRepackMs: 0,
+				verifierReadbackMs: 0,
 				visibilityDepthMode: 'not-baked',
 				projectionBackendRequest: 'auto',
 				projectionBackend: 'fragment-coefficient-projection',
@@ -135,7 +141,10 @@
 				frameMs: 0,
 				wallClockTotalBakeMs: 0,
 				timingSource: 'unavailable',
+				timingSourceKind: 'unavailable',
+				gpuTimestampStatus: 'unavailable',
 				projectionTimingSource: 'unavailable',
+				timingBuckets: null,
 				deterministicTimerDetected: false
 			};
 
@@ -155,12 +164,33 @@
 				const hasSourceTiming = sourceTotalBakeMs > 0;
 				const hasFallbackTiming = fallbackTotalBakeMs > 0;
 
-				return {
-					cubemapMs: Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
-					projectionMs: Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
-					copyMs: Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
-					visibilityCubemapMs: Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+				const timingSourceKind = nextTimings?.timingSourceKind ?? ( nextTimings?.timingSource !== undefined && nextTimings.timingSource !== 'unavailable' ? 'performance.now diagnostic' : 'unavailable' );
+				const timingBuckets = nextTimings?.timingBuckets ?? {
+					sceneUpdateMs: Number.isFinite( nextTimings?.sceneUpdateMs ) ? nextTimings.sceneUpdateMs : 0,
+					radianceCubemapCaptureMs: Number.isFinite( nextTimings?.radianceCubemapCaptureMs ) ? nextTimings.radianceCubemapCaptureMs : Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					distanceCubemapCaptureMs: Number.isFinite( nextTimings?.distanceCubemapCaptureMs ) ? nextTimings.distanceCubemapCaptureMs : Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+					computeShProjectionMs: Number.isFinite( nextTimings?.computeShProjectionMs ) ? nextTimings.computeShProjectionMs : Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
 					visibilityRepackMs: Number.isFinite( nextTimings?.visibilityRepackMs ) ? nextTimings.visibilityRepackMs : 0,
+					atlasRepackMs: Number.isFinite( nextTimings?.atlasRepackMs ) ? nextTimings.atlasRepackMs : Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					verifierReadbackMs: Number.isFinite( nextTimings?.verifierReadbackMs ) ? nextTimings.verifierReadbackMs : 0,
+					source: timingSourceKind,
+					legacySource: nextTimings?.timingSource ?? 'unavailable',
+					verifierReadbackTimingSource: 'unavailable',
+					runtimeTimingSource: 'unavailable'
+				};
+
+				return {
+					sceneUpdateMs: Number.isFinite( nextTimings?.sceneUpdateMs ) ? nextTimings.sceneUpdateMs : 0,
+					cubemapMs: Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					radianceCubemapCaptureMs: Number.isFinite( nextTimings?.radianceCubemapCaptureMs ) ? nextTimings.radianceCubemapCaptureMs : Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					projectionMs: Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
+					computeShProjectionMs: Number.isFinite( nextTimings?.computeShProjectionMs ) ? nextTimings.computeShProjectionMs : Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
+					copyMs: Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					atlasRepackMs: Number.isFinite( nextTimings?.atlasRepackMs ) ? nextTimings.atlasRepackMs : Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					visibilityCubemapMs: Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+					distanceCubemapCaptureMs: Number.isFinite( nextTimings?.distanceCubemapCaptureMs ) ? nextTimings.distanceCubemapCaptureMs : Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+					visibilityRepackMs: Number.isFinite( nextTimings?.visibilityRepackMs ) ? nextTimings.visibilityRepackMs : 0,
+					verifierReadbackMs: Number.isFinite( nextTimings?.verifierReadbackMs ) ? nextTimings.verifierReadbackMs : 0,
 					visibilityDepthMode: nextTimings?.visibilityDepthMode ?? 'not-baked',
 					projectionBackendRequest: nextTimings?.projectionBackendRequest ?? 'auto',
 					projectionBackend: nextTimings?.projectionBackend ?? 'fragment-coefficient-projection',
@@ -171,7 +201,10 @@
 					totalBakeMs: hasSourceTiming ? sourceTotalBakeMs : hasFallbackTiming ? fallbackTotalBakeMs : sourceTotalBakeMs,
 					wallClockTotalBakeMs: fallbackTotalBakeMs,
 					timingSource: nextTimings?.timingSource ?? ( hasSourceTiming ? 'probe-grid-performance-now' : hasFallbackTiming ? 'harness-wall-clock-fallback' : 'unavailable' ),
+					timingSourceKind,
+					gpuTimestampStatus: nextTimings?.gpuTimestampStatus ?? 'unavailable',
 					projectionTimingSource: nextTimings?.projectionTimingSource ?? nextTimings?.timingSource ?? 'unavailable',
+					timingBuckets,
 					deterministicTimerDetected: nextTimings?.deterministicTimerDetected ?? ( typeof performance._now === 'function' && performance.now() === 0 )
 				};
 
@@ -786,11 +819,17 @@
 
 					params.bakeStatus = 'ready';
 					params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
+					timings.sceneUpdateMs = normalizedTimings.sceneUpdateMs;
 					timings.cubemapMs = normalizedTimings.cubemapMs;
+					timings.radianceCubemapCaptureMs = normalizedTimings.radianceCubemapCaptureMs;
 					timings.projectionMs = normalizedTimings.projectionMs;
+					timings.computeShProjectionMs = normalizedTimings.computeShProjectionMs;
 					timings.copyMs = normalizedTimings.copyMs;
+					timings.atlasRepackMs = normalizedTimings.atlasRepackMs;
 					timings.visibilityCubemapMs = normalizedTimings.visibilityCubemapMs;
+					timings.distanceCubemapCaptureMs = normalizedTimings.distanceCubemapCaptureMs;
 					timings.visibilityRepackMs = normalizedTimings.visibilityRepackMs;
+					timings.verifierReadbackMs = normalizedTimings.verifierReadbackMs;
 					timings.visibilityDepthMode = normalizedTimings.visibilityDepthMode;
 					timings.projectionBackendRequest = normalizedTimings.projectionBackendRequest;
 					timings.projectionBackend = normalizedTimings.projectionBackend;
@@ -801,7 +840,10 @@
 					timings.totalBakeMs = normalizedTimings.totalBakeMs;
 					timings.wallClockTotalBakeMs = normalizedTimings.wallClockTotalBakeMs;
 					timings.timingSource = normalizedTimings.timingSource;
+					timings.timingSourceKind = normalizedTimings.timingSourceKind;
+					timings.gpuTimestampStatus = normalizedTimings.gpuTimestampStatus;
 					timings.projectionTimingSource = normalizedTimings.projectionTimingSource;
+					timings.timingBuckets = normalizedTimings.timingBuckets;
 					timings.deterministicTimerDetected = normalizedTimings.deterministicTimerDetected;
 
 				} catch ( error ) {

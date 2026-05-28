@@ -365,6 +365,7 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 			`leak matrix ${ row.label }: expected bounded dark-pixel ratio.` );
 		assert( row.leakMetrics.cellEdgeContrast <= 255,
 			`leak matrix ${ row.label }: expected bounded cell-edge contrast.` );
+
 	}
 
 	assert( leakThinUnweighted.fixtureMode === 'thin-wall' &&
@@ -401,9 +402,15 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 		leakThinValidityWeighted.sampling.invalidProbeCount > 0 &&
 		leakThinValidityWeighted.occupancy.occupiedProbeCount > 0,
 	'leak matrix: validity-weighted thin-wall row must upload controlled wall occupancy metadata.' );
-	assert( leakThinVisibilityMoments.visibilityDepth.available === false &&
-		leakSealedVisibilityMoments.visibilityDepth.available === false,
-	'leak matrix: runtime visibility/depth rows must report unavailable during proof-6 instead of claiming moment-backed runtime behavior.' );
+	assert( leakThinVisibilityMoments.visibilityDepth.available === true &&
+		leakThinVisibilityMoments.visibilityDepth.mode === 'moments' &&
+		leakThinVisibilityMoments.visibilityDepth.bytes > 0 &&
+		leakThinVisibilityMoments.guardedVisibilityProofMode === 'guarded' &&
+		leakSealedVisibilityMoments.visibilityDepth.available === true &&
+		leakSealedVisibilityMoments.visibilityDepth.mode === 'moments' &&
+		leakSealedVisibilityMoments.visibilityDepth.bytes > 0 &&
+		leakSealedVisibilityMoments.guardedVisibilityProofMode === 'guarded',
+	'leak matrix: visibility rows must use the private guarded moment-backed proof path.' );
 	assert( leakZeroUnweighted.negativeControlStatus === 'OPEN' &&
 		leakZeroValidityWeighted.negativeControlStatus === 'OPEN' &&
 		leakZeroVisibilityMoments.negativeControlStatus === 'OPEN' &&
@@ -446,23 +453,23 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 	assert( Math.abs( leakMatrix.comparisons.thinWall.validityCellEdgeContrastDelta ) <= 255 &&
 		Number.isFinite( leakMatrix.comparisons.thinWall.normalWrongSideColorRatioDelta ) &&
 		Number.isFinite( leakMatrix.comparisons.thinWall.validityWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.visibilityWrongSideColorRatioDelta ) &&
+		Number.isFinite( leakMatrix.comparisons.thinWall.visibility.wrongSide.delta ) &&
 		Number.isFinite( leakMatrix.comparisons.thinWall.validityCorrectBouncePreservation ) &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.visibilityCorrectBouncePreservation ) &&
+		Number.isFinite( leakMatrix.comparisons.thinWall.visibility.correctBounce.preservation ) &&
 		Number.isFinite( leakMatrix.comparisons.sealedWall.validityWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityCenterWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilitySurfaceWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityMaskedWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityPreToneMaskedWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityWrongSideImprovementRatio ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityCenterWrongSideImprovementRatio ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilitySurfaceWrongSideImprovementRatio ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityMaskedWrongSideImprovementRatio ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityPreToneMaskedWrongSideImprovementRatio ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityCorrectBouncePreservation ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityMaskedCorrectBouncePreservation ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibilityPreToneMaskedCorrectBouncePreservation ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.wrongSide.delta ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.centerWrongSide.delta ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.surfaceWrongSide.delta ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.delta ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.preToneMaskedWrongSide.delta ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.centerWrongSide.improvement ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.surfaceWrongSide.improvement ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.preToneMaskedWrongSide.improvement ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.maskedCorrectBounce.preservation ) &&
+		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.preToneMaskedCorrectBounce.preservation ) &&
 		Number.isFinite( leakMatrix.comparisons.zeroThickness.validityWrongSideColorRatioDelta ),
 	'leak matrix: expected finite bounded leak comparison deltas.' );
 	assert( [ 'OPEN', 'SUPPORTED-BY-SEALED-FIXTURE' ].includes( leakMatrix.comparisons.sealedWall.status ) &&

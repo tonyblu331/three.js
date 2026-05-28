@@ -1,4 +1,5 @@
 import { createLightProbeResearchReportSections } from './lightprobegrid-gpu-proof-research-sections.js';
+import { deriveVisibilityProofStatus } from './lightprobegrid-gpu-proof-visibility.js';
 import { lightProbeWebGLReferenceLabel } from './lightprobegrid-gpu-smoke-config.js';
 
 const roundMetric = value => Number( value.toFixed( 4 ) );
@@ -40,6 +41,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 	const computeProjectionProfiling = getSmokeStep( smokeResults, 'compute projection profiling' ).computeProjectionProfiling;
 	const shMathContract = getSmokeStep( smokeResults, 'sh math contract' ).shMathContract;
 	const visibilityMomentInspection = getSmokeStep( smokeResults, 'visibility moment inspection' ).visibilityMomentInspection;
+	const visibilityProofStatus = deriveVisibilityProofStatus( visibilityMomentInspection, visibilityMomentInspection.evidenceStatus );
 	const visibilityWeightingDiagnostic = getSmokeStep( smokeResults, 'visibility weighting diagnostic' ).visibilityWeightingDiagnostic;
 	const sealedVisibilityWeightingDiagnostic = getSmokeStep( smokeResults, 'sealed visibility weighting diagnostic' ).sealedVisibilityWeightingDiagnostic;
 	const sealedReceiverNormalDiagnostic = getSmokeStep( smokeResults, 'sealed receiver normal convention diagnostic' ).sealedReceiverNormalDiagnostic;
@@ -57,7 +59,9 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 	const probeDensityMetricStudy = sealedShContributionDiagnostic.probeDensityMetricStudy;
 	const sealedReceiverSurfaceQuadratureDiagnostic = sealedVisibilityWeightingDiagnostic.receiverSurfaceQuadratureDiagnostic;
 	const sealedReceiverGpuDebugDiagnostic = sealedVisibilityWeightingDiagnostic.receiverGpuDebugDiagnostic;
-	const sealedFinalVisibleMaterialStudy = sealedReceiverGpuDebugDiagnostic.finalVisibleMaterialStudy;
+	const sealedPresentationStudy = sealedReceiverGpuDebugDiagnostic.presentationStudy;
+	const receiverPixelParityStudy = sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy ?? null;
+	const visiblePixelCpuMirrorStudy = sealedPresentationStudy.summary.visiblePixelCpuMirrorStudy ?? null;
 	let sealedFailureDomain = leakMatrix.comparisons.sealedWall.status === 'OPEN' &&
 		sealedVisibilityWeightingDiagnostic.interrogationFinding === 'CPU-DIRECTIONAL-SUPPRESSION-SUPPORTED' ?
 		sealedShContributionDiagnostic.suspectedFailureDomain :
@@ -103,49 +107,152 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 	].sort( ( a, b ) => a.delta - b.delta );
 	const bestCpuRenderMetricAgreement = cpuRenderMetricDeltas[ 0 ];
 	const cpuRenderAgreementGate = bestCpuRenderMetricAgreement.delta <= cpuRenderAgreementTolerance ? 'SUPPORTED' : 'OPEN';
-	const offscreenSceneLinearContributionRows = sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearContributionRows ?? [];
-	const offscreenSceneLinearNeutralContributionRows = sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionRows ?? [];
-	const originalProbeOnlySceneLinearRow = offscreenSceneLinearContributionRows.find( row => row.label === 'probes-only' ) ?? null;
-	const neutralProbeOnlySceneLinearRow = offscreenSceneLinearNeutralContributionRows.find( row => row.label === 'neutral-probes-only' ) ?? null;
-	const probeOnlySceneLinearCpuDeltaMean = originalProbeOnlySceneLinearRow !== null &&
-		Number.isFinite( originalProbeOnlySceneLinearRow.maskedWrongSideColorRatio ) ?
+	const offscreenSceneLinearContributionRows = sealedPresentationStudy.summary.offscreenSceneLinearContributionRows ?? [];
+	const offscreenSceneLinearNeutralContributionRows = sealedPresentationStudy.summary.offscreenSceneLinearNeutralContributionRows ?? [];
+	const standardProbeOnlySceneLinearRow = offscreenSceneLinearContributionRows.find( row => row.label === 'probes-only' ) ?? null;
+	const standardNeutralProbeOnlySceneLinearRow = offscreenSceneLinearNeutralContributionRows.find( row => row.label === 'neutral-probes-only' ) ?? null;
+	const runtimeProbeOnlySceneLinearRow = offscreenSceneLinearContributionRows.find( row => row.label === 'runtime-probe-indirect-scene-linear' ) ??
+		standardProbeOnlySceneLinearRow;
+	const neutralRuntimeProbeOnlySceneLinearRow = offscreenSceneLinearNeutralContributionRows.find( row => row.label === 'neutral-runtime-probe-indirect-scene-linear' ) ??
+		standardNeutralProbeOnlySceneLinearRow;
+	const visiblePixelSceneLinearCpuDeltaMean = visiblePixelCpuMirrorStudy?.summary?.cpuGpuWrongSideRatioDeltaMean ?? null;
+	const visiblePixelSceneLinearCpuDeltaMax = visiblePixelCpuMirrorStudy?.summary?.cpuGpuWrongSideRatioDeltaMax ?? null;
+	const visiblePixelSceneLinearCpuAgreementSupported = visiblePixelCpuMirrorStudy?.status === 'SUPPORTED-VISIBLE-PIXEL-CPU-GPU-SCENE-LINEAR-PARITY' &&
+		visiblePixelSceneLinearCpuDeltaMean !== null &&
+		visiblePixelSceneLinearCpuDeltaMax !== null &&
+		( visiblePixelSceneLinearCpuDeltaMean <= cpuRenderAgreementTolerance ||
+			visiblePixelSceneLinearCpuDeltaMax <= cpuRenderAgreementTolerance );
+	const surfaceProbeOnlySceneLinearCpuDeltaMean = runtimeProbeOnlySceneLinearRow !== null &&
+		Number.isFinite( runtimeProbeOnlySceneLinearRow.maskedWrongSideColorRatio ) ?
 		Number( Math.abs(
-			originalProbeOnlySceneLinearRow.maskedWrongSideColorRatio -
+			runtimeProbeOnlySceneLinearRow.maskedWrongSideColorRatio -
 			sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceRuntimeWrongRatioMean
 		).toFixed( 4 ) ) :
 		null;
-	const probeOnlySceneLinearCpuDeltaMax = originalProbeOnlySceneLinearRow !== null &&
-		Number.isFinite( originalProbeOnlySceneLinearRow.maskedWrongSideColorRatio ) ?
+	const surfaceProbeOnlySceneLinearCpuDeltaMax = runtimeProbeOnlySceneLinearRow !== null &&
+		Number.isFinite( runtimeProbeOnlySceneLinearRow.maskedWrongSideColorRatio ) ?
 		Number( Math.abs(
-			originalProbeOnlySceneLinearRow.maskedWrongSideColorRatio -
+			runtimeProbeOnlySceneLinearRow.maskedWrongSideColorRatio -
 			sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceRuntimeWrongRatioMax
 		).toFixed( 4 ) ) :
 		null;
+	const probeOnlySceneLinearCpuDeltaMean = visiblePixelSceneLinearCpuDeltaMean ?? surfaceProbeOnlySceneLinearCpuDeltaMean;
+	const probeOnlySceneLinearCpuDeltaMax = visiblePixelSceneLinearCpuDeltaMax ?? surfaceProbeOnlySceneLinearCpuDeltaMax;
 	const probeOnlySceneLinearCpuAgreement = {
-		status: originalProbeOnlySceneLinearRow !== null &&
-			originalProbeOnlySceneLinearRow.status === 'SUPPORTED' &&
-			probeOnlySceneLinearCpuDeltaMean !== null &&
-			probeOnlySceneLinearCpuDeltaMax !== null &&
-			Math.min( probeOnlySceneLinearCpuDeltaMean, probeOnlySceneLinearCpuDeltaMax ) <= cpuRenderAgreementTolerance ?
+		status: visiblePixelSceneLinearCpuAgreementSupported ||
+			( runtimeProbeOnlySceneLinearRow !== null &&
+				runtimeProbeOnlySceneLinearRow.status === 'SUPPORTED' &&
+				surfaceProbeOnlySceneLinearCpuDeltaMean !== null &&
+				surfaceProbeOnlySceneLinearCpuDeltaMax !== null &&
+				( surfaceProbeOnlySceneLinearCpuDeltaMean <= cpuRenderAgreementTolerance ||
+					surfaceProbeOnlySceneLinearCpuDeltaMax <= cpuRenderAgreementTolerance ) ) ?
 			'SUPPORTED' :
 			'OPEN',
-		mode: 'probe-indirect-only-scene-linear-vs-cpu-surface-sh',
-		originalProbeOnlyAvailable: originalProbeOnlySceneLinearRow !== null,
-		neutralProbeOnlyAvailable: neutralProbeOnlySceneLinearRow !== null,
-		originalProbeOnlyMaskedWrongSideColorRatio: originalProbeOnlySceneLinearRow?.maskedWrongSideColorRatio ?? null,
-		originalProbeOnlyMaskedCorrectBounceRatio: originalProbeOnlySceneLinearRow?.maskedCorrectBounceRatio ?? null,
-		neutralProbeOnlyMaskedWrongSideColorRatio: neutralProbeOnlySceneLinearRow?.maskedWrongSideColorRatio ?? null,
-		neutralProbeOnlyMaskedCorrectBounceRatio: neutralProbeOnlySceneLinearRow?.maskedCorrectBounceRatio ?? null,
+		mode: visiblePixelCpuMirrorStudy !== null ?
+			'probe-indirect-only-scene-linear-vs-cpu-visible-pixel-sh' :
+			'probe-indirect-only-scene-linear-vs-cpu-surface-sh',
+		comparisonSourceLabel: runtimeProbeOnlySceneLinearRow?.label ?? null,
+		standardProbeOnlyLabel: standardProbeOnlySceneLinearRow?.label ?? null,
+		originalProbeOnlyAvailable: runtimeProbeOnlySceneLinearRow !== null,
+		neutralProbeOnlyAvailable: neutralRuntimeProbeOnlySceneLinearRow !== null,
+		originalProbeOnlyMaskedWrongSideColorRatio: runtimeProbeOnlySceneLinearRow?.maskedWrongSideColorRatio ?? null,
+		originalProbeOnlyMaskedCorrectBounceRatio: runtimeProbeOnlySceneLinearRow?.maskedCorrectBounceRatio ?? null,
+		neutralProbeOnlyMaskedWrongSideColorRatio: neutralRuntimeProbeOnlySceneLinearRow?.maskedWrongSideColorRatio ?? null,
+		neutralProbeOnlyMaskedCorrectBounceRatio: neutralRuntimeProbeOnlySceneLinearRow?.maskedCorrectBounceRatio ?? null,
+		standardProbeOnlyMaskedWrongSideColorRatio: standardProbeOnlySceneLinearRow?.maskedWrongSideColorRatio ?? null,
+		standardProbeOnlyMaskedCorrectBounceRatio: standardProbeOnlySceneLinearRow?.maskedCorrectBounceRatio ?? null,
 		cpuSurfaceRuntimeWrongRatioMean: sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceRuntimeWrongRatioMean,
 		cpuSurfaceRuntimeWrongRatioMax: sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceRuntimeWrongRatioMax,
+		surfaceDeltaMean: surfaceProbeOnlySceneLinearCpuDeltaMean,
+		surfaceDeltaMax: surfaceProbeOnlySceneLinearCpuDeltaMax,
+		visiblePixelMirrorStatus: visiblePixelCpuMirrorStudy?.status ?? null,
+		visiblePixelMirrorDominantMismatchSource: visiblePixelCpuMirrorStudy?.summary?.dominantMismatchSource ?? null,
+		visiblePixelSampleCount: visiblePixelCpuMirrorStudy?.summary?.sampleCount ?? null,
+		cpuVisiblePixelRuntimeWrongRatioMean: visiblePixelCpuMirrorStudy?.summary?.cpuSampledWrongSideRatioMean ?? null,
+		cpuVisiblePixelRuntimeWrongRatioMax: visiblePixelCpuMirrorStudy?.summary?.cpuSampledWrongSideRatioMax ?? null,
+		gpuVisiblePixelRuntimeWrongRatioMean: visiblePixelCpuMirrorStudy?.summary?.gpuSampledWrongSideRatioMean ?? null,
+		gpuVisiblePixelRuntimeWrongRatioMax: visiblePixelCpuMirrorStudy?.summary?.gpuSampledWrongSideRatioMax ?? null,
 		deltaMean: probeOnlySceneLinearCpuDeltaMean,
 		deltaMax: probeOnlySceneLinearCpuDeltaMax,
 		tolerance: cpuRenderAgreementTolerance,
-		diagnosticConclusion: originalProbeOnlySceneLinearRow === null ?
-			'Probe-only offscreen scene-linear row is missing; final-visible mapping remains open.' :
-			Math.min( probeOnlySceneLinearCpuDeltaMean ?? Infinity, probeOnlySceneLinearCpuDeltaMax ?? Infinity ) <= cpuRenderAgreementTolerance ?
-				'Probe-only offscreen scene-linear render is close enough to CPU surface attribution for this fixture.' :
-				'Probe-only offscreen scene-linear render still disagrees with CPU surface attribution; isolate receiver mask, material albedo, and debug shader equivalence before tuning visibility.'
+		diagnosticConclusion: runtimeProbeOnlySceneLinearRow === null ?
+			'Runtime-equivalent probe-indirect offscreen scene-linear row is missing; presentation mapping remains open.' :
+			visiblePixelSceneLinearCpuAgreementSupported ?
+				'Runtime-equivalent probe-indirect scene-linear pixels agree with a CPU mirror seeded from the exact GPU-read visible receiver positions; the old CPU surface quadrature aggregate is not the matching sample set.' :
+			probeOnlySceneLinearCpuDeltaMean <= cpuRenderAgreementTolerance ||
+				probeOnlySceneLinearCpuDeltaMax <= cpuRenderAgreementTolerance ?
+				'Runtime-equivalent probe-indirect offscreen scene-linear render is close enough to CPU surface attribution for this fixture.' :
+				receiverPixelParityStudy?.summary?.dominantMismatchSource === 'cpu-vs-gpu-sample-position-mismatch' ?
+					'Runtime-equivalent probe-indirect offscreen scene-linear render still disagrees with CPU surface attribution because the projected CPU quadrature samples do not land on the same visible GPU receiver fragments; compare against GPU pixel positions before tuning visibility.' :
+					'Runtime-equivalent probe-indirect offscreen scene-linear render still disagrees with CPU surface attribution; isolate receiver mask, debug shader equivalence, and CPU/GPU weighting before tuning visibility.'
+	};
+	const presentationDebugTargets = {
+		directOnly: offscreenSceneLinearContributionRows.some( row => row.label === 'direct-only' ),
+		indirectOnlySceneLinear: runtimeProbeOnlySceneLinearRow !== null,
+		indirectAfterAlbedo: offscreenSceneLinearContributionRows.some( row => row.label === 'probe-indirect-after-albedo' ),
+		finalBeforeToneMapping: sealedPresentationStudy.summary.noToneMappingMaskedWrongSideColorRatio !== undefined,
+		finalAfterToneMapping: sealedPresentationStudy.summary.standardMaskedWrongSideColorRatio !== undefined,
+		receiverMaskOverlay: sealedPresentationStudy.summary.receiverMaskOverlayAvailable === true ||
+			sealedVisibilityLeakRow.leakMetrics.maskedReceiverRegionMetricMode !== undefined
+	};
+	const probeIndirectGate = probeOnlySceneLinearCpuAgreement.status;
+	const presentationGate = sealedPresentationStudy.status === 'SUPPORTED' ?
+		probeOnlySceneLinearCpuAgreement.status === 'SUPPORTED' ?
+			'SUPPORTED' :
+			'OPEN-CPU-GPU' :
+		sealedPresentationStudy.status;
+	const presentationConclusion = presentationGate === 'OPEN-CPU-GPU' ?
+		'Presentation material path is not promotable because the runtime-equivalent probe-indirect scene-linear debug target does not agree with CPU surface SH attribution.' :
+		sealedPresentationStudy.summary.diagnosticConclusion;
+	const receiverPixelParityDominantMismatchSource = receiverPixelParityStudy?.summary?.dominantMismatchSource ?? null;
+	const visiblePixelDominantMismatchSource = visiblePixelCpuMirrorStudy?.summary?.dominantMismatchSource ?? null;
+	const sceneLinearMismatchClassifier = {
+		...sealedPresentationStudy.summary.sceneLinearMismatchClassifier,
+		dominantMismatchSource: probeIndirectGate === 'SUPPORTED' ?
+			sealedPresentationStudy.summary.sceneLinearMismatchClassifier.dominantMismatchSource :
+			visiblePixelDominantMismatchSource ?? receiverPixelParityDominantMismatchSource ?? sealedPresentationStudy.summary.sceneLinearMismatchClassifier.dominantMismatchSource,
+		receiverPixelParityStatus: receiverPixelParityStudy?.status ?? null,
+		receiverPixelParityDominantMismatchSource,
+		receiverPixelParityConclusion: receiverPixelParityStudy?.summary?.diagnosticConclusion ?? null,
+		visiblePixelCpuMirrorStatus: visiblePixelCpuMirrorStudy?.status ?? null,
+		visiblePixelDominantMismatchSource,
+		visiblePixelCpuMirrorConclusion: visiblePixelCpuMirrorStudy?.summary?.diagnosticConclusion ?? null,
+		diagnosticConclusion: probeIndirectGate === 'SUPPORTED' ?
+			sealedPresentationStudy.summary.sceneLinearMismatchClassifier.diagnosticConclusion :
+			visiblePixelDominantMismatchSource !== null ?
+				visiblePixelCpuMirrorStudy.summary.diagnosticConclusion :
+			receiverPixelParityDominantMismatchSource === 'cpu-vs-gpu-sample-position-mismatch' ?
+				'Runtime-equivalent probe-indirect scene-linear aggregate remains open because projected CPU quadrature samples do not match the same visible GPU receiver fragments; the next closure step is a CPU mirror driven by GPU-read receiver pixel positions.' :
+				sealedPresentationStudy.summary.sceneLinearMismatchClassifier.diagnosticConclusion
+	};
+	const gatedLeakComparisons = {
+		...leakMatrix.comparisons,
+		sealedWall: {
+			...leakMatrix.comparisons.sealedWall,
+			status: visibilityProofStatus.visibilityStatus === 'SUPPORTED' &&
+				probeIndirectGate === 'SUPPORTED' &&
+				leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement > 0.05 &&
+				leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement > 0.05 &&
+				leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation >= 0.9 ?
+				'SUPPORTED' :
+				'OPEN',
+			promotionBlockers: [
+				visibilityProofStatus.visibilityStatus === 'SUPPORTED' ? null : 'moment-backed visibility is not supported',
+				probeIndirectGate === 'SUPPORTED' ? null : 'probe-indirect CPU/GPU agreement is not supported',
+				leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement > 0.05 ? null : 'wrong-side improvement <= 0.05',
+				leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement > 0.05 ? null : 'masked wrong-side improvement <= 0.05',
+				leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation >= 0.9 ? null : 'correct-bounce preservation < 0.9'
+			].filter( Boolean ),
+			promotionRequirements: {
+				momentBackedVisibility: 'SUPPORTED',
+				probeIndirectGate: 'SUPPORTED',
+				visibility: {
+					wrongSideImprovement: '> 0.05',
+					maskedWrongSideImprovement: '> 0.05',
+					correctBouncePreservation: '>= 0.9'
+				}
+			}
+		}
 	};
 	const sealedRenderMetricMismatch = {
 		status: sealedVisibilityLeakRow.leakMetrics.wrongSideColorRatio > 0.25 &&
@@ -217,33 +324,53 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		gpuDebugLinearIrradianceAgreementMode: sealedReceiverGpuDebugDiagnostic.summary.linearIrradianceAgreementMode,
 		gpuDebugWeightTermAgreementGate: sealedReceiverGpuDebugDiagnostic.summary.weightTermAgreementGate,
 		gpuDebugWeightTermAgreementMode: sealedReceiverGpuDebugDiagnostic.summary.weightTermAgreementMode,
+		receiverPixelParityStatus: sealedReceiverGpuDebugDiagnostic.summary.receiverPixelParityStatus,
+		receiverPixelParityDominantMismatchSource: sealedReceiverGpuDebugDiagnostic.summary.receiverPixelParityDominantMismatchSource,
+		receiverPixelParityMaskOcclusionPolicy: sealedReceiverGpuDebugDiagnostic.summary.receiverPixelParityMaskOcclusionPolicy,
+		receiverPixelParityLegacyMaskWrongSideDelta: sealedReceiverGpuDebugDiagnostic.summary.receiverPixelParityLegacyMaskWrongSideDelta,
+		receiverPixelParityStudy: sealedReceiverGpuDebugDiagnostic.receiverPixelParityStudy,
+		visiblePixelCpuMirrorStatus: visiblePixelCpuMirrorStudy?.status ?? null,
+		visiblePixelCpuMirrorDominantMismatchSource: visiblePixelCpuMirrorStudy?.summary?.dominantMismatchSource ?? null,
+		visiblePixelCpuMirrorStudy,
 		gpuDebugAgreementMode: sealedReceiverGpuDebugDiagnostic.summary.agreementMode,
 		gpuDebugComparableVariantCount: sealedReceiverGpuDebugDiagnostic.summary.comparableVariantCount,
 		gpuDebugLinearIrradianceTermVariantCount: sealedReceiverGpuDebugDiagnostic.summary.linearIrradianceTermVariantCount,
 		gpuDebugWeightTermVariantCount: sealedReceiverGpuDebugDiagnostic.summary.weightTermVariantCount,
 		gpuDebugWhiteCalibrationLuminanceMean: sealedReceiverGpuDebugDiagnostic.summary.whiteCalibrationLuminanceMean,
 		gpuDebugWhiteCalibrationVisible: sealedReceiverGpuDebugDiagnostic.summary.whiteCalibrationVisible,
-		finalVisibleMaterialGate: sealedFinalVisibleMaterialStudy.status,
-		finalVisibleMaterialConclusion: sealedFinalVisibleMaterialStudy.summary.diagnosticConclusion,
-		finalVisibleStandardMaskedWrongSideColorRatio: sealedFinalVisibleMaterialStudy.summary.standardMaskedWrongSideColorRatio,
-		finalVisibleDebugMaskedWrongSideColorRatio: sealedFinalVisibleMaterialStudy.summary.debugMaskedWrongSideColorRatio,
-		finalVisibleNoToneMappingMaskedWrongSideColorRatio: sealedFinalVisibleMaterialStudy.summary.noToneMappingMaskedWrongSideColorRatio,
-		finalVisibleLinearOutputMaskedWrongSideColorRatio: sealedFinalVisibleMaterialStudy.summary.linearOutputMaskedWrongSideColorRatio,
-		finalVisibleLambertDebugMaskedWrongSideColorRatio: sealedFinalVisibleMaterialStudy.summary.lambertDebugMaskedWrongSideColorRatio,
-		finalVisibleStandardVsDebugMaskedDelta: sealedFinalVisibleMaterialStudy.summary.standardVsDebugMaskedDelta,
-		finalVisibleToneMappingMaskedDelta: sealedFinalVisibleMaterialStudy.summary.toneMappingMaskedDelta,
-		finalVisibleOutputColorSpaceMaskedDelta: sealedFinalVisibleMaterialStudy.summary.outputColorSpaceMaskedDelta,
-		finalVisibleExposureMaskedDelta: sealedFinalVisibleMaterialStudy.summary.exposureMaskedDelta,
-		finalVisibleExposureSweep: sealedFinalVisibleMaterialStudy.summary.exposureSweep,
-		finalVisibleOffscreenSceneLinearTarget: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearTarget,
-		finalVisibleOffscreenSceneLinearContributionRows: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearContributionRows,
-		finalVisibleOffscreenSceneLinearContributionSummary: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearContributionSummary,
-		finalVisibleOffscreenSceneLinearNeutralContributionRows: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionRows,
-		finalVisibleOffscreenSceneLinearNeutralContributionSummary: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearNeutralContributionSummary,
-		finalVisibleOffscreenSceneLinearContributionGate: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate,
-		finalVisibleProbeOnlySceneLinearCpuAgreement: probeOnlySceneLinearCpuAgreement,
-		finalVisibleLambertVsStandardLinearMaskedDelta: sealedFinalVisibleMaterialStudy.summary.lambertVsStandardLinearMaskedDelta,
-		finalVisibleRenderer: sealedFinalVisibleMaterialStudy.renderer,
+		presentation: {
+			gate: presentationGate,
+			conclusion: presentationConclusion,
+			renderer: sealedPresentationStudy.renderer,
+			maskedRatios: {
+				standard: sealedPresentationStudy.summary.standardMaskedWrongSideColorRatio,
+				debug: sealedPresentationStudy.summary.debugMaskedWrongSideColorRatio,
+				noToneMapping: sealedPresentationStudy.summary.noToneMappingMaskedWrongSideColorRatio,
+				linearOutput: sealedPresentationStudy.summary.linearOutputMaskedWrongSideColorRatio,
+				lambertDebug: sealedPresentationStudy.summary.lambertDebugMaskedWrongSideColorRatio
+			},
+			deltas: {
+				standardVsDebugMasked: sealedPresentationStudy.summary.standardVsDebugMaskedDelta,
+				toneMappingMasked: sealedPresentationStudy.summary.toneMappingMaskedDelta,
+				outputColorSpaceMasked: sealedPresentationStudy.summary.outputColorSpaceMaskedDelta,
+				exposureMasked: sealedPresentationStudy.summary.exposureMaskedDelta,
+				lambertVsStandardLinearMasked: sealedPresentationStudy.summary.lambertVsStandardLinearMaskedDelta
+			},
+			exposureSweep: sealedPresentationStudy.summary.exposureSweep,
+			offscreen: {
+				target: sealedPresentationStudy.summary.offscreenSceneLinearTarget,
+				contributionRows: sealedPresentationStudy.summary.offscreenSceneLinearContributionRows,
+				contributionSummary: sealedPresentationStudy.summary.offscreenSceneLinearContributionSummary,
+				neutralContributionRows: sealedPresentationStudy.summary.offscreenSceneLinearNeutralContributionRows,
+				neutralContributionSummary: sealedPresentationStudy.summary.offscreenSceneLinearNeutralContributionSummary,
+				contributionGate: sealedPresentationStudy.summary.offscreenSceneLinearContributionGate,
+				visiblePixelCpuMirrorStudy
+			},
+			sceneLinearMismatchClassifier,
+			probeIndirectCpuAgreement: probeOnlySceneLinearCpuAgreement,
+			probeIndirectGate,
+			debugTargets: presentationDebugTargets
+		},
 		cpuRenderAgreementGate,
 		cpuRenderAgreementTolerance,
 		bestCpuRenderMetricAgreement: {
@@ -280,13 +407,14 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 
 	}
 
-	if ( sealedFinalVisibleMaterialStudy.status === 'OPEN-FINAL-VISIBLE-BSDF-PRESSURE' ) {
+	if ( presentationGate === 'OPEN-BSDF' ) {
 
-		sealedFailureDomain = 'FINAL-VISIBLE-BSDF-LIGHT-NODE';
+		sealedFailureDomain = 'BSDF-LIGHT-NODE';
 
-	} else if ( sealedFinalVisibleMaterialStudy.status === 'OPEN-FINAL-VISIBLE-COLOR-MAPPING-PRESSURE' ) {
+	} else if ( presentationGate === 'OPEN-COLOR-MAPPING' ||
+		presentationGate === 'OPEN-CPU-GPU' ) {
 
-		sealedFailureDomain = 'FINAL-VISIBLE-COLOR-MAPPING';
+		sealedFailureDomain = 'COLOR-MAPPING';
 
 	}
 
@@ -732,9 +860,9 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 					'Visible surface leak samples all select probes already flagged with baked SH chroma/band pressure; prioritize bake-capture surface content and probe/band contamination before runtime or Chebyshev changes.' :
 					leakSamplesWithContentPressure.length > 0 ?
 						'Visible surface leak samples only partially map to probes flagged with baked SH chroma/band pressure; split the next proof step between mapped bake-content rows and unmapped coefficient attribution instead of promoting a single bake/runtime fix.' :
-					leakSamples.length > 0 ?
-						'Visible surface leak samples do not map to currently flagged bake-content probe rows; expand bake-capture diagnostics before runtime changes.' :
-						'Surface samples are bounded by the current SH content audit.'
+						leakSamples.length > 0 ?
+							'Visible surface leak samples do not map to currently flagged bake-content probe rows; expand bake-capture diagnostics before runtime changes.' :
+							'Surface samples are bounded by the current SH content audit.'
 			}
 		};
 
@@ -1031,29 +1159,29 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 					contentDominantBand: contentSample?.dominantProbeBandResponsibility ?? 'none',
 					contentDominantPressure: contentSample?.dominantProbeContentPressure ?? 0,
 					contentDominantWeightedPressure: contentSample?.dominantProbeWeightedContentPressure ?? 0,
-				attributionDominantProbeIndex: sample.dominantProbeIndex,
-				attributionDominantSourceProbeIndex: sample.dominantSourceProbeIndex,
-				attributionProbeRelationToReceiver: sample.dominantProbeRelationToReceiver,
-				attributionSourceRelationToReceiver: sample.dominantSourceRelationToReceiver,
-				attributionSourceSide: dominantAttributionRow?.sourceSide ?? 'unknown',
-				attributionDilationSourceDiffers: dominantAttributionRow?.dilationSourceDiffers ?? false,
-				attributionSourceValidity: dominantAttributionRow?.sourceValidity ?? 0,
-				attributionRuntimeFinalWeight: dominantAttributionRow?.runtimeFinalWeight ?? 0,
-				attributionDominantBand: sample.dominantWeightedBand,
-				attributionDominantCoefficient: sample.dominantWeightedCoefficient,
-				attributionDominantCoefficientBand: sample.dominantWeightedCoefficientBand,
-				attributionDominantCoefficientWrongMinusCorrect: dominantAttributionRow?.dominantWeightedCoefficientWrongMinusCorrect ?? 0,
-				attributionDominantDilatedCoefficient: sample.dominantDilatedWeightedCoefficient,
-				attributionDominantDilatedCoefficientBand: dominantAttributionRow?.dominantDilatedWeightedCoefficientBand ?? 'none',
-				attributionDominantDilatedCoefficientWrongMinusCorrect: dominantAttributionRow?.dominantDilatedWeightedCoefficientWrongMinusCorrect ?? 0,
-				attributionWrongChannelPressure: sample.dominantWrongChannelPressure,
-				attributionCorrectChannelPreservation: sample.dominantCorrectChannelPreservation,
-				sourcePressureAttributionRowCount: sample.sourcePressureAttributionRowCount,
-				sourcePressureProbeIndex: sample.sourcePressureProbeIndex,
-				sourcePressureSourceProbeIndex: sample.sourcePressureSourceProbeIndex,
-				sourcePressureWrongChannelPressure: sample.sourcePressureWrongChannelPressure,
-				sourcePressureDilatedWrongChannelPressure: sample.sourcePressureDilatedWrongChannelPressure,
-				sourcePressureDilatedSourceWrongPressureDelta: sample.sourcePressureDilatedSourceWrongPressureDelta
+					attributionDominantProbeIndex: sample.dominantProbeIndex,
+					attributionDominantSourceProbeIndex: sample.dominantSourceProbeIndex,
+					attributionProbeRelationToReceiver: sample.dominantProbeRelationToReceiver,
+					attributionSourceRelationToReceiver: sample.dominantSourceRelationToReceiver,
+					attributionSourceSide: dominantAttributionRow?.sourceSide ?? 'unknown',
+					attributionDilationSourceDiffers: dominantAttributionRow?.dilationSourceDiffers ?? false,
+					attributionSourceValidity: dominantAttributionRow?.sourceValidity ?? 0,
+					attributionRuntimeFinalWeight: dominantAttributionRow?.runtimeFinalWeight ?? 0,
+					attributionDominantBand: sample.dominantWeightedBand,
+					attributionDominantCoefficient: sample.dominantWeightedCoefficient,
+					attributionDominantCoefficientBand: sample.dominantWeightedCoefficientBand,
+					attributionDominantCoefficientWrongMinusCorrect: dominantAttributionRow?.dominantWeightedCoefficientWrongMinusCorrect ?? 0,
+					attributionDominantDilatedCoefficient: sample.dominantDilatedWeightedCoefficient,
+					attributionDominantDilatedCoefficientBand: dominantAttributionRow?.dominantDilatedWeightedCoefficientBand ?? 'none',
+					attributionDominantDilatedCoefficientWrongMinusCorrect: dominantAttributionRow?.dominantDilatedWeightedCoefficientWrongMinusCorrect ?? 0,
+					attributionWrongChannelPressure: sample.dominantWrongChannelPressure,
+					attributionCorrectChannelPreservation: sample.dominantCorrectChannelPreservation,
+					sourcePressureAttributionRowCount: sample.sourcePressureAttributionRowCount,
+					sourcePressureProbeIndex: sample.sourcePressureProbeIndex,
+					sourcePressureSourceProbeIndex: sample.sourcePressureSourceProbeIndex,
+					sourcePressureWrongChannelPressure: sample.sourcePressureWrongChannelPressure,
+					sourcePressureDilatedWrongChannelPressure: sample.sourcePressureDilatedWrongChannelPressure,
+					sourcePressureDilatedSourceWrongPressureDelta: sample.sourcePressureDilatedSourceWrongPressureDelta
 				};
 
 			} );
@@ -1076,11 +1204,11 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				'SUPPORTED-SURFACE-CONTENT-ATTRIBUTION-SPLIT-BOUNDED' :
 				leakRows.length === 0 ?
 					'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNDER-INSTRUMENTED' :
-				mappedRows.length > 0 && unmappedRows.length > 0 ?
-					'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' :
-					mappedRows.length > 0 ?
-						'OPEN-SURFACE-CONTENT-ATTRIBUTION-MAPPED' :
-						'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNMAPPED',
+					mappedRows.length > 0 && unmappedRows.length > 0 ?
+						'OPEN-SURFACE-CONTENT-ATTRIBUTION-SPLIT' :
+						mappedRows.length > 0 ?
+							'OPEN-SURFACE-CONTENT-ATTRIBUTION-MAPPED' :
+							'OPEN-SURFACE-CONTENT-ATTRIBUTION-UNMAPPED',
 			proofBoundary: 'Report-only split of canonical leaking surface attribution rows into bake-content-mapped and unmapped coefficient-attribution buckets; does not change bake capture, runtime sampling, public API, or Chebyshev thresholds.',
 			rows: leakRows,
 			summary: {
@@ -1104,11 +1232,11 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 					'Canonical leaking surface rows are under-instrumented for content attribution; expand coefficient/source instrumentation before bake or runtime changes.' :
 					mappedRows.length > 0 && unmappedRows.length > 0 ?
 						'Canonical leaking surface rows split between bake-content-mapped pressure and unmapped coefficient-attribution pressure; do not promote a single bake, density, SDF, or Chebyshev fix without a follow-up that handles both buckets.' :
-					mappedRows.length > 0 ?
-						'Canonical leaking surface rows all map to current bake-content pressure; a bake-content oracle can be evaluated proof-only before runtime changes.' :
-						unmappedRows.length > 0 ?
-							'Canonical leaking surface rows do not map to current bake-content pressure; expand coefficient/source instrumentation before bake or runtime changes.' :
-							'No leaking surface rows require split attribution.'
+						mappedRows.length > 0 ?
+							'Canonical leaking surface rows all map to current bake-content pressure; a bake-content oracle can be evaluated proof-only before runtime changes.' :
+							unmappedRows.length > 0 ?
+								'Canonical leaking surface rows do not map to current bake-content pressure; expand coefficient/source instrumentation before bake or runtime changes.' :
+								'No leaking surface rows require split attribution.'
 			}
 		};
 
@@ -1206,6 +1334,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const surfaceContentAttributionFollowupStudy = createSurfaceContentAttributionFollowupStudy();
 	const createMappedBakeContentSourcePolicyOracleStudy = () => {
 
@@ -1294,6 +1423,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const mappedBakeContentSourcePolicyOracleStudy = createMappedBakeContentSourcePolicyOracleStudy();
 	const createUnmappedCoefficientAttributionInstrumentationStudy = () => {
 
@@ -1389,6 +1519,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const unmappedCoefficientAttributionInstrumentationStudy = createUnmappedCoefficientAttributionInstrumentationStudy();
 	const createAggregateExplanationComparisonStudy = () => {
 
@@ -1491,6 +1622,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const aggregateExplanationComparisonStudy = createAggregateExplanationComparisonStudy();
 	const createProof7bCoefficientL10OracleStudy = () => {
 
@@ -1610,6 +1742,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const proof7bCoefficientL10OracleStudy = createProof7bCoefficientL10OracleStudy();
 	const createProbe50L10SignSourceIsolationOracleStudy = () => {
 
@@ -1744,6 +1877,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const probe50L10SignSourceIsolationOracleStudy = createProbe50L10SignSourceIsolationOracleStudy();
 	const createProbe50L10ContentBasisPolarityOracleStudy = () => {
 
@@ -1766,6 +1900,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			) ?? null;
 
 		};
+
 		const sumValues = values => roundMetric( values.reduce( ( total, value ) => total + ( value ?? 0 ), 0 ) );
 		const rows = dominantRows.map( row => {
 
@@ -1865,6 +2000,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const probe50L10ContentBasisPolarityOracleStudy = createProbe50L10ContentBasisPolarityOracleStudy();
 	const createProbe50CoefficientLocalCorrectionOracleStudy = () => {
 
@@ -1956,6 +2092,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const probe50CoefficientLocalCorrectionOracleStudy = createProbe50CoefficientLocalCorrectionOracleStudy();
 	const createProbe50LocalCorrectionAggregateResidualGuardStudy = () => {
 
@@ -2056,6 +2193,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const probe50LocalCorrectionAggregateResidualGuardStudy = createProbe50LocalCorrectionAggregateResidualGuardStudy();
 	const createProbe50L10ZDesignBoundConstraintsStudy = () => {
 
@@ -2162,6 +2300,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const probe50L10ZDesignBoundConstraintsStudy = createProbe50L10ZDesignBoundConstraintsStudy();
 	const createSurfaceAttributionBranchDecision = () => {
 
@@ -2215,8 +2354,8 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 					oracleFamily: 'ambiguous-attribution-fallback',
 					score: topCandidate.score,
 					reason: `surface attribution is ambiguous across ${ topScoreTie.map( candidate => candidate.branch ).join( ', ' ) }; expand or refine instrumentation before selecting an oracle`
-			} :
-				topCandidate;
+				} :
+					topCandidate;
 
 		return {
 			status: selected.branch === 'none' ?
@@ -2441,6 +2580,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		};
 
 	};
+
 	const proof7cDispositionStudy = createProof7cDispositionStudy();
 	const surfaceAttributionFollowupSpec = {
 		status: 'SPECIFIED-CAUSAL-ATTRIBUTION-FOLLOWUP',
@@ -2537,9 +2677,9 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				'Review proof-7c CPU static-blocker aggregate win before any deliberate runtime design promotion.' :
 				proof7cDispositionStudy.status === 'CLOSED-PROOF-7C-DISPOSITION-NO-RUNTIME-PROMOTION' ?
 					proof7cDispositionStudy.nextProofOnlyAction :
-				surfaceContentAttributionFollowupStudy.status === 'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' ?
-					surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction :
-					'proof-7c CPU/static-blocker oracle did not produce an aggregate-safe runtime promotion case; inspect bake content, probe density, or surface placement next.' :
+					surfaceContentAttributionFollowupStudy.status === 'OPEN-SURFACE-CONTENT-DUAL-BUCKET-FOLLOWUP' ?
+						surfaceContentAttributionFollowupStudy.summary.nextProofOnlyAction :
+						'proof-7c CPU/static-blocker oracle did not produce an aggregate-safe runtime promotion case; inspect bake content, probe density, or surface placement next.' :
 			'Regenerate the proof artifact and use surfaceSampleCoefficientAttributionStudy to choose proof-7a, proof-7b, proof-7c, or proof-7d.'
 	};
 	const wgpuLeakAuditStudy = {
@@ -2563,9 +2703,11 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			status: leakMatrix.comparisons.sealedWall.linearPromotionStatus,
 			metricMode: leakMatrix.comparisons.sealedWall.linearPromotionMetricMode,
 			presentationMetricMode: leakMatrix.comparisons.sealedWall.presentationMetricMode,
-			visibilityPreToneMaskedWrongSideImprovementRatio: leakMatrix.comparisons.sealedWall.visibilityPreToneMaskedWrongSideImprovementRatio,
-			visibilityPreToneMaskedCorrectBouncePreservation: leakMatrix.comparisons.sealedWall.visibilityPreToneMaskedCorrectBouncePreservation,
-			visibilityMaskedWrongSideImprovementRatio: leakMatrix.comparisons.sealedWall.visibilityMaskedWrongSideImprovementRatio,
+			metrics: {
+				preToneMaskedWrongSideImprovement: leakMatrix.comparisons.sealedWall.visibility.preToneMaskedWrongSide.improvement,
+				preToneMaskedCorrectBouncePreservation: leakMatrix.comparisons.sealedWall.visibility.preToneMaskedCorrectBounce.preservation,
+				maskedWrongSideImprovement: leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement
+			},
 			interpretation: 'Presentation-space masked ratios remain useful perceptual diagnostics, but promotion requires the pre-tone linear-output masked row plus CPU/GPU linear and weight-term gates.'
 		},
 		consolidatedDiagnostics: {
@@ -2599,19 +2741,18 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			surfaceAnchorPlacementStatus: surfaceAnchorPlacementStudy.status,
 			surfaceShContentStatus: surfaceShContentStudy.status,
 			surfaceShContentLeakSampleCount: surfaceShContentStudy.summary.leakSampleCount,
-			finalVisibleMaterialStatus: sealedFinalVisibleMaterialStudy.status,
+			presentationStatus: presentationGate,
 			renderMetricMismatchStatus: sealedRenderMetricMismatch.status,
 			gpuLinearIrradianceGate: sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementGate,
 			weightTermAgreementGate: sealedRenderMetricMismatch.gpuDebugWeightTermAgreementGate
 		},
 		verdict: {
 			suspectedLeakDomain: sealedFailureDomain,
-			promotionGate: leakMatrix.comparisons.sealedWall.linearPromotionStatus === 'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' &&
-				sealedRenderMetricMismatch.cpuRenderAgreementGate === 'SUPPORTED' ?
+			promotionGate: gatedLeakComparisons.sealedWall.status === 'SUPPORTED' ?
 				'SUPPORTED' :
 				'OPEN',
 			promotionMetricMode: 'pre-tone-linear-output-masked-visible-pixels',
-			presentationGate: leakMatrix.comparisons.sealedWall.status,
+			presentationGate: gatedLeakComparisons.sealedWall.status,
 			cpuGpuLinearGate: sealedRenderMetricMismatch.gpuDebugLinearIrradianceAgreementGate,
 			weightTermGate: sealedRenderMetricMismatch.gpuDebugWeightTermAgreementGate,
 			cpuRenderAgreementGate: sealedRenderMetricMismatch.cpuRenderAgreementGate,
@@ -2620,7 +2761,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 	};
 	const metricTaxonomyStudy = {
 		status: 'DEFINED-PROMOTION-METRIC-SPLIT',
-		proofBoundary: 'Report-only taxonomy for leak-proof metrics. It separates SH irradiance, scene-linear/final-visible approximations, and presentation-space diagnostics before any threshold tuning.',
+		proofBoundary: 'Report-only taxonomy for leak-proof metrics. It separates SH irradiance, scene-linear/presentation approximations, and presentation-space diagnostics before any threshold tuning.',
 		currentFailureDomain: sealedFailureDomain,
 		promotionPrinciple: 'DDGI-lite leak promotion must use linear/probe-only evidence; tone-mapped screenshot ratios are diagnostic-only because exposure and output transforms can reshape wrong/correct contrast without changing SH or visibility math.',
 		metrics: [
@@ -2638,14 +2779,14 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				source: 'Proof-only GPU weight-term debug rows compared with CPU receiver samples',
 				promotionEligible: true,
 				currentGate: sealedRenderMetricMismatch.gpuDebugWeightTermAgreementGate,
-				notes: 'Validates scalar and visibility blend terms; does not prove final visible contrast.'
+				notes: 'Validates scalar and visibility blend terms; does not prove presentation contrast.'
 			},
 			{
-				key: 'offscreenSceneLinearFinalVisible',
-				space: 'scene-linear final-visible render target',
+				key: 'offscreenSceneLinearTarget',
+				space: 'scene-linear presentation render target',
 				source: 'Proof-only half-float render target readback with NoToneMapping + LinearSRGBColorSpace + receiver-id visible-pixel mask',
 				promotionEligible: true,
-				currentGate: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.status,
+				currentGate: sealedPresentationStudy.summary.offscreenSceneLinearTarget.status,
 				notes: 'Primary candidate for replacing the provisional linear-output canvas approximation; contribution isolation, neutral receiver albedo rows, chromaticity/RGB decomposition, and conservative contribution thresholds are now report-scoped but still gate promotion.'
 			},
 			{
@@ -2657,11 +2798,11 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 				notes: 'Secondary approximation kept for continuity; offscreen scene-linear target now provides the stricter readback path and contribution isolation.'
 			},
 			{
-				key: 'finalVisibleMaterialStudy',
+				key: 'presentationStudy',
 				space: 'material response and renderer output',
 				source: 'Standard material, Lambert debug, tone mapping, output color-space, and ACES exposure sweep rows',
 				promotionEligible: false,
-				currentGate: sealedFinalVisibleMaterialStudy.status,
+				currentGate: sealedPresentationStudy.status,
 				notes: 'Identifies presentation pressure; current exposure delta makes it unsafe as a promotion metric.'
 			},
 			{
@@ -2682,8 +2823,8 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			promotionEligibleMetricCount: 3,
 			provisionalMetricCount: 1,
 			diagnosticOnlyMetricCount: 2,
-			sceneLinearTargetGate: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearTarget.status,
-			contributionGate: sealedFinalVisibleMaterialStudy.summary.offscreenSceneLinearContributionGate.status,
+			sceneLinearTargetGate: sealedPresentationStudy.summary.offscreenSceneLinearTarget.status,
+			contributionGate: sealedPresentationStudy.summary.offscreenSceneLinearContributionGate.status,
 			presentationGateUse: 'DIAGNOSTIC-ONLY',
 			chebyshevTuning: 'UNCHANGED'
 		}
@@ -2771,11 +2912,40 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		computeProjectionRuntimeParity,
 		computeProjectionProfiling
 	} );
+	const shDeringingStudy = sealedVisibilityWeightingDiagnostic.shDeringingStudy ?? {};
+	const shGuard = {
+		enabled: true,
+		correctionStrengthMax: shDeringingStudy.summary !== undefined ?
+			roundMetric( Math.max(
+				Math.abs( shDeringingStudy.summary.totalNegativeEnergyReduction ?? 0 ),
+				Math.abs( shDeringingStudy.summary.totalChromaPressureReduction ?? 0 )
+			) ) :
+			0,
+		negativeLobePressureBefore: shDeringingStudy.summary?.maxCurrentNegativeEnergy ?? 0,
+		negativeLobePressureAfter: shDeringingStudy.summary?.maxDampedNegativeEnergy ?? 0,
+		l00Preserved: shDeringingStudy.summary?.l00Preserved === true
+	};
+	const projectionPath = {
+		mode: computeProjectionRuntimeParity.computeBackend === 'compute-probe-reduction' ? 'compute' : 'fragment',
+		oldPathDescription: '9 coefficient pixels x cubemap sweep',
+		newPathDescription: 'one cubemap sweep per probe outputs all 9 coefficients',
+		parityPassed: computeProjectionRuntimeParity.status === 'RUNTIME-PARITY-READBACK-PASSING',
+		timingEvidence: computeProjectionProfiling.timingSources?.gpuTimestampAvailable === true ? 'gpu-timestamp' : 'wall-clock-or-static-work-only'
+	};
 	return {
 		generatedAt: new Date().toISOString(),
 		file,
+		buildExecuted: false,
+		buildNotExecutedReason: 'Repository AGENTS.md explicitly says never build after changes.',
+		testsExecuted: smokeResults.map( result => result.step ),
+		visibilityLabel: visibilityProofStatus.visibilityLabel,
+		visibilityStatus: visibilityProofStatus.visibilityStatus,
 		claim: {
-			status: 'SUPPORTED',
+			status: String( visibilityMomentInspection.evidenceStatus ).startsWith( 'OPEN' ) ||
+				probeIndirectGate.startsWith( 'OPEN' ) ||
+				gatedLeakComparisons.sealedWall.status === 'OPEN' ?
+				'OPEN' :
+				'SUPPORTED',
 			text: 'WebGPU LightProbeGridGPU at 4^3 / cubemapSize=8 can show credible low-frequency red/green diffuse bounce and has a DDGI-lite verifier scaffold for controlled APV-style leak reduction without replacing the fast unweighted path.',
 			scope: 'Targeted e2e verifier and screenshot-space diagnostics only; not a photometric proof, real DDGI visibility proof, cascade proof, or adaptive-brick proof.'
 		},
@@ -2790,11 +2960,11 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			candidate: 'low-res-unweighted',
 			weightedCandidate: 'low-res-validity-weighted',
 			leakBaseline: 'leak-thin-wall-unweighted',
-			leakCandidate: 'leak-thin-wall-visibility-scaffold-disabled',
+			leakCandidate: `leak-thin-wall-${ visibilityProofStatus.visibilityLabel }`,
 			scalarValidityControl: 'leak-thin-wall-validity-weighted',
 			sealedPromotionBaseline: 'leak-sealed-wall-validity-weighted',
-			sealedPromotionCandidate: 'leak-sealed-wall-visibility-scaffold-disabled',
-			negativeControl: 'leak-zero-thickness-visibility-scaffold-disabled remains OPEN',
+			sealedPromotionCandidate: `leak-sealed-wall-${ visibilityProofStatus.visibilityLabel }`,
+			negativeControl: `leak-zero-thickness-${ visibilityProofStatus.visibilityLabel } remains OPEN`,
 			sameBudgetStressReference: 'webgpu-webgl-density-reference',
 			sameBudgetQualityCandidate: 'webgpu-webgl-density-damped',
 			webglSourceReference: lightProbeWebGLReferenceLabel
@@ -2805,7 +2975,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			leakMatrixRows: leakMatrix.rows.length,
 			artifactComparisons: artifactMatrix.comparisons,
 			regionComparisons: regionMatrix.comparisons,
-			leakComparisons: leakMatrix.comparisons,
+			leakComparisons: gatedLeakComparisons,
 			densityArtifactStudy,
 			directShadowControlStudy,
 			wgpuLeakAuditStudy,
@@ -2818,8 +2988,13 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			visibilityDepthRoadmap,
 			ddgiVisibilityDepthSpec,
 			visibilityMomentInspection,
+			visibilityLabel: visibilityProofStatus.visibilityLabel,
+			visibilityStatus: visibilityProofStatus.visibilityStatus,
 			visibilityWeightingDiagnostic,
 			sealedVisibilityWeightingDiagnostic,
+			presentationDebugTargets,
+			projectionPath,
+			shGuard,
 			sealedReceiverNormalDiagnostic,
 			sealedShContributionDiagnostic,
 			probeContentChromaStudy,
@@ -2886,7 +3061,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			{ gate: 'Same-budget quality candidate must preserve L0/probe intensity/bake budget and change only the SH band policy.', result: 'passed' },
 			{ gate: 'Bake texel budget must report the 54x cubemap work multiplier for 6^3 / 32px versus 4^3 / 8px.', result: 'passed' },
 			{ gate: 'Weighted finite thin-wall rows must stay bounded, and sealed-wall rows must carry explicit promotion status without erasing correct bounce.', result: 'passed' },
-			{ gate: 'Zero-thickness leak row must remain marked OPEN until real visibility/depth moments exist.', result: 'passed' },
+			{ gate: 'Zero-thickness leak row must remain marked OPEN until moment-backed guarded rows improve leak without killing bounce.', result: 'passed' },
 			{ gate: 'WebGL same-class reference screenshot must be captured as secondary evidence, not substituted for WebGPU e2e gates.', result: 'passed' },
 			{ gate: 'SH projection/evaluation math must satisfy constant-radiance pi scaling and match THREE.SphericalHarmonics3 irradiance constants/order.', result: 'passed' },
 			{ gate: 'External implementation research must be recorded as architecture lessons without expanding current runtime/API scope.', result: 'passed' },
@@ -2904,8 +3079,8 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			{ status: directShadowControlStudy.status, item: `Direct shadow-map control: default ${ directShadowControlStudy.defaultSoft.directShadowControl.mapSize }px radius ${ directShadowControlStudy.defaultSoft.directShadowControl.radius } normalBias ${ directShadowControlStudy.defaultSoft.directShadowControl.normalBias }; crisp ${ directShadowControlStudy.crispShadow.directShadowControl.mapSize }px radius ${ directShadowControlStudy.crispShadow.directShadowControl.radius } normalBias ${ directShadowControlStudy.crispShadow.directShadowControl.normalBias }; diagnosis ${ directShadowControlStudy.diagnosis }.` },
 			{ status: 'OPEN', item: 'The WebGPU 6^3 / 32px full-band density screenshot remains a stress row; high-frequency bake detail can still produce muddy low-order / 9-coefficient SH representation black-tail/ringing artifacts.' },
 			{ status: 'OPEN', item: 'Measured bake timings are diagnostics only; deterministic e2e uses a wall-clock fallback so unavailable/zero timing evidence cannot masquerade as measured proof.' },
-			{ status: 'OPEN', item: 'Current validity is heuristic occupancy metadata, not DDGI visibility/depth moments.' },
-			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved by occupancy validity; they need real visibility/depth moments or a separate visibility structure.' },
+			{ status: 'OPEN', item: 'Scalar probe validity remains heuristic occupancy metadata; private visibilityDepthTarget now carries radial distance moments, but that is proof-only data rather than a public DDGI claim.' },
+			{ status: 'OPEN', item: 'Zero-thickness walls cannot be claimed solved merely because moments exist; they need a useful visibility structure that improves leak without erasing bounce.' },
 			{ status: 'OPEN', item: 'No adaptive density, probe relocation, classification, dilation, or virtual-offset pipeline yet.' },
 			{ status: 'SUPPORTED', item: 'Documentation parity note is now truthful: LightProbeGrid docs label the page as the WebGL baseline and keep LightProbeGridGPU proof-scoped until runtime/API boundaries stabilize.' },
 			{ status: 'SUPPORTED', item: 'Actual WebGL LightProbeGrid 6^3 / 32px probes-only screenshot and screenshot-space metrics are captured as same-class secondary reference evidence.' },
@@ -2917,7 +3092,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			{ status: sealedReceiverSurfaceQuadratureDiagnostic.status, item: `Receiver-surface quadrature: CPU surface runtime wrong/correct ${ sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceRuntimeWrongRatioMean }, render surface wrong-side ${ sealedReceiverSurfaceQuadratureDiagnostic.renderMetrics.surfaceWrongSideColorRatio }, delta ${ sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceCpuRenderDelta }, rule ${ sealedReceiverSurfaceQuadratureDiagnostic.quadratureRule }.` },
 			{ status: sealedReceiverGpuDebugDiagnostic.status, item: `GPU debug receiver render: best region variant ${ sealedReceiverGpuDebugDiagnostic.summary.bestVariant } at scale ${ sealedReceiverGpuDebugDiagnostic.summary.bestVariantScale }, best tight-point variant ${ sealedReceiverGpuDebugDiagnostic.summary.bestTightPointVariant } at scale ${ sealedReceiverGpuDebugDiagnostic.summary.bestTightPointVariantScale }, tight-point delta ${ sealedReceiverGpuDebugDiagnostic.summary.bestTightPointSurfaceCpuDelta }, white calibration luminance ${ sealedReceiverGpuDebugDiagnostic.summary.whiteCalibrationLuminanceMean }; variants ${ sealedReceiverGpuDebugDiagnostic.variants.map( variant => `${ variant.label }=${ variant.leakMetrics.surfaceWrongSideColorRatio }/${ variant.pointMetrics.surfaceWrongRatioMean }` ).join( ', ' ) }.` },
 			{ status: sealedRenderMetricMismatch.status, item: `Sealed-wall render metric vs CPU SH mirror: bounds wrong-side ratio ${ sealedRenderMetricMismatch.actualWrongSideColorRatio }, center wrong-side ratio ${ sealedRenderMetricMismatch.centerWrongSideColorRatio }, surface-isolated wrong-side ratio ${ sealedRenderMetricMismatch.surfaceWrongSideColorRatio }, CPU runtime wrong ratio ${ sealedRenderMetricMismatch.cpuRuntimeWrongRatioMean }, CPU surface runtime wrong ratio ${ sealedRenderMetricMismatch.cpuSurfaceRuntimeWrongRatioMean }, best metric ${ sealedRenderMetricMismatch.bestCpuRenderMetricAgreement.metric } delta ${ sealedRenderMetricMismatch.bestCpuRenderMetricAgreement.delta }.` },
-			{ status: leakMatrix.comparisons.sealedWall.status, item: `Sealed-wall DDGI-lite promotion gate: wrong-side improvement ratio ${ leakMatrix.comparisons.sealedWall.visibilityWrongSideImprovementRatio }, correct-bounce preservation ${ leakMatrix.comparisons.sealedWall.visibilityCorrectBouncePreservation }.` }
+			{ status: leakMatrix.comparisons.sealedWall.status, item: `Sealed-wall DDGI-lite promotion gate: wrong-side improvement ratio ${ leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement }, correct-bounce preservation ${ leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation }.` }
 		],
 		proofLadder: [
 			{ level: 'examples', evidence: 'low-res proof snapshots, region matrices, controlled finite thin-wall stress rows, and sealed-wall promotion rows' },
@@ -2925,7 +3100,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			{ level: 'artifact-pressure', evidence: 'webgpu-webgl-density-reference tracks object black-tail ratio, luminance floor, cell-edge contrast, and 54x bake texel work' },
 			{ level: 'direct-shadow-control', evidence: `webgpu-webgl-density-shadow-crisp keeps SH/probe budget fixed while changing bake-time shadow map to ${ directShadowControlStudy.crispShadow.directShadowControl.mapSize }px radius ${ directShadowControlStudy.crispShadow.directShadowControl.radius } normalBias ${ directShadowControlStudy.crispShadow.directShadowControl.normalBias }` },
 			{ level: 'candidate-action', evidence: 'webgpu-webgl-density-damped must reduce object black-tail below 0.08 at the same bake texel budget by changing only the L1 band policy' },
-			{ level: 'ddgi-lite-promotion', evidence: `sealed-wall status ${ leakMatrix.comparisons.sealedWall.status }; CPU/render agreement ${ sealedRenderMetricMismatch.cpuRenderAgreementGate } via ${ sealedRenderMetricMismatch.bestCpuRenderMetricAgreement.metric } delta ${ sealedRenderMetricMismatch.bestCpuRenderMetricAgreement.delta }; surface quadrature ${ sealedReceiverSurfaceQuadratureDiagnostic.status } delta ${ sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceCpuRenderDelta }; GPU debug ${ sealedReceiverGpuDebugDiagnostic.status }; CPU finding ${ sealedVisibilityWeightingDiagnostic.interrogationFinding }; suspected failure domain ${ sealedFailureDomain}; render metric mismatch ${ sealedRenderMetricMismatch.status }; wrong-side improvement ratio ${ leakMatrix.comparisons.sealedWall.visibilityWrongSideImprovementRatio } at correct-bounce preservation ${ leakMatrix.comparisons.sealedWall.visibilityCorrectBouncePreservation }` },
+			{ level: 'ddgi-lite-promotion', evidence: `sealed-wall status ${ leakMatrix.comparisons.sealedWall.status }; CPU/render agreement ${ sealedRenderMetricMismatch.cpuRenderAgreementGate } via ${ sealedRenderMetricMismatch.bestCpuRenderMetricAgreement.metric } delta ${ sealedRenderMetricMismatch.bestCpuRenderMetricAgreement.delta }; surface quadrature ${ sealedReceiverSurfaceQuadratureDiagnostic.status } delta ${ sealedReceiverSurfaceQuadratureDiagnostic.summary.surfaceCpuRenderDelta }; GPU debug ${ sealedReceiverGpuDebugDiagnostic.status }; CPU finding ${ sealedVisibilityWeightingDiagnostic.interrogationFinding }; suspected failure domain ${ sealedFailureDomain}; render metric mismatch ${ sealedRenderMetricMismatch.status }; wrong-side improvement ratio ${ leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement } at correct-bounce preservation ${ leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation }` },
 			{ level: 'invariants', evidence: 'source checks keep GPU-resident bake, hardware-filtered unweighted sampling, and fixed demo defaults' },
 			{ level: 'executable-check', evidence: 'targeted WebGPU e2e assertions' },
 			{ level: 'transfer', evidence: 'WebGL same-class reference is captured; OPEN: repeat WebGPU/WebGL proof on more browsers/adapters' }
