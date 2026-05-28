@@ -35,7 +35,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		runnerCoreAssertionsSource,
 		runnerVisibilityAssertionsSource,
 		runnerVisibilityBaseAssertionsSource,
-		runnerVisibilityProbeAssertionsSource,
 		runnerVisibilityReceiverAssertionsSource,
 		runnerVisibilityNormalAssertionsSource,
 		runnerMatrixAssertionsSource,
@@ -73,7 +72,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-core-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-base-assertions.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-probe-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-receiver-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-normal-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-matrix-assertions.js', 'utf8' ),
@@ -101,7 +99,6 @@ ${ sourceInvariantSource }
 ${ runnerCoreAssertionsSource }
 ${ runnerVisibilityAssertionsSource }
 ${ runnerVisibilityBaseAssertionsSource }
-${ runnerVisibilityProbeAssertionsSource }
 ${ runnerVisibilityReceiverAssertionsSource }
 ${ runnerVisibilityNormalAssertionsSource }
 ${ runnerMatrixAssertionsSource }
@@ -507,22 +504,7 @@ ${ runnerRuntimeAssertionsSource }`;
 					'interrogationFinding',
 					'dominantEscapeReason',
 					'shContributionDiagnostic',
-					'probeContentChromaStudy',
-					'probeBakeContaminationMap',
 					'Readback-only packed SH atlas coefficient contribution mirror',
-					'Readback-only probe-content chroma audit',
-					'Readback-only per-probe bake-content map',
-					'createShBandDecomposition',
-					'createShCoefficientContributionStudy',
-					'dominantProbeCoefficientStudy',
-					'raw SH coefficient/lobe contribution table',
-					'createShDampingOracleStudy',
-					'CPU-only SH damping oracle',
-					'damp-dominant-coefficient-50',
-					'createDominantProbePlacementStudy',
-					'CPU-only dominant-probe placement/source oracle',
-					'nearest-same-side-valid-away-from-divider',
-					'L0/L1/L2 directional SH chroma',
 					'runtime-final-mixed-coefficients-inverted-normal',
 					'BAKED-SH-MIXED-COLOR-CONTAMINATION',
 					'readProbeCoefficients',
