@@ -590,7 +590,7 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSourceContract(
-		'Cornell harness must expose the sealed-wall leak verifier and compact screenshot artifact path without the old artifact/region matrix lab.',
+		'Cornell harness must expose compact sealed-wall leak proof facts without the old exploratory leak matrix lab.',
 		[
 			{
 				sourceText: exampleSource,
@@ -604,12 +604,12 @@ ${ runnerRuntimeAssertionsSource }`;
 					'receiver-id-mask-visible-pixels',
 					'maskedWrongSideColorRatio',
 					'captureLeakRegionMetrics',
-					'runProbeLeakMatrix',
-					'leak-sealed-wall-validity-weighted',
-					'leak-sealed-wall-visibility-scaffold-disabled',
-					'improvement: sealedWrongSideImprovement',
-					'leak-zero-thickness-visibility-scaffold-disabled',
-					'visibility-disabled-control',
+					'captureLeakProofFacts',
+					'sealed-wall-validity-weighted',
+					'sealed-wall-visibility-moments',
+					'Compact sealed-wall leak proof facts for default verifier gates',
+					'pre-tone-linear-output-masked-visible-pixels',
+					'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE',
 					'correctBounceRatio',
 					'applyGroundingParitySnapshot',
 					'restoreGroundingParitySnapshot'
@@ -618,11 +618,24 @@ ${ runnerRuntimeAssertionsSource }`;
 			{
 				sourceText: smokeRunnerSource,
 				tokens: [
-					'runProbeLeakMatrix',
+					'captureLeakProofFacts',
 					'runLightProbeGridGpuProofGateAssertions'
+				]
+			},
+			{
+				sourceText: proofGatesSource,
+				tokens: [
+					'leak proof facts'
 				]
 			}
 		]
+	);
+
+	requireSource(
+		! exampleSource.includes( 'runProbeLeakMatrix' ) &&
+			! smokeRunnerSource.includes( 'runProbeLeakMatrix' ) &&
+			! smokeRunnerSource.includes( 'captureLeakRegionMetrics' ),
+		'Default smoke path must not expose the old leak matrix API or low-level leak metric sampler.'
 	);
 
 

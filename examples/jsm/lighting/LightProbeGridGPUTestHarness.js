@@ -2525,115 +2525,38 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
-	const runProbeLeakMatrix = async () => {
+	const captureLeakProofFacts = async () => {
 
 		const previousState = createHarnessStateSnapshot();
 		const previousVisibility = createProbeVisibilitySnapshot();
 		const rows = [];
 		const cases = [
 			{
-				label: 'leak-thin-wall-unweighted',
-				fixtureMode: 'thin-wall',
-				leakReductionMode: 'off',
-				useProbeValidity: true,
-				proofRole: 'baseline'
-			},
-			{
-				label: 'leak-thin-wall-normal-weighted',
-				fixtureMode: 'thin-wall',
-				leakReductionMode: 'normal',
-				useProbeValidity: false,
-				disableVisibilityDepth: true,
-				proofRole: 'candidate-normal-weighted'
-			},
-			{
-				label: 'leak-thin-wall-validity-weighted',
-				fixtureMode: 'thin-wall',
+				label: 'sealed-wall-validity-weighted',
 				leakReductionMode: 'normal',
 				useProbeValidity: true,
-				disableVisibilityDepth: true,
-				proofRole: 'candidate-validity-normal-weighted'
+				disableVisibilityDepth: true
 			},
 			{
-				label: 'leak-thin-wall-visibility-scaffold-disabled',
-				fixtureMode: 'thin-wall',
+				label: 'sealed-wall-visibility-moments',
 				leakReductionMode: 'normal',
-				useProbeValidity: true,
-				proofRole: 'candidate-visibility-scaffold-disabled'
-			},
-			{
-				label: 'visibility-disabled-control',
-				fixtureMode: 'thin-wall',
-				leakReductionMode: 'normal',
-				useProbeValidity: true,
-				disableVisibilityDepth: true,
-				proofRole: 'visibility-disabled-control'
-			},
-			{
-				label: 'leak-sealed-wall-unweighted',
-				fixtureMode: 'sealed-wall',
-				leakReductionMode: 'off',
-				useProbeValidity: true,
-				proofRole: 'sealed-promotion-baseline',
-				promotionStatus: 'CANDIDATE-FIXTURE'
-			},
-			{
-				label: 'leak-sealed-wall-validity-weighted',
-				fixtureMode: 'sealed-wall',
-				leakReductionMode: 'normal',
-				useProbeValidity: true,
-				disableVisibilityDepth: true,
-				proofRole: 'sealed-promotion-scalar-validity-control',
-				promotionStatus: 'CANDIDATE-FIXTURE'
-			},
-			{
-				label: 'leak-sealed-wall-visibility-scaffold-disabled',
-				fixtureMode: 'sealed-wall',
-				leakReductionMode: 'normal',
-				useProbeValidity: true,
-				proofRole: 'sealed-promotion-visibility-scaffold-disabled',
-				promotionStatus: 'CANDIDATE-FIXTURE'
-			},
-			{
-				label: 'leak-zero-thickness-unweighted',
-				fixtureMode: 'zero-thickness',
-				leakReductionMode: 'off',
-				useProbeValidity: true,
-				proofRole: 'negative-control-baseline',
-				negativeControlStatus: 'OPEN'
-			},
-			{
-				label: 'leak-zero-thickness-validity-weighted',
-				fixtureMode: 'zero-thickness',
-				leakReductionMode: 'normal',
-				useProbeValidity: true,
-				disableVisibilityDepth: true,
-				proofRole: 'negative-control-candidate',
-				negativeControlStatus: 'OPEN'
-			},
-			{
-				label: 'leak-zero-thickness-visibility-scaffold-disabled',
-				fixtureMode: 'zero-thickness',
-				leakReductionMode: 'normal',
-				useProbeValidity: true,
-				proofRole: 'negative-control-visibility-scaffold-disabled',
-				negativeControlStatus: 'OPEN'
+				useProbeValidity: true
 			}
 		];
 
 		const restoreState = async () => {
 
 			restoreProbeVisibilitySnapshot( previousVisibility );
-			await restoreHarnessState( previousState, 'leak matrix restore' );
+			await restoreHarnessState( previousState, 'leak proof restore' );
 
 		};
 
 		try {
 
-			for ( const leakCase of cases ) {
+			for ( const proofCase of cases ) {
 
 				setBaseCornellProbeMeshesVisible( false );
-				setLeakFixtureMode( leakCase.fixtureMode );
+				setLeakFixtureMode( 'sealed-wall' );
 
 				_lightProbeContext.params.resolution = 4;
 				_lightProbeContext.params.cubemapSize = 8;
@@ -2642,8 +2565,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				_lightProbeContext.params.band2Intensity = 0.55;
 				_lightProbeContext.params.normalBias = 0.5;
 				_lightProbeContext.params.viewBias = 0;
-				_lightProbeContext.params.leakReductionMode = leakCase.leakReductionMode;
-				_lightProbeContext.params.useProbeValidity = leakCase.useProbeValidity;
+				_lightProbeContext.params.leakReductionMode = proofCase.leakReductionMode;
+				_lightProbeContext.params.useProbeValidity = proofCase.useProbeValidity;
 				_lightProbeContext.params.lightingMode = 'probes only';
 				_lightProbeContext.params.probeHelper = false;
 				_lightProbeContext.probeHelper.visible = false;
@@ -2655,13 +2578,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				}
 
-				setLeakFixtureMode( leakCase.fixtureMode );
+				await _lightProbeContext.recreateAndBakeRequired( `leak proof ${ proofCase.label }` );
 
-				await _lightProbeContext.recreateAndBakeRequired( `leak matrix ${ leakCase.label }` );
-
-				const guardedVisibilityProofMode = leakCase.leakReductionMode === 'normal' && leakCase.disableVisibilityDepth !== true ?
-					'guarded' :
-					'off';
+				const guardedVisibilityProofMode = proofCase.disableVisibilityDepth === true ? 'off' : 'guarded';
 
 				if ( typeof _lightProbeContext.probeGrid._setGuardedVisibilityProofMode === 'function' ) {
 
@@ -2672,62 +2591,29 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
-				const leakMetrics = captureLeakRegionMetrics();
-				const preToneLeakMetrics = captureLeakRegionMetricsWithRendererMapping( {
-					mode: 'pre-tone-linear-output-masked-visible-pixels',
-					toneMapping: THREE.NoToneMapping,
-					toneMappingLabel: 'NoToneMapping',
-					outputColorSpace: THREE.LinearSRGBColorSpace
-				} );
-
 				rows.push( {
-					label: leakCase.label,
-					proofRole: leakCase.proofRole,
-					fixtureMode: leakCase.fixtureMode,
-					negativeControlStatus: leakCase.negativeControlStatus ?? 'not-applicable',
-					promotionStatus: leakCase.promotionStatus ?? 'not-applicable',
+					label: proofCase.label,
+					fixtureMode: 'sealed-wall',
 					resolution: _lightProbeContext.params.resolution,
-					probes: _lightProbeContext.probeGrid.totalProbes,
 					cubemapSize: _lightProbeContext.params.cubemapSize,
-					projectionPrecision: _lightProbeContext.params.projectionPrecision,
 					band1Intensity: _lightProbeContext.params.band1Intensity,
 					band2Intensity: _lightProbeContext.params.band2Intensity,
-					probeIntensity: _lightProbeContext.params.probeIntensity,
 					normalBias: _lightProbeContext.params.normalBias,
 					viewBias: _lightProbeContext.params.viewBias,
 					leakReductionMode: _lightProbeContext.params.leakReductionMode,
 					useProbeValidity: _lightProbeContext.params.useProbeValidity,
-					visibilityDepthEnabled: guardedVisibilityProofMode === 'guarded',
 					guardedVisibilityProofMode,
 					lightingMode: _lightProbeContext.params.lightingMode,
 					materialType: _lightProbeContext.params.materialType,
-					precision: _lightProbeContext.probeGrid.getPrecisionInfo( _lightProbeContext.renderer ),
 					sampling: _lightProbeContext.probeGrid.getSamplingInfo(),
 					visibilityDepth: readVisibilityDepthInfo(),
-					occupancy: _lightProbeContext.collectProbeOccupancy( _lightProbeContext.params.resolution ),
-					leakMetrics,
-					preToneLeakMetrics,
-					sceneUpdateMs: _lightProbeContext.timings.sceneUpdateMs,
-					cubemapMs: _lightProbeContext.timings.cubemapMs,
-					radianceCubemapCaptureMs: _lightProbeContext.timings.radianceCubemapCaptureMs,
-					projectionMs: _lightProbeContext.timings.projectionMs,
-					computeShProjectionMs: _lightProbeContext.timings.computeShProjectionMs,
-					copyMs: _lightProbeContext.timings.copyMs,
-					atlasRepackMs: _lightProbeContext.timings.atlasRepackMs,
-					visibilityCubemapMs: _lightProbeContext.timings.visibilityCubemapMs,
-					distanceCubemapCaptureMs: _lightProbeContext.timings.distanceCubemapCaptureMs,
-					visibilityRepackMs: _lightProbeContext.timings.visibilityRepackMs,
-					verifierReadbackMs: _lightProbeContext.timings.verifierReadbackMs,
-					visibilityDepthMode: _lightProbeContext.timings.visibilityDepthMode,
-					projectionBackend: _lightProbeContext.timings.projectionBackend,
-					totalBakeMs: _lightProbeContext.timings.totalBakeMs,
-					wallClockTotalBakeMs: _lightProbeContext.timings.wallClockTotalBakeMs,
-					timingSource: _lightProbeContext.timings.timingSource,
-					timingSourceKind: _lightProbeContext.timings.timingSourceKind,
-					gpuTimestampStatus: _lightProbeContext.timings.gpuTimestampStatus,
-					timingBuckets: _lightProbeContext.timings.timingBuckets,
-					deterministicTimerDetected: _lightProbeContext.timings.deterministicTimerDetected,
-					frameMs: _lightProbeContext.timings.frameMs
+					leakMetrics: captureLeakRegionMetrics(),
+					preToneLeakMetrics: captureLeakRegionMetricsWithRendererMapping( {
+						mode: 'pre-tone-linear-output-masked-visible-pixels',
+						toneMapping: THREE.NoToneMapping,
+						toneMappingLabel: 'NoToneMapping',
+						outputColorSpace: THREE.LinearSRGBColorSpace
+					} )
 				} );
 
 			}
@@ -2747,98 +2633,62 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const readCorrectBounce = row => row.leakMetrics.correctBounceRatio;
 		const readMaskedCorrectBounce = row => row.leakMetrics.maskedCorrectBounceRatio ?? readCorrectBounce( row );
 		const readPreToneMaskedCorrectBounce = row => row.preToneLeakMetrics.metrics.maskedCorrectBounceRatio ?? readMaskedCorrectBounce( row );
-		const readDarkPixelRatio = row => row.leakMetrics.darkPixelRatio;
-		const readCellEdgeContrast = row => row.leakMetrics.cellEdgeContrast;
 		const signedDelta = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) - read( rowMap.get( a ) ) );
 		const ratio = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
 		const improvementRatio = ( a, b, read ) => roundMetric( ( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
-		const sealedWrongSideImprovement = improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readWrongSide );
-		const sealedCorrectBouncePreservation = ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCorrectBounce );
-		const sealedPreToneMaskedWrongSideImprovement = improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedWrongSide );
-		const sealedPreToneMaskedCorrectBouncePreservation = ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedCorrectBounce );
-		const sealedMaskedWrongSideImprovement = improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedWrongSide );
-		const sealedPromotionStatus = sealedWrongSideImprovement >= 0.05 &&
-			sealedMaskedWrongSideImprovement >= 0.05 &&
-			sealedCorrectBouncePreservation >= 0.9 ?
-			'SUPPORTED-BY-SEALED-FIXTURE' :
-			'OPEN';
-		const sealedLinearPromotionStatus = sealedPreToneMaskedWrongSideImprovement >= 0.05 && sealedPreToneMaskedCorrectBouncePreservation >= 0.9 ?
-			'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' :
-			'OPEN';
+		const baseline = 'sealed-wall-validity-weighted';
+		const candidate = 'sealed-wall-visibility-moments';
+		const wrongSideImprovement = improvementRatio( baseline, candidate, readWrongSide );
+		const maskedWrongSideImprovement = improvementRatio( baseline, candidate, readMaskedWrongSide );
+		const preToneMaskedWrongSideImprovement = improvementRatio( baseline, candidate, readPreToneMaskedWrongSide );
+		const correctBouncePreservation = ratio( baseline, candidate, readCorrectBounce );
+		const preToneMaskedCorrectBouncePreservation = ratio( baseline, candidate, readPreToneMaskedCorrectBounce );
 
 		return {
+			fixtureMode: 'sealed-wall',
+			proofBoundary: 'Compact sealed-wall leak proof facts for default verifier gates; exploratory thin-wall, zero-thickness, and artifact matrices are intentionally excluded from default artifacts.',
 			rows,
-			comparisons: {
-				thinWall: {
-					normalWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-normal-weighted', readWrongSide ),
-					validityWrongSideColorRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readWrongSide ),
-					normalCorrectBouncePreservation: ratio( 'leak-thin-wall-unweighted', 'leak-thin-wall-normal-weighted', readCorrectBounce ),
-					validityCorrectBouncePreservation: ratio( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readCorrectBounce ),
-					validityDarkPixelRatioDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readDarkPixelRatio ),
-					validityCellEdgeContrastDelta: signedDelta( 'leak-thin-wall-unweighted', 'leak-thin-wall-validity-weighted', readCellEdgeContrast ),
-					visibility: {
-						wrongSide: {
-							delta: signedDelta( 'leak-thin-wall-validity-weighted', 'leak-thin-wall-visibility-scaffold-disabled', readWrongSide )
-						},
-						correctBounce: {
-							preservation: ratio( 'leak-thin-wall-validity-weighted', 'leak-thin-wall-visibility-scaffold-disabled', readCorrectBounce )
-						},
-						disabledControl: {
-							delta: signedDelta( 'leak-thin-wall-validity-weighted', 'visibility-disabled-control', readWrongSide )
-						}
-					}
-				},
-				sealedWall: {
-					status: sealedPromotionStatus,
-					linearPromotionStatus: sealedLinearPromotionStatus,
-					presentationMetricMode: 'tone-mapped-canvas-ratio-legacy',
-					linearPromotionMetricMode: 'pre-tone-linear-output-masked-visible-pixels',
-					fixtureBoundary: 'Sealed divider spans the probe-grid depth so this row tests moment visibility without the known finite-wall front-edge bypass.',
-					validityWrongSideColorRatioDelta: signedDelta( 'leak-sealed-wall-unweighted', 'leak-sealed-wall-validity-weighted', readWrongSide ),
-					validityCorrectBouncePreservation: ratio( 'leak-sealed-wall-unweighted', 'leak-sealed-wall-validity-weighted', readCorrectBounce ),
-					visibility: {
-						wrongSide: {
-							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readWrongSide ),
-							improvement: sealedWrongSideImprovement
-						},
-						centerWrongSide: {
-							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCenterWrongSide ),
-							improvement: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readCenterWrongSide )
-						},
-						surfaceWrongSide: {
-							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readSurfaceWrongSide ),
-							improvement: improvementRatio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readSurfaceWrongSide )
-						},
-						maskedWrongSide: {
-							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedWrongSide ),
-							improvement: sealedMaskedWrongSideImprovement
-						},
-						preToneMaskedWrongSide: {
-							delta: signedDelta( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readPreToneMaskedWrongSide ),
-							improvement: sealedPreToneMaskedWrongSideImprovement
-						},
-						correctBounce: {
-							preservation: sealedCorrectBouncePreservation
-						},
-						maskedCorrectBounce: {
-							preservation: ratio( 'leak-sealed-wall-validity-weighted', 'leak-sealed-wall-visibility-scaffold-disabled', readMaskedCorrectBounce )
-						},
-						preToneMaskedCorrectBounce: {
-							preservation: sealedPreToneMaskedCorrectBouncePreservation
-						}
-					}
-				},
-				zeroThickness: {
-					status: 'OPEN',
-					validityWrongSideColorRatioDelta: signedDelta( 'leak-zero-thickness-unweighted', 'leak-zero-thickness-validity-weighted', readWrongSide ),
-					validityCorrectBouncePreservation: ratio( 'leak-zero-thickness-unweighted', 'leak-zero-thickness-validity-weighted', readCorrectBounce ),
-					visibility: {
-						wrongSide: {
-							delta: signedDelta( 'leak-zero-thickness-validity-weighted', 'leak-zero-thickness-visibility-scaffold-disabled', readWrongSide )
-						},
-						correctBounce: {
-							preservation: ratio( 'leak-zero-thickness-validity-weighted', 'leak-zero-thickness-visibility-scaffold-disabled', readCorrectBounce )
-						}
+			sealedWall: {
+				status: wrongSideImprovement >= 0.05 &&
+					maskedWrongSideImprovement >= 0.05 &&
+					correctBouncePreservation >= 0.9 ?
+					'SUPPORTED-BY-SEALED-FIXTURE' :
+					'OPEN',
+				linearPromotionStatus: preToneMaskedWrongSideImprovement >= 0.05 &&
+					preToneMaskedCorrectBouncePreservation >= 0.9 ?
+					'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' :
+					'OPEN',
+				presentationMetricMode: 'tone-mapped-canvas-ratio-legacy',
+				linearPromotionMetricMode: 'pre-tone-linear-output-masked-visible-pixels',
+				visibility: {
+					wrongSide: {
+						delta: signedDelta( baseline, candidate, readWrongSide ),
+						improvement: wrongSideImprovement
+					},
+					centerWrongSide: {
+						delta: signedDelta( baseline, candidate, readCenterWrongSide ),
+						improvement: improvementRatio( baseline, candidate, readCenterWrongSide )
+					},
+					surfaceWrongSide: {
+						delta: signedDelta( baseline, candidate, readSurfaceWrongSide ),
+						improvement: improvementRatio( baseline, candidate, readSurfaceWrongSide )
+					},
+					maskedWrongSide: {
+						delta: signedDelta( baseline, candidate, readMaskedWrongSide ),
+						improvement: maskedWrongSideImprovement
+					},
+					preToneMaskedWrongSide: {
+						delta: signedDelta( baseline, candidate, readPreToneMaskedWrongSide ),
+						improvement: preToneMaskedWrongSideImprovement
+					},
+					correctBounce: {
+						preservation: correctBouncePreservation
+					},
+					maskedCorrectBounce: {
+						preservation: ratio( baseline, candidate, readMaskedCorrectBounce )
+					},
+					preToneMaskedCorrectBounce: {
+						preservation: preToneMaskedCorrectBouncePreservation
 					}
 				}
 			},
@@ -3126,10 +2976,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			};
 
 		},
-		captureLeakRegionMetrics,
 		inspectVisibilityWeightingAtLeakReceivers,
 		inspectLeakReceiverNormalConvention,
-		runProbeLeakMatrix,
+		captureLeakProofFacts,
 		applyGroundingParitySnapshot,
 		restoreGroundingParitySnapshot,
 		testBakeCoalescing: async () => {

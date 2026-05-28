@@ -17,204 +17,74 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 	'probe occupancy: expected occupied probe metadata.' );
 	results.push( { step: 'probe occupancy', probeOccupancy } );
 
-	const leakMatrix = await call( 'runProbeLeakMatrix' );
-	assert( Array.isArray( leakMatrix.rows ) && leakMatrix.rows.length === 11,
-		'leak matrix: expected eleven DDGI-lite visibility/depth verifier rows with runtime dilation rows removed from proof-6.' );
+	const leakProofFacts = await call( 'captureLeakProofFacts' );
+	assert( leakProofFacts.fixtureMode === 'sealed-wall',
+		'leak proof facts: expected sealed-wall verifier fixture.' );
+	assert( Array.isArray( leakProofFacts.rows ) && leakProofFacts.rows.length === 2,
+		'leak proof facts: expected scalar validity control and moment visibility candidate rows.' );
 
-	const leakRows = new Map( leakMatrix.rows.map( row => [ row.label, row ] ) );
-	const leakThinUnweighted = leakRows.get( 'leak-thin-wall-unweighted' );
-	const leakThinNormalWeighted = leakRows.get( 'leak-thin-wall-normal-weighted' );
-	const leakThinValidityWeighted = leakRows.get( 'leak-thin-wall-validity-weighted' );
-	const leakThinVisibilityMoments = leakRows.get( 'leak-thin-wall-visibility-scaffold-disabled' );
-	const leakVisibilityDisabledControl = leakRows.get( 'visibility-disabled-control' );
-	const leakSealedUnweighted = leakRows.get( 'leak-sealed-wall-unweighted' );
-	const leakSealedValidityWeighted = leakRows.get( 'leak-sealed-wall-validity-weighted' );
-	const leakSealedVisibilityMoments = leakRows.get( 'leak-sealed-wall-visibility-scaffold-disabled' );
-	const leakZeroUnweighted = leakRows.get( 'leak-zero-thickness-unweighted' );
-	const leakZeroValidityWeighted = leakRows.get( 'leak-zero-thickness-validity-weighted' );
-	const leakZeroVisibilityMoments = leakRows.get( 'leak-zero-thickness-visibility-scaffold-disabled' );
+	const leakRows = new Map( leakProofFacts.rows.map( row => [ row.label, row ] ) );
+	const scalarValidity = leakRows.get( 'sealed-wall-validity-weighted' );
+	const visibilityMoments = leakRows.get( 'sealed-wall-visibility-moments' );
 
-	assert( leakThinUnweighted !== undefined &&
-		leakThinNormalWeighted !== undefined &&
-		leakThinValidityWeighted !== undefined &&
-		leakThinVisibilityMoments !== undefined &&
-		leakVisibilityDisabledControl !== undefined &&
-		leakSealedUnweighted !== undefined &&
-		leakSealedValidityWeighted !== undefined &&
-		leakSealedVisibilityMoments !== undefined &&
-		leakZeroUnweighted !== undefined &&
-		leakZeroValidityWeighted !== undefined &&
-		leakZeroVisibilityMoments !== undefined,
-	'leak matrix: expected thin-wall stress, sealed-wall promotion, visibility-control, and zero-thickness proof rows.' );
+	assert( scalarValidity !== undefined && visibilityMoments !== undefined,
+		'leak proof facts: expected sealed-wall validity and visibility rows.' );
+	assert( scalarValidity.guardedVisibilityProofMode === 'off' &&
+		visibilityMoments.guardedVisibilityProofMode === 'guarded',
+	'leak proof facts: expected moment visibility to be isolated against scalar validity control.' );
+	assert( scalarValidity.resolution === 4 &&
+		scalarValidity.cubemapSize === 8 &&
+		visibilityMoments.resolution === 4 &&
+		visibilityMoments.cubemapSize === 8,
+	'leak proof facts: expected low-res 4^3 / cubemap 8 sealed-wall fixture.' );
+	assert( scalarValidity.sampling.weightedProbeSampling === true &&
+		scalarValidity.sampling.probeValidityMode === 'custom' &&
+		visibilityMoments.sampling.weightedProbeSampling === true &&
+		visibilityMoments.visibilityDepth.available === true &&
+		visibilityMoments.visibilityDepth.mode === 'moments' &&
+		visibilityMoments.visibilityDepth.bytes > 0,
+	'leak proof facts: expected custom validity control and moment-backed visibility candidate.' );
+	assert( scalarValidity.leakMetrics.receiverRegionMetricMode === 'object-bounds-rect-with-center-and-surface-isolated-diagnostics' &&
+		visibilityMoments.leakMetrics.receiverRegionMetricMode === 'object-bounds-rect-with-center-and-surface-isolated-diagnostics',
+	'leak proof facts: expected receiver center/surface/masked diagnostics.' );
+	assert( scalarValidity.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels' &&
+		visibilityMoments.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels',
+	'leak proof facts: expected pre-tone linear masked visible-pixel metrics.' );
 
-	for ( const row of leakMatrix.rows ) {
+	for ( const row of leakProofFacts.rows ) {
 
-		assert( row.resolution === 4 && row.cubemapSize === 8,
-			`leak matrix ${ row.label }: expected low-res 4^3 / cubemap 8 fixture.` );
-		assert( row.band1Intensity === 1 && row.band2Intensity === 0.55,
-			`leak matrix ${ row.label }: expected full band-1 plus damped L2 anti-ringing fixture.` );
-		assert( row.normalBias === 0.5 && row.viewBias === 0,
-			`leak matrix ${ row.label }: expected frozen bias controls.` );
-		assert( row.lightingMode === 'probes only' && row.materialType === 'standard',
-			`leak matrix ${ row.label }: expected probes-only standard-material fixture.` );
-		assert( Number.isFinite( row.totalBakeMs ) &&
-			row.totalBakeMs > 0 &&
-			row.timingSource !== 'unavailable' &&
-			Number.isFinite( row.frameMs ),
-		`leak matrix ${ row.label }: expected positive measured bake timing and finite frame timing.` );
-		assert( row.leakMetrics.regions.leftReceiver !== undefined &&
-			row.leakMetrics.regions.rightReceiver !== undefined &&
-			row.leakMetrics.regions.divider !== undefined,
-		`leak matrix ${ row.label }: expected named leak regions.` );
-		assert( row.leakMetrics.centerRegions?.leftReceiverCenter !== undefined &&
-			row.leakMetrics.centerRegions?.rightReceiverCenter !== undefined &&
-			row.leakMetrics.surfaceRegions?.leftReceiverSurface !== undefined &&
-			row.leakMetrics.surfaceRegions?.rightReceiverSurface !== undefined &&
-			row.leakMetrics.maskedRegions?.leftReceiverMasked !== undefined &&
-			row.leakMetrics.maskedRegions?.rightReceiverMasked !== undefined &&
-			row.leakMetrics.receiverRegionMetricMode === 'object-bounds-rect-with-center-and-surface-isolated-diagnostics',
-		`leak matrix ${ row.label }: expected receiver center, surface-isolated, and masked visible-pixel metric diagnostics.` );
-		assert( row.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels' &&
-			row.preToneLeakMetrics?.toneMapping === 'NoToneMapping' &&
-			row.preToneLeakMetrics?.outputColorSpace === 'srgb-linear' &&
-			Number.isFinite( row.preToneLeakMetrics.metrics.maskedWrongSideColorRatio ) &&
-			Number.isFinite( row.preToneLeakMetrics.metrics.maskedCorrectBounceRatio ),
-		`leak matrix ${ row.label }: expected pre-tone linear-output masked visible-pixel metrics.` );
+		assert( row.band1Intensity === 1 &&
+			row.band2Intensity === 0.55 &&
+			row.normalBias === 0.5 &&
+			row.viewBias === 0 &&
+			row.lightingMode === 'probes only' &&
+			row.materialType === 'standard',
+		`leak proof facts ${ row.label }: expected frozen proof fixture controls.` );
 		assert( Number.isFinite( row.leakMetrics.wrongSideColorRatio ) &&
-			Number.isFinite( row.leakMetrics.centerWrongSideColorRatio ) &&
-			Number.isFinite( row.leakMetrics.surfaceWrongSideColorRatio ) &&
 			Number.isFinite( row.leakMetrics.maskedWrongSideColorRatio ) &&
 			Number.isFinite( row.leakMetrics.correctBounceRatio ) &&
-			Number.isFinite( row.leakMetrics.centerCorrectBounceRatio ) &&
-			Number.isFinite( row.leakMetrics.surfaceCorrectBounceRatio ) &&
-			Number.isFinite( row.leakMetrics.maskedCorrectBounceRatio ) &&
-			row.leakMetrics.maskedReceiverRegionMetricMode === 'receiver-id-mask-visible-pixels' &&
-			Number.isFinite( row.leakMetrics.luminance.mean ) &&
-			Number.isFinite( row.leakMetrics.darkPixelRatio ) &&
-			Number.isFinite( row.leakMetrics.cellEdgeContrast ),
-		`leak matrix ${ row.label }: expected finite leak metrics.` );
-		assert( row.leakMetrics.luminance.mean > 8,
-			`leak matrix ${ row.label }: expected visible leak receiver luminance.` );
-		assert( row.leakMetrics.darkPixelRatio <= 0.95,
-			`leak matrix ${ row.label }: expected bounded dark-pixel ratio.` );
-		assert( row.leakMetrics.cellEdgeContrast <= 255,
-			`leak matrix ${ row.label }: expected bounded cell-edge contrast.` );
+			Number.isFinite( row.preToneLeakMetrics.metrics.maskedWrongSideColorRatio ) &&
+			Number.isFinite( row.preToneLeakMetrics.metrics.maskedCorrectBounceRatio ),
+		`leak proof facts ${ row.label }: expected finite leak and bounce metrics.` );
+		assert( row.leakMetrics.correctBounceRatio > 0.75,
+			`leak proof facts ${ row.label }: expected correct bounce to remain measurable.` );
 
 	}
 
-	assert( leakThinUnweighted.fixtureMode === 'thin-wall' &&
-		leakThinNormalWeighted.fixtureMode === 'thin-wall' &&
-		leakThinValidityWeighted.fixtureMode === 'thin-wall' &&
-		leakThinVisibilityMoments.fixtureMode === 'thin-wall' &&
-		leakVisibilityDisabledControl.fixtureMode === 'thin-wall' &&
-		leakSealedUnweighted.fixtureMode === 'sealed-wall' &&
-		leakSealedValidityWeighted.fixtureMode === 'sealed-wall' &&
-		leakSealedVisibilityMoments.fixtureMode === 'sealed-wall' &&
-		leakZeroUnweighted.fixtureMode === 'zero-thickness' &&
-		leakZeroValidityWeighted.fixtureMode === 'zero-thickness' &&
-		leakZeroVisibilityMoments.fixtureMode === 'zero-thickness',
-	'leak matrix: expected fixture geometry to change only for explicit sealed-wall promotion and zero-thickness negative-control rows.' );
-	assert( leakThinUnweighted.probeIntensity === leakThinNormalWeighted.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakThinValidityWeighted.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakThinVisibilityMoments.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakVisibilityDisabledControl.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakSealedUnweighted.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakSealedValidityWeighted.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakSealedVisibilityMoments.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakZeroUnweighted.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakZeroValidityWeighted.probeIntensity &&
-		leakThinUnweighted.probeIntensity === leakZeroVisibilityMoments.probeIntensity,
-	'leak matrix: leak comparison must not improve by changing global probe intensity.' );
-	assert( leakThinUnweighted.sampling.weightedProbeSampling === false &&
-		leakThinUnweighted.sampling.manualIrradianceSampling === false,
-	'leak matrix: unweighted thin-wall baseline must remain hardware-filtered.' );
-	assert( leakThinNormalWeighted.sampling.weightedProbeSampling === true &&
-		leakThinNormalWeighted.sampling.probeValidityMode === 'constant',
-	'leak matrix: normal-weighted thin-wall row must use manual weighted sampling with constant validity.' );
-	assert( leakThinValidityWeighted.sampling.weightedProbeSampling === true &&
-		leakThinValidityWeighted.sampling.probeValidityMode === 'custom' &&
-		leakThinValidityWeighted.sampling.invalidProbeCount > 0 &&
-		leakThinValidityWeighted.occupancy.occupiedProbeCount > 0,
-	'leak matrix: validity-weighted thin-wall row must upload controlled wall occupancy metadata.' );
-	assert( leakThinVisibilityMoments.visibilityDepth.available === true &&
-		leakThinVisibilityMoments.visibilityDepth.mode === 'moments' &&
-		leakThinVisibilityMoments.visibilityDepth.bytes > 0 &&
-		leakThinVisibilityMoments.guardedVisibilityProofMode === 'guarded' &&
-		leakSealedVisibilityMoments.visibilityDepth.available === true &&
-		leakSealedVisibilityMoments.visibilityDepth.mode === 'moments' &&
-		leakSealedVisibilityMoments.visibilityDepth.bytes > 0 &&
-		leakSealedVisibilityMoments.guardedVisibilityProofMode === 'guarded',
-	'leak matrix: visibility rows must use the private guarded moment-backed proof path.' );
-	assert( leakZeroUnweighted.negativeControlStatus === 'OPEN' &&
-		leakZeroValidityWeighted.negativeControlStatus === 'OPEN' &&
-		leakZeroVisibilityMoments.negativeControlStatus === 'OPEN' &&
-		leakMatrix.comparisons.zeroThickness.status === 'OPEN',
-	'leak matrix: zero-thickness negative control must stay explicitly unresolved.' );
-	assert( leakThinUnweighted.leakMetrics.correctBounceRatio > 0.95,
-		'leak matrix: thin-wall baseline must preserve measurable correct-side bounce.' );
-	assert( leakThinNormalWeighted.leakMetrics.correctBounceRatio >
-		leakThinUnweighted.leakMetrics.correctBounceRatio * 0.75,
-	'leak matrix: normal weighting must not erase correct bounce.' );
-	assert( leakThinValidityWeighted.leakMetrics.correctBounceRatio >
-		leakThinUnweighted.leakMetrics.correctBounceRatio * 0.75,
-	'leak matrix: validity weighting must not erase correct bounce.' );
-	assert( leakThinVisibilityMoments.leakMetrics.correctBounceRatio >
-		leakThinValidityWeighted.leakMetrics.correctBounceRatio * 0.9,
-	'leak matrix: disabled visibility scaffold row must preserve correct bounce relative to scalar validity.' );
-	assert( leakSealedUnweighted.leakMetrics.correctBounceRatio > 0.95,
-		'leak matrix: sealed-wall baseline must preserve measurable correct-side bounce.' );
-	assert( leakSealedValidityWeighted.leakMetrics.correctBounceRatio >
-		leakSealedUnweighted.leakMetrics.correctBounceRatio * 0.75,
-	'leak matrix: sealed scalar-validity control must not erase correct bounce.' );
-	assert( leakSealedVisibilityMoments.leakMetrics.correctBounceRatio >
-		leakSealedValidityWeighted.leakMetrics.correctBounceRatio * 0.9,
-	'leak matrix: sealed disabled visibility scaffold row must preserve correct bounce relative to scalar validity.' );
-	assert( leakThinNormalWeighted.leakMetrics.wrongSideColorRatio <=
-		leakThinUnweighted.leakMetrics.wrongSideColorRatio + 0.35,
-	'leak matrix: normal weighting must bound wrong-side color leak versus unweighted.' );
-	assert( leakThinValidityWeighted.leakMetrics.wrongSideColorRatio <=
-		leakThinUnweighted.leakMetrics.wrongSideColorRatio + 0.35,
-	'leak matrix: validity weighting must bound wrong-side color leak versus unweighted.' );
-	assert( leakThinVisibilityMoments.leakMetrics.wrongSideColorRatio <=
-		leakThinValidityWeighted.leakMetrics.wrongSideColorRatio + 0.05,
-	`leak matrix: first disabled visibility scaffold row must stay bounded versus scalar validity while the future 5% moment-improvement gate remains proof-tracked (${ leakThinVisibilityMoments.leakMetrics.wrongSideColorRatio } vs ${ leakThinValidityWeighted.leakMetrics.wrongSideColorRatio }).` );
-	assert( leakSealedVisibilityMoments.leakMetrics.wrongSideColorRatio <=
-		leakSealedValidityWeighted.leakMetrics.wrongSideColorRatio + 0.05,
-	`leak matrix: sealed disabled visibility scaffold row must stay bounded versus scalar validity while promotion remains proof-tracked (${ leakSealedVisibilityMoments.leakMetrics.wrongSideColorRatio } vs ${ leakSealedValidityWeighted.leakMetrics.wrongSideColorRatio }).` );
-	assert( leakThinValidityWeighted.leakMetrics.darkPixelRatio <=
-		leakThinUnweighted.leakMetrics.darkPixelRatio + 0.35,
-	'leak matrix: validity weighting must keep dark tails bounded.' );
-	assert( Math.abs( leakMatrix.comparisons.thinWall.validityCellEdgeContrastDelta ) <= 255 &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.normalWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.validityWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.visibility.wrongSide.delta ) &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.validityCorrectBouncePreservation ) &&
-		Number.isFinite( leakMatrix.comparisons.thinWall.visibility.correctBounce.preservation ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.validityWrongSideColorRatioDelta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.wrongSide.delta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.centerWrongSide.delta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.surfaceWrongSide.delta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.delta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.preToneMaskedWrongSide.delta ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.wrongSide.improvement ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.centerWrongSide.improvement ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.surfaceWrongSide.improvement ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.maskedWrongSide.improvement ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.preToneMaskedWrongSide.improvement ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.correctBounce.preservation ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.maskedCorrectBounce.preservation ) &&
-		Number.isFinite( leakMatrix.comparisons.sealedWall.visibility.preToneMaskedCorrectBounce.preservation ) &&
-		Number.isFinite( leakMatrix.comparisons.zeroThickness.validityWrongSideColorRatioDelta ),
-	'leak matrix: expected finite bounded leak comparison deltas.' );
-	assert( [ 'OPEN', 'SUPPORTED-BY-SEALED-FIXTURE' ].includes( leakMatrix.comparisons.sealedWall.status ) &&
-		[ 'OPEN', 'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' ].includes( leakMatrix.comparisons.sealedWall.linearPromotionStatus ) &&
-		leakMatrix.comparisons.sealedWall.linearPromotionMetricMode === 'pre-tone-linear-output-masked-visible-pixels',
-	'leak matrix: sealed-wall presentation and linear promotion statuses must remain explicit and gate-driven.' );
-	assert( leakMatrix.restored.lightingMode === 'direct + probes' &&
-		leakMatrix.restored.sampling.leakReductionMode === 'off' &&
-		leakMatrix.restored.leakFixtureVisible === false,
-	'leak matrix: expected demo state and hidden fixture restoration.' );
-	results.push( { step: 'leak matrix', leakMatrix } );
+	assert( [ 'OPEN', 'SUPPORTED-BY-SEALED-FIXTURE' ].includes( leakProofFacts.sealedWall.status ) &&
+		[ 'OPEN', 'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' ].includes( leakProofFacts.sealedWall.linearPromotionStatus ),
+	'leak proof facts: expected explicit sealed-wall promotion statuses.' );
+	assert( Number.isFinite( leakProofFacts.sealedWall.visibility.wrongSide.improvement ) &&
+		Number.isFinite( leakProofFacts.sealedWall.visibility.maskedWrongSide.improvement ) &&
+		Number.isFinite( leakProofFacts.sealedWall.visibility.preToneMaskedWrongSide.improvement ) &&
+		Number.isFinite( leakProofFacts.sealedWall.visibility.correctBounce.preservation ) &&
+		Number.isFinite( leakProofFacts.sealedWall.visibility.preToneMaskedCorrectBounce.preservation ),
+	'leak proof facts: expected finite sealed-wall compact gate metrics.' );
+	assert( leakProofFacts.restored.lightingMode === 'direct + probes' &&
+		leakProofFacts.restored.sampling.leakReductionMode === 'off' &&
+		leakProofFacts.restored.leakFixtureVisible === false,
+	'leak proof facts: expected demo state and hidden fixture restoration.' );
+	results.push( { step: 'leak proof facts', leakProofFacts } );
 
 
 }

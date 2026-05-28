@@ -36,8 +36,8 @@ export function createLightProbeProofFacts( results ) {
 	const initial = getResult( results, 'initial' ).metrics;
 	const computeProjectionRuntimeParity = getResult( results, 'compute projection runtime parity' ).computeProjectionRuntimeParity;
 	const visibilityMomentInspection = getResult( results, 'visibility moment inspection' ).visibilityMomentInspection;
-	const leakMatrix = getResult( results, 'leak matrix' ).leakMatrix;
-	const sealedWall = leakMatrix.comparisons.sealedWall;
+	const leakProofFacts = getResult( results, 'leak proof facts' ).leakProofFacts;
+	const sealedWall = leakProofFacts.sealedWall;
 	const sealedVisibility = sealedWall.visibility;
 
 	return {
@@ -160,7 +160,7 @@ export function evaluateLightProbeProofGates( facts ) {
 			expected: '>= 0.05',
 			pass: facts.sealedWall.wrongSideImprovement >= 0.05,
 			reason: 'Moment visibility should reduce sealed-wall wrong-side leakage before promotion.',
-			evidenceRef: 'leak matrix'
+			evidenceRef: 'leak proof facts'
 		} ),
 		createGate( {
 			id: 'sealedWall.maskedWrongSideImprovement',
@@ -170,7 +170,7 @@ export function evaluateLightProbeProofGates( facts ) {
 			expected: '>= 0.05',
 			pass: facts.sealedWall.maskedWrongSideImprovement >= 0.05,
 			reason: 'Masked visible-pixel leak should improve before promotion.',
-			evidenceRef: 'leak matrix'
+			evidenceRef: 'leak proof facts'
 		} ),
 		createGate( {
 			id: 'sealedWall.correctBouncePreservation',
@@ -180,7 +180,7 @@ export function evaluateLightProbeProofGates( facts ) {
 			expected: '>= 0.9',
 			pass: facts.sealedWall.correctBouncePreservation >= 0.9,
 			reason: 'Leak reduction must not erase correct-side bounce.',
-			evidenceRef: 'leak matrix'
+			evidenceRef: 'leak proof facts'
 		} ),
 		createGate( {
 			id: 'sealedWall.preToneMaskedWrongSideImprovement',
@@ -190,7 +190,7 @@ export function evaluateLightProbeProofGates( facts ) {
 			expected: '>= 0.05',
 			pass: facts.sealedWall.preToneMaskedWrongSideImprovement >= 0.05,
 			reason: 'Linear pre-tone masked leak improvement is the promotion metric, not tone-mapped storytelling.',
-			evidenceRef: 'leak matrix'
+			evidenceRef: 'leak proof facts'
 		} ),
 		createGate( {
 			id: 'sealedWall.preToneMaskedCorrectBouncePreservation',
@@ -200,7 +200,7 @@ export function evaluateLightProbeProofGates( facts ) {
 			expected: '>= 0.9',
 			pass: facts.sealedWall.preToneMaskedCorrectBouncePreservation >= 0.9,
 			reason: 'Linear pre-tone leak gate must preserve correct bounce.',
-			evidenceRef: 'leak matrix'
+			evidenceRef: 'leak proof facts'
 		} )
 	];
 
