@@ -1,5 +1,9 @@
 import puppeteer from 'puppeteer';
 import { Image } from './image.js';
+import { writeLightProbeGroundingParityArtifacts } from './lightprobegrid-gpu-artifacts.js';
+import { checkSmokeScreenshot, runSmokeHarness } from './lightprobegrid-gpu-smoke.js';
+import { smokeHarnesses } from './lightprobegrid-gpu-smoke-config.js';
+import { checkSmokeSourceInvariants } from './lightprobegrid-gpu-source-invariants.js';
 import * as fs from 'fs/promises';
 import { createServer } from '../../utils/server.js';
 
@@ -69,6 +73,7 @@ const exceptionList = [
 	'webgl_morphtargets_webcam'
 
 ];
+
 
 /* Configuration */
 
@@ -431,7 +436,12 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 
 		try {
 
-			await page.goto( `http://localhost:${ port }/examples/${ file }.html`, {
+			const smokeHarness = isMakeScreenshot === false ? smokeHarnesses[ file ] : undefined;
+			const query = smokeHarness !== undefined ? `?${ smokeHarness.query }` : '';
+
+			if ( smokeHarness !== undefined ) await checkSmokeSourceInvariants( file, smokeHarness );
+
+			await page.goto( `http://localhost:${ port }/examples/${ file }.html${ query }`, {
 				waitUntil: 'networkidle0',
 				timeout: networkTimeout * 60000
 			} );
@@ -501,11 +511,36 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 
 		}
 
+		const smokeResults = isMakeScreenshot === false && smokeHarnesses[ file ] !== undefined ?
+			await runSmokeHarness( page, file, smokeHarnesses[ file ] ) :
+			null;
+
+		if ( smokeResults !== null && isMakeScreenshot === false ) {
+
+			await writeLightProbeGroundingParityArtifacts( page, file, smokeHarnesses[ file ], smokeResults, { port, networkTimeout } );
+
+		}
+
 		const screenshot = ( await Image.read( await page.screenshot() ) ).scale( 1 / viewScale );
 
 		if ( page.error !== undefined ) throw new Error( page.error );
 
-		if ( isMakeScreenshot ) {
+		if ( smokeResults !== null && isMakeScreenshot === false ) {
+
+			try {
+
+				checkSmokeScreenshot( file, screenshot );
+
+			} catch ( e ) {
+
+				await screenshot.write( `test/e2e/output-screenshots/${ file }-actual.jpg`, jpgQuality );
+				throw e;
+
+			}
+
+			console.green( `Smoke ${ smokeResults.length } checks in file: ${ file }` );
+
+		} else if ( isMakeScreenshot ) {
 
 			/* Make screenshots */
 
@@ -588,6 +623,7 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 	}
 
 }
+
 
 function close( exitCode = 1 ) {
 

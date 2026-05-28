@@ -346,6 +346,26 @@ class ValueSelect extends Value {
 
 	}
 
+	setValue( val ) {
+
+		const options = this.options;
+
+		if ( Array.isArray( options ) ) {
+
+			const index = options.indexOf( val );
+			if ( index !== - 1 ) this.select.selectedIndex = index;
+
+		} else {
+
+			const entry = Object.entries( options ).find( ( [ key, value ] ) => key === val || value === val );
+			if ( entry !== undefined ) this.select.value = entry[ 0 ];
+
+		}
+
+		return super.setValue( val );
+
+	}
+
 }
 
 class ValueColor extends Value {

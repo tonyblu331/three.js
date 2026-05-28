@@ -68,6 +68,8 @@ export * from './interactive/InteractiveGroup.js';
 export * from './interactive/SelectionBox.js';
 export * from './interactive/SelectionHelper.js';
 
+export * from './lighting/LightProbeGridGPU.js';
+
 export * from './lights/LightProbeGenerator.js';
 export * from './lights/RectAreaLightTexturesLib.js';
 export * from './lights/RectAreaLightUniformsLib.js';
