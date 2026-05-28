@@ -430,54 +430,6 @@ export function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 		typeof sealedReceiverGpuDebugDiagnostic.summary.whiteCalibrationVisible === 'boolean' ),
 	'sealed visibility weighting diagnostic: expected finite GPU debug calibration, geometry, and irradiance surface ratios.' );
 
-	assert( sealedVisibilityWeightingDiagnostic.currentProbePipelineStudy?.status === 'SUPPORTED-CURRENT-PIPELINE-DOCUMENTED' &&
-		sealedVisibilityWeightingDiagnostic.currentProbePipelineStudy.coefficientStorage.rgbScalarCountPerProbe === 27 &&
-		sealedVisibilityWeightingDiagnostic.currentProbePipelineStudy.runtimePaths.manualWeighted.includes( 'textureLoad' ) &&
-		sealedVisibilityWeightingDiagnostic.currentProbePipelineStudy.validityVsDilation.includes( 'dilation changes' ) &&
-		sealedVisibilityWeightingDiagnostic.currentProbePipelineStudy.shadowmaskDecision.includes( 'out-of-scope' ),
-	'sealed visibility weighting diagnostic: expected current pipeline study to document SH storage, WebGPU paths, validity, and shadowmask boundary.' );
-	assert( [ 'SUPPORTED-DILATION-ORACLE-REDUCES-LEAK', 'OPEN-DILATION-ORACLE-NOT-PROVEN' ].includes( sealedVisibilityWeightingDiagnostic.dilationOracleStudy?.status ) &&
-		sealedVisibilityWeightingDiagnostic.dilationOracleStudy.proofBoundary.includes( 'CPU-only coefficient replacement' ) &&
-		sealedVisibilityWeightingDiagnostic.dilationOracleStudy.sourceMap.totalProbes > 0 &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.dilationOracleStudy.summary.currentWrongOverCorrectMean ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.dilationOracleStudy.summary.dilationOnlyImprovement ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.dilationOracleStudy.summary.dilationPlusValidityImprovement ) &&
-		sealedVisibilityWeightingDiagnostic.dilationOracleStudy.left.mappedRows.every( row =>
-			Number.isFinite( row.probeIndex ) &&
-			Number.isFinite( row.sourceProbeIndex ) ),
-	'sealed visibility weighting diagnostic: expected CPU dilation oracle with source-map evidence.' );
-	assert( sealedVisibilityWeightingDiagnostic.samplingBiasStudy?.status === 'SUPPORTED-SAMPLING-BIAS-STUDY' &&
-		sealedVisibilityWeightingDiagnostic.samplingBiasStudy.rows.length === 4 &&
-		sealedVisibilityWeightingDiagnostic.samplingBiasStudy.rows.some( row => row.label === 'surface-view-bias' ) &&
-		sealedVisibilityWeightingDiagnostic.samplingBiasStudy.rows.every( row =>
-			Number.isFinite( row.cpuWrongOverCorrectMean ) &&
-			Number.isFinite( row.renderSurfaceWrongSideColorRatio ) &&
-			row.left.samples.length > 0 &&
-			row.left.samples.every( sample =>
-				Array.isArray( sample.selectedProbeIndices ) &&
-				Number.isFinite( sample.cpuLinearIrradiance.r ) ) ) &&
-		typeof sealedVisibilityWeightingDiagnostic.samplingBiasStudy.summary.metricArtifactWarning === 'string',
-	'sealed visibility weighting diagnostic: expected sampling-bias study with selected probes and linear CPU irradiance.' );
-	assert( [ 'SUPPORTED-SH-DERINGING-PROOF-METRICS', 'OPEN-SH-RINGING-NEGATIVE-ENERGY-PRESENT', 'SUPPORTED-SH-RINGING-NOT-DOMINANT' ].includes( sealedVisibilityWeightingDiagnostic.shDeringingStudy?.status ) &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.proofBoundary.includes( 'preserves L00' ) &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.guardPolicy.l00Preserved === true &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.guardPolicy.physicalVisibilitySubstitution === false &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.guardPolicy.publicApiChanged === false &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.maxCurrentNegativeEnergy ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.maxDampedNegativeEnergy ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.totalNegativeEnergyReduction ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.shDeringingStudy.summary.totalChromaPressureReduction ) &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.beforeAfterRows.every( row =>
-			row.l00Preserved === true &&
-			row.physicalVisibilitySubstitution === false &&
-			Number.isFinite( row.negativeEnergyBefore ) &&
-			Number.isFinite( row.negativeEnergyAfter ) ) &&
-	sealedVisibilityWeightingDiagnostic.shDeringingStudy.left.rows.some( row => row.label === 'l0-only' ) &&
-		sealedVisibilityWeightingDiagnostic.shDeringingStudy.left.rows.every( row =>
-			Number.isFinite( row.negativeEnergy ) &&
-			Number.isFinite( row.clampEnergyLoss ) &&
-			Number.isFinite( row.colorBias.wrongOverCorrect ) ),
-	'sealed visibility weighting diagnostic: expected SH de-ringing study with negative-energy and band-window rows.' );
 	results.push( { step: 'sealed visibility weighting diagnostic', sealedVisibilityWeightingDiagnostic } );
 
 }

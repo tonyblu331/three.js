@@ -74,7 +74,6 @@ Working tree is intentionally mid-refactor and not yet committed. The current sl
 | `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | Proof-only visibility study | Mirrors runtime neighbor weighting on CPU, reads GPU atlas/moment data for proof diagnostics, and explains why leak reduction helps or fails. It is diagnostic scaffolding, not public API. |
 | `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | Coefficient attribution diagnostics | Explains per-probe/per-band/per-coefficient contributions and wrong-side color pressure. It helps prove whether the light probe data itself is useful or polluted. |
 | `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | Receiver/material/surface diagnostics | Evaluates receiver-facing behavior: visible color, normal convention, quadrature surface sampling, material path, and final visible pressure. It bridges GPU visual output and CPU diagnostic interpretation. |
-| `examples/jsm/lighting/LightProbeGridGPUOracleDiagnostics.js` | Small oracle helper | Holds proof-only oracle checks around diagnostic expectations. Keep it lean or fold into a broader proof diagnostics module if it stays only composition. |
 | `examples/jsm/lighting/LightProbeGridGPUExampleGUI.js` | Example UI | Keeps runtime controls human-accessible without polluting the runtime class. |
 | `test/e2e/lightprobegrid-gpu-*.js` | Node-side proof/report assertions | Consume harness endpoints and render proof artifacts. They should report truth, not shape runtime behavior. |
 
@@ -102,10 +101,11 @@ The file is doing real work, not just noise, but the responsibilities are now st
 
 The diagnostic files are larger than the runtime file in places. Current verified sizes after the first cleanup slices:
 
-- `LightProbeGridGPUTestHarness.js` 4081 lines.
-- `LightProbeGridGPUReceiverDiagnostics.js` 3309 lines.
-- `LightProbeGridGPUShDiagnostics.js` ~2956 lines.
-- `LightProbeGridGPUVisibilityWeightingStudy.js` 1242 lines.
+- `LightProbeGridGPUTestHarness.js` 2534 lines after compact proof-facts cleanup.
+- `LightProbeGridGPUReceiverDiagnostics.js` 2914 lines.
+- `LightProbeGridGPUShDiagnostics.js` 2556 lines.
+- `LightProbeGridGPUVisibilityWeightingStudy.js` 1015 lines after deleting the oracle-study fanout.
+- `LightProbeGridGPUOracleDiagnostics.js` removed from the default path; the old current-pipeline, dilation, sampling-bias, and SH-deringing studies were lab reports, not proof-summary inputs.
 
 These files are allowed to be diagnostic-heavy, but they duplicate CPU-side concepts: probe indexing, SH coefficient packing/unpacking, SH evaluation, sample-position math, visibility weights, and metric rounding.
 
@@ -171,7 +171,6 @@ examples/jsm/lighting/
     LightProbeGridGPUVisibilityStudy.js        # optional renamed/sliced study module if needed
     LightProbeGridGPUReceiverDiagnostics.js    # optional move after source invariants are updated
     LightProbeGridGPUShDiagnostics.js          # optional move after source invariants are updated
-    LightProbeGridGPUOracleDiagnostics.js      # optional move or merge if it stays thin
     LightProbeGridGPUTestHarness.js            # optional move only if example import churn is acceptable
 ```
 

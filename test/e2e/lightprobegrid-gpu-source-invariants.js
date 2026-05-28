@@ -14,7 +14,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		visibilityStudySource,
 		shDiagnosticsSource,
 		receiverDiagnosticsSource,
-		oracleDiagnosticsSource,
 		proofReadbackSource,
 		gpuConstantsSource,
 		gpuAtlasSource,
@@ -53,7 +52,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js', 'utf8' ),
-		fs.readFile( 'examples/jsm/lighting/LightProbeGridGPUOracleDiagnostics.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProofReadback.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js', 'utf8' ),
@@ -91,7 +89,6 @@ ${ browserHarnessSource }
 ${ visibilityStudySource }
 ${ shDiagnosticsSource }
 ${ receiverDiagnosticsSource }
-${ oracleDiagnosticsSource }
 ${ cpuShMathSource }`;
 	const e2eSource = `${ smokeRunnerSource }
 ${ proofGatesSource }

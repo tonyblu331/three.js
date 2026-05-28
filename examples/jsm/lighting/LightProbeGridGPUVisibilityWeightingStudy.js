@@ -1,5 +1,4 @@
 import * as THREE from 'three/webgpu';
-import { createLightProbeGridGPUOracleDiagnostics } from './LightProbeGridGPUOracleDiagnostics.js';
 import { createLightProbeGridGPUReceiverDiagnostics } from './LightProbeGridGPUReceiverDiagnostics.js';
 import { createLightProbeGridGPUShDiagnostics } from './LightProbeGridGPUShDiagnostics.js';
 import {
@@ -1042,7 +1041,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				visibilityWeightFloor
 			} );
 			const {
-				createGaussLegendreReceiverSamples,
 				createReceiverSurfaceQuadratureDiagnostic,
 				captureReceiverGpuDebugDiagnostics
 			} = createLightProbeGridGPUReceiverDiagnostics( {
@@ -1060,45 +1058,10 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 
 
-			const {
-				createCurrentProbePipelineStudy,
-				createDilationOracleStudy,
-				createSamplingBiasStudy,
-				createShDeringingStudy
-			} = createLightProbeGridGPUOracleDiagnostics( {
-				_lightProbeContext,
-				aggregateReceiverCoefficients,
-				analyzeReceiver,
-				analyzeReceiverShContributions,
-				captureLeakRegionMetrics,
-				createAggregateEvaluation,
-				createGaussLegendreReceiverSamples,
-				createReceiverColorBias,
-				currentHitConfidencePolicy,
-				currentVisibilityBiasScale,
-				diagnosticState,
-				evaluateIrradianceContract,
-				readSourceMappedProbeCoefficients,
-				roundColor,
-				roundMetric
-			} );
-
-
-
-
-
-
-
-
-
 			const escapeClassification = combineEscapeSummary( [ left, right ] );
 			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right, escapeClassification, summary );
 			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic( shContributionDiagnostic );
 			const receiverGpuDebugDiagnostic = await captureReceiverGpuDebugDiagnostics( receiverSurfaceQuadratureDiagnostic );
-			const currentProbePipelineStudy = createCurrentProbePipelineStudy();
-			const dilationOracleStudy = await createDilationOracleStudy( left, right );
-			const samplingBiasStudy = await createSamplingBiasStudy();
-			const shDeringingStudy = await createShDeringingStudy( left, right );
 			const dominantEscapeReason = Object.entries( escapeClassification.escapeReasons )
 				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
 				.at( 0 ) ?? [ 'none', 0 ];
@@ -1202,10 +1165,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				shContributionDiagnostic,
 				receiverSurfaceQuadratureDiagnostic,
 				receiverGpuDebugDiagnostic,
-				currentProbePipelineStudy,
-				dilationOracleStudy,
-				samplingBiasStudy,
-				shDeringingStudy,
 				interrogationFinding,
 				dominantEscapeReason: {
 					reason: dominantEscapeReason[ 0 ],
