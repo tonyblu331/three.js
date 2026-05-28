@@ -167,6 +167,8 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		surfaceDeltaMax: surfaceProbeOnlySceneLinearCpuDeltaMax,
 		visiblePixelMirrorStatus: visiblePixelCpuMirrorStudy?.status ?? null,
 		visiblePixelMirrorDominantMismatchSource: visiblePixelCpuMirrorStudy?.summary?.dominantMismatchSource ?? null,
+		visiblePixelMirrorDominantWeightingMismatchComponent: visiblePixelCpuMirrorStudy?.summary?.dominantWeightingMismatchComponent ?? null,
+		visiblePixelMirrorWeightComponentDeltas: visiblePixelCpuMirrorStudy?.summary?.maxNeighborWeightComponentDeltas ?? null,
 		visiblePixelSampleCount: visiblePixelCpuMirrorStudy?.summary?.sampleCount ?? null,
 		cpuVisiblePixelRuntimeWrongRatioMean: visiblePixelCpuMirrorStudy?.summary?.cpuSampledWrongSideRatioMean ?? null,
 		cpuVisiblePixelRuntimeWrongRatioMax: visiblePixelCpuMirrorStudy?.summary?.cpuSampledWrongSideRatioMax ?? null,
@@ -177,12 +179,14 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		tolerance: cpuRenderAgreementTolerance,
 		diagnosticConclusion: runtimeProbeOnlySceneLinearRow === null ?
 			'Runtime-equivalent probe-indirect offscreen scene-linear row is missing; presentation mapping remains open.' :
-			visiblePixelSceneLinearCpuAgreementSupported ?
+				visiblePixelSceneLinearCpuAgreementSupported ?
 				'Runtime-equivalent probe-indirect scene-linear pixels agree with a CPU mirror seeded from the exact GPU-read visible receiver positions; the old CPU surface quadrature aggregate is not the matching sample set.' :
-			probeOnlySceneLinearCpuDeltaMean <= cpuRenderAgreementTolerance ||
+				visiblePixelCpuMirrorStudy !== null ?
+					`Runtime-equivalent probe-indirect scene-linear pixels still disagree with the exact GPU-read visible-pixel CPU mirror; dominant source: ${ visiblePixelCpuMirrorStudy.summary.dominantMismatchSource }${ visiblePixelCpuMirrorStudy.summary.dominantWeightingMismatchComponent !== undefined ? ` / weighting component: ${ visiblePixelCpuMirrorStudy.summary.dominantWeightingMismatchComponent }` : '' }. Keep scene-linear promotion open before tuning visibility.` :
+					probeOnlySceneLinearCpuDeltaMean <= cpuRenderAgreementTolerance ||
 				probeOnlySceneLinearCpuDeltaMax <= cpuRenderAgreementTolerance ?
-				'Runtime-equivalent probe-indirect offscreen scene-linear render is close enough to CPU surface attribution for this fixture.' :
-				receiverPixelParityStudy?.summary?.dominantMismatchSource === 'cpu-vs-gpu-sample-position-mismatch' ?
+					'Runtime-equivalent probe-indirect offscreen scene-linear render is close enough to CPU surface attribution for this fixture.' :
+					receiverPixelParityStudy?.summary?.dominantMismatchSource === 'cpu-vs-gpu-sample-position-mismatch' ?
 					'Runtime-equivalent probe-indirect offscreen scene-linear render still disagrees with CPU surface attribution because the projected CPU quadrature samples do not land on the same visible GPU receiver fragments; compare against GPU pixel positions before tuning visibility.' :
 					'Runtime-equivalent probe-indirect offscreen scene-linear render still disagrees with CPU surface attribution; isolate receiver mask, debug shader equivalence, and CPU/GPU weighting before tuning visibility.'
 	};
@@ -216,6 +220,8 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 		receiverPixelParityConclusion: receiverPixelParityStudy?.summary?.diagnosticConclusion ?? null,
 		visiblePixelCpuMirrorStatus: visiblePixelCpuMirrorStudy?.status ?? null,
 		visiblePixelDominantMismatchSource,
+		visiblePixelDominantWeightingMismatchComponent: visiblePixelCpuMirrorStudy?.summary?.dominantWeightingMismatchComponent ?? null,
+		visiblePixelWeightComponentDeltas: visiblePixelCpuMirrorStudy?.summary?.maxNeighborWeightComponentDeltas ?? null,
 		visiblePixelCpuMirrorConclusion: visiblePixelCpuMirrorStudy?.summary?.diagnosticConclusion ?? null,
 		diagnosticConclusion: probeIndirectGate === 'SUPPORTED' ?
 			sealedPresentationStudy.summary.sceneLinearMismatchClassifier.diagnosticConclusion :
@@ -2993,6 +2999,7 @@ export function createLightProbeProofReport( file, smokeResults, snapshots, rest
 			visibilityWeightingDiagnostic,
 			sealedVisibilityWeightingDiagnostic,
 			presentationDebugTargets,
+			finalColorDebugTargets: presentationDebugTargets,
 			projectionPath,
 			shGuard,
 			sealedReceiverNormalDiagnostic,

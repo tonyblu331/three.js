@@ -654,12 +654,21 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				receiverLocalPosition.copy( receiverPosition );
 				mesh.worldToLocal( receiverLocalPosition );
 				mesh.getWorldQuaternion( receiverQuaternion );
-				receiverNormal.set( 0, 0, 1 ).applyQuaternion( receiverQuaternion ).normalize();
+				if ( surfaceSample?.worldNormal !== undefined ) {
+
+					receiverNormal.copy( surfaceSample.worldNormal ).normalize();
+
+				} else {
+
+					receiverNormal.set( 0, 0, 1 ).applyQuaternion( receiverQuaternion ).normalize();
+
+				}
 				viewDirection.subVectors( _lightProbeContext.camera.position, receiverPosition ).normalize();
 
 				const activeNormalBias = samplingBias?.normalBias ?? _lightProbeContext.params.normalBias;
 				const activeViewBias = samplingBias?.viewBias ?? _lightProbeContext.params.viewBias;
 				const useRuntimeVisibilityPath = surfaceSample?.visibilityPath === 'gpu-runtime-positionworld-distance-bias';
+				const useRuntimeUnguardedVisibilityPath = surfaceSample?.visibilityPath === 'gpu-runtime-unguarded-visibility';
 				const useRuntimeProbeMeta = surfaceSample?.probeMetaPath === 'gpu-runtime-probe-meta';
 				const runtimeVisibilityDistanceBias = useRuntimeVisibilityPath ?
 					_lightProbeContext.probeGrid.visibilityBias?.value ?? 0 :
@@ -674,7 +683,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					receiverNormal.y * probeSpacing.y * activeNormalBias * visibilityBiasScale + viewDirection.y * probeSpacing.y * activeViewBias * visibilityBiasScale,
 					receiverNormal.z * probeSpacing.z * activeNormalBias * visibilityBiasScale + viewDirection.z * probeSpacing.z * activeViewBias * visibilityBiasScale
 				) );
-				const runtimeVisibilityReceiverPosition = useRuntimeVisibilityPath ?
+				const runtimeVisibilityReceiverPosition = useRuntimeVisibilityPath || useRuntimeUnguardedVisibilityPath ?
 					receiverPosition :
 					visibilityReceiverPosition;
 				const probeCoord = new THREE.Vector3(
@@ -723,7 +732,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					const delta = Math.max( receiverDistance - moment.meanDistance - runtimeVisibilityDistanceBias, 0 );
 					const chebyshevVisibility = moment.variance / ( moment.variance + delta * delta );
 					const momentVisibility = chebyshevVisibility;
-					const visibility = resolveHitConfidenceVisibility( moment.hitConfidence, momentVisibility, hitConfidencePolicy );
+					const visibility = useRuntimeUnguardedVisibilityPath ?
+						1 :
+						resolveHitConfidenceVisibility( moment.hitConfidence, momentVisibility, hitConfidencePolicy );
 					const normalWeight = ( ( receiverNormal.dot( probeDirection ) + 1 ) * 0.5 ) * 0.5 + 0.5;
 					const rawProbeValidity = probeValidity[ probeIndex ] ?? 1;
 					const validityWeight = Math.max( rawProbeValidity, probeValidityFloor );
@@ -734,7 +745,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					const kernelOffsetX = ( receiverPosition.x - probePosition.x ) / probeSpacing.x;
 					const kernelOffsetY = ( receiverPosition.y - probePosition.y ) / probeSpacing.y;
 					const kernelOffsetZ = ( receiverPosition.z - probePosition.z ) / probeSpacing.z;
-					const compatibleKernel = Math.pow(
+					const compatibleKernel = useRuntimeUnguardedVisibilityPath ? 1 : Math.pow(
 						2,
 						- ( kernelOffsetX * kernelOffsetX + kernelOffsetY * kernelOffsetY + kernelOffsetZ * kernelOffsetZ )
 					);
@@ -903,8 +914,13 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					selectedProbeIndices: rows.map( row => row.probeIndex ),
 					visibilityBiasScale,
 					hitConfidencePolicy: hitConfidencePolicy.label,
-					runtimeVisibilityPath: useRuntimeVisibilityPath ? 'gpu-runtime-positionworld-distance-bias' : 'legacy-cpu-biased-visibility-position',
+					runtimeVisibilityPath: useRuntimeVisibilityPath ?
+						'gpu-runtime-positionworld-distance-bias' :
+						useRuntimeUnguardedVisibilityPath ?
+							'gpu-runtime-unguarded-visibility' :
+							'legacy-cpu-biased-visibility-position',
 					probeMetaPath: useRuntimeProbeMeta ? 'gpu-runtime-probe-meta' : 'legacy-cpu-validity-only-meta',
+					normalSource: surfaceSample?.worldNormal !== undefined ? 'gpu-debug-normalWorld' : 'mesh-world-quaternion-local-z',
 					visibilityDistanceBias: roundMetric( runtimeVisibilityDistanceBias ),
 					visibilityReceiverPosition: {
 						x: roundMetric( runtimeVisibilityReceiverPosition.x ),

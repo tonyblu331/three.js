@@ -802,6 +802,12 @@ class LightProbeGridGPU extends Object3D {
 
 			const weightedSamples = [];
 			const scalarSamples = [];
+			const debugProbeTrilinearWeights = [];
+			const debugProbeNormalWeights = [];
+			const debugProbeValidityWeights = [];
+			const debugProbeConfidenceWeights = [];
+			const debugProbeLayerCompatibility = [];
+			const debugProbeCompatibleKernels = [];
 			const debugProbeBaseWeights = [];
 			const debugProbeVisibilityWeights = [];
 			const debugProbeVisibilities = [];
@@ -822,6 +828,12 @@ class LightProbeGridGPU extends Object3D {
 
 			for ( let i = 0; i < 8; i ++ ) {
 
+				debugProbeTrilinearWeights.push( float( 0 ).toVar() );
+				debugProbeNormalWeights.push( float( 0 ).toVar() );
+				debugProbeValidityWeights.push( float( 0 ).toVar() );
+				debugProbeConfidenceWeights.push( float( 0 ).toVar() );
+				debugProbeLayerCompatibility.push( float( 0 ).toVar() );
+				debugProbeCompatibleKernels.push( float( 0 ).toVar() );
 				debugProbeBaseWeights.push( float( 0 ).toVar() );
 				debugProbeVisibilityWeights.push( float( 0 ).toVar() );
 				debugProbeVisibilities.push( float( 0 ).toVar() );
@@ -866,6 +878,12 @@ class LightProbeGridGPU extends Object3D {
 
 				const weight = base.mul( visibility );
 
+				debugProbeTrilinearWeights[ debugSlot ].assign( trilinearWeight );
+				debugProbeNormalWeights[ debugSlot ].assign( normalWeight );
+				debugProbeValidityWeights[ debugSlot ].assign( validityWeight );
+				debugProbeConfidenceWeights[ debugSlot ].assign( confidenceWeight );
+				debugProbeLayerCompatibility[ debugSlot ].assign( layerCompatibility );
+				debugProbeCompatibleKernels[ debugSlot ].assign( compatibleKernel );
 				debugProbeBaseWeights[ debugSlot ].assign( base );
 				debugProbeVisibilityWeights[ debugSlot ].assign( weight );
 				debugProbeVisibilities[ debugSlot ].assign( visibility );
@@ -928,6 +946,12 @@ class LightProbeGridGPU extends Object3D {
 
 			for ( let i = 0; i < 8; i ++ ) {
 
+				if ( debugMode === `neighbor${ i }TrilinearWeight` ) return vec3( debugProbeTrilinearWeights[ i ] );
+				if ( debugMode === `neighbor${ i }NormalWeight` ) return vec3( debugProbeNormalWeights[ i ] );
+				if ( debugMode === `neighbor${ i }ValidityWeight` ) return vec3( debugProbeValidityWeights[ i ] );
+				if ( debugMode === `neighbor${ i }ConfidenceWeight` ) return vec3( debugProbeConfidenceWeights[ i ] );
+				if ( debugMode === `neighbor${ i }LayerCompatibility` ) return vec3( debugProbeLayerCompatibility[ i ] );
+				if ( debugMode === `neighbor${ i }CompatibleKernel` ) return vec3( debugProbeCompatibleKernels[ i ] );
 				if ( debugMode === `neighbor${ i }BaseWeight` ) return vec3( debugProbeBaseWeights[ i ] );
 				if ( debugMode === `neighbor${ i }VisibilityWeight` ) return vec3( debugProbeVisibilityWeights[ i ] );
 				if ( debugMode === `neighbor${ i }Visibility` ) return vec3( debugProbeVisibilities[ i ] );

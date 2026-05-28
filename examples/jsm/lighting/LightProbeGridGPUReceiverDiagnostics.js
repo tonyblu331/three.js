@@ -1380,7 +1380,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						maskGreen > 0.5 && maskRed < 0.25;
 
 				};
-				const selectMaskedPixelSamples = ( maskData, maskSelector ) => {
+				const selectMaskedPixelSamples = ( maskData, maskSelector, pixelPredicate = () => true ) => {
 
 					const pixels = [];
 					let minX = Infinity;
@@ -1394,9 +1394,11 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 							const pixelIndex = y * width + x;
 
-							if ( isSelectedMaskPixel( maskData, pixelIndex, maskSelector ) === false ) continue;
-
 							const pixel = { x, y, pixelIndex };
+
+							if ( isSelectedMaskPixel( maskData, pixelIndex, maskSelector ) === false ||
+								pixelPredicate( pixel ) === false ) continue;
+
 							pixels.push( pixel );
 							minX = Math.min( minX, x );
 							minY = Math.min( minY, y );
@@ -1498,11 +1500,28 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				const captureDebugReadback = async ( variant ) => {
 
 					const material = createDebugMaterial( variant );
+					const materialStates = [];
 
 					try {
 
-						_lightProbeContext.leakFixture.leftReceiver.material = material;
-						_lightProbeContext.leakFixture.rightReceiver.material = material;
+						_lightProbeContext.scene.traverse( object => {
+
+							if ( object.isMesh !== true ) return;
+
+							materialStates.push( { object, material: object.material } );
+
+							if ( object === _lightProbeContext.leakFixture.leftReceiver ||
+								object === _lightProbeContext.leakFixture.rightReceiver ) {
+
+								object.material = material;
+
+							} else {
+
+								object.material = occluderMaskMaterial;
+
+							}
+
+						} );
 						_lightProbeContext.renderer.setRenderTarget( debugTarget );
 						_lightProbeContext.renderer.clear();
 						_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
@@ -1510,6 +1529,12 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						return await _lightProbeContext.renderer.readRenderTargetPixelsAsync( debugTarget, 0, 0, width, height );
 
 					} finally {
+
+						for ( const state of materialStates ) {
+
+							state.object.material = state.material;
+
+						}
 
 						material.dispose();
 
@@ -1553,6 +1578,12 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					} ) ),
 					...Array.from( { length: 8 }, ( _, slot ) => [
 						`neighbor${ slot }ProbeIndex`,
+						`neighbor${ slot }TrilinearWeight`,
+						`neighbor${ slot }NormalWeight`,
+						`neighbor${ slot }ValidityWeight`,
+						`neighbor${ slot }ConfidenceWeight`,
+						`neighbor${ slot }LayerCompatibility`,
+						`neighbor${ slot }CompatibleKernel`,
 						`neighbor${ slot }BaseWeight`,
 						`neighbor${ slot }Visibility`,
 						`neighbor${ slot }VisibilityWeight`
@@ -1575,8 +1606,6 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					_lightProbeContext.probeGrid.visibilityDepthWeighting.value = 1;
 
 					const maskData = await captureDepthPreservedMaskData();
-					const leftPixels = selectMaskedPixelSamples( maskData, 'left' );
-					const rightPixels = selectMaskedPixelSamples( maskData, 'right' );
 					const debugReadbacks = new Map();
 
 					for ( const variant of debugVariantDescriptors ) {
@@ -1588,6 +1617,45 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					const getVector = ( key, pixel ) => readPixelVector( debugReadbacks.get( key ), pixel );
 					const getColor = ( key, pixel ) => readPixelColor( debugReadbacks.get( key ), pixel );
 					const getScalar = ( key, pixel ) => readPixelScalar( debugReadbacks.get( key ), pixel );
+					const gpuGuardedVisibilityActive =
+						_lightProbeContext.probeGrid._guardedVisibilityProofMode === 'guarded' &&
+						_lightProbeContext.probeGrid.visibilityDepthTarget !== null;
+					const isDebugReceiverPixel = pixel => {
+
+						const encodedNormal = getVector( 'normalWorld', pixel );
+						const positionGrid = getVector( 'positionWorldGrid', pixel );
+						const samplePositionGrid = getVector( 'samplePositionGrid', pixel );
+						const decodedNormal = decodeEncodedNormal( encodedNormal );
+						const normalEncodedEnergy = Math.abs( encodedNormal.x ) + Math.abs( encodedNormal.y ) + Math.abs( encodedNormal.z );
+						const positionGridEnergy = Math.abs( positionGrid.x ) + Math.abs( positionGrid.y ) + Math.abs( positionGrid.z );
+						const decodedNormalLength = Math.sqrt(
+							decodedNormal.x * decodedNormal.x +
+							decodedNormal.y * decodedNormal.y +
+							decodedNormal.z * decodedNormal.z
+						);
+						const runtimeSampleBiasGridLength = Math.sqrt(
+							( samplePositionGrid.x - positionGrid.x ) * ( samplePositionGrid.x - positionGrid.x ) +
+							( samplePositionGrid.y - positionGrid.y ) * ( samplePositionGrid.y - positionGrid.y ) +
+							( samplePositionGrid.z - positionGrid.z ) * ( samplePositionGrid.z - positionGrid.z )
+						);
+						const positionInsideGrid = positionGrid.x >= - 0.001 && positionGrid.x <= 1.001 &&
+							positionGrid.y >= - 0.001 && positionGrid.y <= 1.001 &&
+							positionGrid.z >= - 0.001 && positionGrid.z <= 1.001;
+						const sampleInsideGrid = samplePositionGrid.x >= - 0.001 && samplePositionGrid.x <= 1.001 &&
+							samplePositionGrid.y >= - 0.001 && samplePositionGrid.y <= 1.001 &&
+							samplePositionGrid.z >= - 0.001 && samplePositionGrid.z <= 1.001;
+
+						return normalEncodedEnergy > 0.001 &&
+							positionGridEnergy > 0.001 &&
+							decodedNormalLength >= 0.85 &&
+							decodedNormalLength <= 1.15 &&
+							runtimeSampleBiasGridLength > 0.02 &&
+							positionInsideGrid &&
+							sampleInsideGrid;
+
+					};
+					const leftPixels = selectMaskedPixelSamples( maskData, 'left', isDebugReceiverPixel );
+					const rightPixels = selectMaskedPixelSamples( maskData, 'right', isDebugReceiverPixel );
 					const createSampleRows = async ( label, mesh, correctSide, pixels ) => {
 
 						const rows = [];
@@ -1597,6 +1665,8 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							const sampleLabel = `gpu-visible-${ correctSide }-${ pixel.sampleOrder }`;
 							const gpuPositionWorldGrid = getVector( 'positionWorldGrid', pixel );
 							const gpuPositionWorld = grid01ToWorld( gpuPositionWorldGrid );
+							const gpuNormalEncoded = getVector( 'normalWorld', pixel );
+							const gpuNormal = decodeEncodedNormal( gpuNormalEncoded );
 							const receiver = await analyzeReceiver(
 								label,
 								mesh,
@@ -1616,8 +1686,11 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 										readbackOrigin: 'render-target-readback'
 									},
 									worldPosition: gpuPositionWorld,
+									worldNormal: new THREE.Vector3( gpuNormal.x, gpuNormal.y, gpuNormal.z ),
 									quadratureWeight: 1,
-									visibilityPath: 'gpu-runtime-positionworld-distance-bias',
+									visibilityPath: gpuGuardedVisibilityActive ?
+										'gpu-runtime-positionworld-distance-bias' :
+										'gpu-runtime-unguarded-visibility',
 									probeMetaPath: 'gpu-runtime-probe-meta'
 								}
 							);
@@ -1632,8 +1705,6 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 								visibilityBlend
 							);
 							const gpuSamplePositionGrid = getVector( 'samplePositionGrid', pixel );
-							const gpuNormalEncoded = getVector( 'normalWorld', pixel );
-							const gpuNormal = decodeEncodedNormal( gpuNormalEncoded );
 							const gpuProbeCoordGrid = getVector( 'probeCoordGrid', pixel );
 							const gpuBaseProbeCoordGrid = getVector( 'baseProbeCoordGrid', pixel );
 							const gpuTrilinearBlend = getVector( 'trilinearBlend', pixel );
@@ -1652,6 +1723,12 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 								const gpuProbeIndexNormalized = getScalar( `neighbor${ slot }ProbeIndex`, pixel );
 								const gpuProbeIndex = Math.round( gpuProbeIndexNormalized * totalProbeIndexScale );
+								const gpuTrilinearWeight = getScalar( `neighbor${ slot }TrilinearWeight`, pixel );
+								const gpuNormalWeight = getScalar( `neighbor${ slot }NormalWeight`, pixel );
+								const gpuValidityWeight = getScalar( `neighbor${ slot }ValidityWeight`, pixel );
+								const gpuConfidenceWeight = getScalar( `neighbor${ slot }ConfidenceWeight`, pixel );
+								const gpuLayerCompatibility = getScalar( `neighbor${ slot }LayerCompatibility`, pixel );
+								const gpuCompatibleKernel = getScalar( `neighbor${ slot }CompatibleKernel`, pixel );
 								const gpuBaseWeight = getScalar( `neighbor${ slot }BaseWeight`, pixel );
 								const gpuVisibility = getScalar( `neighbor${ slot }Visibility`, pixel );
 								const gpuVisibilityWeight = getScalar( `neighbor${ slot }VisibilityWeight`, pixel );
@@ -1662,7 +1739,19 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 									gpuProbeIndex,
 									probeIndexMatches: gpuProbeIndex === cpuRow.probeIndex,
 									coord: cpuRow.coord,
+									cpuTrilinearWeight: cpuRow.trilinearWeight,
+									gpuTrilinearWeight,
 									trilinearWeight: cpuRow.trilinearWeight,
+									cpuNormalWeight: cpuRow.normalWeight,
+									gpuNormalWeight,
+									cpuValidityWeight: cpuRow.validityWeight,
+									gpuValidityWeight,
+									cpuConfidenceWeight: cpuRow.confidenceWeight,
+									gpuConfidenceWeight,
+									cpuLayerCompatibility: cpuRow.layerCompatibility,
+									gpuLayerCompatibility,
+									cpuCompatibleKernel: cpuRow.compatibleKernel,
+									gpuCompatibleKernel,
 									cpuScalarWeight: cpuRow.scalarWeight,
 									cpuBaseWeight: cpuRow.baseWeight,
 									cpuVisibility: cpuRow.visibility,
@@ -1670,6 +1759,12 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 									gpuBaseWeight,
 									gpuVisibility,
 									gpuVisibilityWeight,
+									trilinearWeightDelta: roundMetric( Math.abs( gpuTrilinearWeight - cpuRow.trilinearWeight ) ),
+									normalWeightDelta: roundMetric( Math.abs( gpuNormalWeight - cpuRow.normalWeight ) ),
+									validityWeightDelta: roundMetric( Math.abs( gpuValidityWeight - cpuRow.validityWeight ) ),
+									confidenceWeightDelta: roundMetric( Math.abs( gpuConfidenceWeight - cpuRow.confidenceWeight ) ),
+									layerCompatibilityDelta: roundMetric( Math.abs( gpuLayerCompatibility - cpuRow.layerCompatibility ) ),
+									compatibleKernelDelta: roundMetric( Math.abs( gpuCompatibleKernel - cpuRow.compatibleKernel ) ),
 									baseWeightDelta: roundMetric( Math.abs( gpuBaseWeight - cpuRow.baseWeight ) ),
 									visibilityDelta: roundMetric( Math.abs( gpuVisibility - cpuRow.visibility ) ),
 									visibilityWeightDelta: roundMetric( Math.abs( gpuVisibilityWeight - cpuRow.visibilityWeight ) )
@@ -1727,6 +1822,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 									visibilityMass: receiver.totals.visibilityMass,
 									visibilityPath: receiver.runtimeVisibilityPath,
 									probeMetaPath: receiver.probeMetaPath,
+									normalSource: receiver.normalSource,
 									visibilityDistanceBias: receiver.visibilityDistanceBias,
 									legacyRuntimeFinalIrradiance: contribution.aggregates.runtimeFinal.irradiance
 								},
@@ -1812,6 +1908,19 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						0,
 						...samples.flatMap( sample => sample.neighborRows.map( row => row[ key ] ?? 0 ) ).filter( Number.isFinite )
 					);
+					const maxNeighborComponentDeltas = {
+						trilinearWeight: maxNeighborDelta( 'trilinearWeightDelta' ),
+						normalWeight: maxNeighborDelta( 'normalWeightDelta' ),
+						validityWeight: maxNeighborDelta( 'validityWeightDelta' ),
+						confidenceWeight: maxNeighborDelta( 'confidenceWeightDelta' ),
+						layerCompatibility: maxNeighborDelta( 'layerCompatibilityDelta' ),
+						compatibleKernel: maxNeighborDelta( 'compatibleKernelDelta' ),
+						baseWeight: maxNeighborDelta( 'baseWeightDelta' ),
+						visibility: maxNeighborDelta( 'visibilityDelta' ),
+						visibilityWeight: maxNeighborDelta( 'visibilityWeightDelta' )
+					};
+					const dominantWeightingMismatchComponent = Object.entries( maxNeighborComponentDeltas )
+						.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )[ 0 ]?.[ 0 ] ?? 'none';
 					const maxIrradianceDelta = Math.max(
 						0,
 						...samples.flatMap( sample => sample.irradianceTerms.map( term => term.delta?.max ?? 0 ) ).filter( Number.isFinite )
@@ -1857,6 +1966,12 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 					const weightingSupported = finiteScalarDeltaMax( 'scalarWeight' ) <= thresholds.weightMax &&
 						finiteScalarDeltaMax( 'visibilityWeight' ) <= thresholds.weightMax &&
 						finiteScalarDeltaMax( 'visibilityMass' ) <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.trilinearWeight <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.normalWeight <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.validityWeight <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.confidenceWeight <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.layerCompatibility <= thresholds.weightMax &&
+						maxNeighborComponentDeltas.compatibleKernel <= thresholds.weightMax &&
 						maxNeighborDelta( 'baseWeightDelta' ) <= thresholds.weightMax &&
 						maxNeighborDelta( 'visibilityWeightDelta' ) <= thresholds.weightMax;
 					const shSupported = maxIrradianceDelta <= thresholds.irradianceMax &&
@@ -1887,6 +2002,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 						mode: 'gpu-read-visible-receiver-pixel-position-cpu-mirror',
 						proofBoundary: 'Proof-only exact visible receiver pixel CPU mirror; CPU samples are seeded from GPU-read positionWorldGrid at depth-preserved receiver-mask pixels and compare private debug rows without changing runtime constants, moments, Chebyshev thresholds, or public API.',
 						maskOcclusionPolicy: 'depth-preserved-full-scene-mask',
+						gpuGuardedVisibilityActive,
 						size: { width, height },
 						maxSamplesPerReceiver,
 						thresholds,
@@ -1896,6 +2012,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							sampleCount: samples.length,
 							leftSampleCount: leftSummary.sampleCount,
 							rightSampleCount: rightSummary.sampleCount,
+							gpuGuardedVisibilityActive,
 							positionSupported,
 							normalSupported,
 							probeCoordSupported,
@@ -1914,6 +2031,14 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							maxScalarWeightDelta: finiteScalarDeltaMax( 'scalarWeight' ),
 							maxVisibilityWeightDelta: finiteScalarDeltaMax( 'visibilityWeight' ),
 							maxVisibilityMassDelta: finiteScalarDeltaMax( 'visibilityMass' ),
+							dominantWeightingMismatchComponent,
+							maxNeighborWeightComponentDeltas: maxNeighborComponentDeltas,
+							maxNeighborTrilinearWeightDelta: maxNeighborComponentDeltas.trilinearWeight,
+							maxNeighborNormalWeightDelta: maxNeighborComponentDeltas.normalWeight,
+							maxNeighborValidityWeightDelta: maxNeighborComponentDeltas.validityWeight,
+							maxNeighborConfidenceWeightDelta: maxNeighborComponentDeltas.confidenceWeight,
+							maxNeighborLayerCompatibilityDelta: maxNeighborComponentDeltas.layerCompatibility,
+							maxNeighborCompatibleKernelDelta: maxNeighborComponentDeltas.compatibleKernel,
 							maxNeighborBaseWeightDelta: maxNeighborDelta( 'baseWeightDelta' ),
 							maxNeighborVisibilityWeightDelta: maxNeighborDelta( 'visibilityWeightDelta' ),
 							maxLinearIrradianceDelta: maxIrradianceDelta,
@@ -1930,7 +2055,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 							fullMaskCpuSampledDeltaMax: fullMaskCpuDeltaMax,
 							diagnosticConclusion: exactPixelAgreementSupported ?
 								'CPU and GPU agree for the exact sampled visible receiver pixels when the CPU mirror is seeded from GPU-read positions and mirrors the runtime probe meta / visibility-distance path; projected surface quadrature is not a valid scene-linear aggregate proxy.' :
-								'At least one exact visible-pixel CPU/GPU parity axis remains outside threshold; keep final scene-linear promotion open and use dominantMismatchSource to patch the verifier/debug path before tuning visibility.'
+								`At least one exact visible-pixel CPU/GPU parity axis remains outside threshold; keep final scene-linear promotion open and use dominantMismatchSource${ weightingSupported === false ? ` / dominantWeightingMismatchComponent=${ dominantWeightingMismatchComponent }` : '' } to patch the verifier/debug path before tuning visibility.`
 						},
 						samples
 					};
