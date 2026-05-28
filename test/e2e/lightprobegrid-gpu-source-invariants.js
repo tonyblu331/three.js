@@ -590,16 +590,12 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSourceContract(
-		'Cornell harness must expose precision, SH-band, validity, density, and local artifact diagnostics without adding primary UI knobs.',
+		'Cornell harness must expose the sealed-wall leak verifier and compact screenshot artifact path without the old artifact/region matrix lab.',
 		[
 			{
 				sourceText: exampleSource,
 				tokens: [
-					'createLocalArtifactMetric',
-					'captureRegionArtifactMetrics',
-					'runProbeArtifactRegionMatrix',
 					'createLeakFixture',
-					'isVisibleForProbeOccupancy',
 					'setBaseCornellProbeMeshesVisible',
 					'leakArtifactRegions',
 					'createObjectCenterScreenRegion',
@@ -608,86 +604,27 @@ ${ runnerRuntimeAssertionsSource }`;
 					'receiver-id-mask-visible-pixels',
 					'maskedWrongSideColorRatio',
 					'captureLeakRegionMetrics',
-					'receiverRegionMetricMode',
-					'centerWrongSideColorRatio',
-					'surfaceWrongSideColorRatio',
 					'runProbeLeakMatrix',
-					'sealedDivider',
-					'getActiveLeakDivider',
-					'leak-thin-wall-unweighted',
-					'leak-thin-wall-normal-weighted',
-					'leak-thin-wall-validity-weighted',
-					'leak-thin-wall-visibility-scaffold-disabled',
-					'leak-sealed-wall-unweighted',
 					'leak-sealed-wall-validity-weighted',
 					'leak-sealed-wall-visibility-scaffold-disabled',
-					'sealed-promotion-visibility-scaffold-disabled',
-					'sealedWall',
 					'improvement: sealedWrongSideImprovement',
 					'leak-zero-thickness-visibility-scaffold-disabled',
 					'visibility-disabled-control',
-					'wrongSide: {',
-					'delta: signedDelta',
-					'readVisibilityDepthInfo()',
-					'leak-zero-thickness-unweighted',
-					'leak-zero-thickness-validity-weighted',
-					'wrongSideColorRatio',
 					'correctBounceRatio',
-					'negativeControlStatus',
-					'darkPixelRatio',
-					'blackPixelRatio',
-					'objectBlackTailRatio',
-					'createBakeTexelBudget',
-					'createObjectArtifactPressure',
-					'antiRingingPolicy',
-					'band1-damped-quality',
-					'L0 preserved, L1=0.6, L2=0.55',
-					'hardware-filtered-unweighted',
-					'performance._now',
-					'harness-wall-clock-fallback',
-					'timingSource',
-					'same-budget-artifact-pressure',
-					'higher bake detail can expose low-order / 9-coefficient SH representation dark-tail/ringing artifacts',
-					'redOverGreen',
-					'greenOverRed',
-					'low-res-damped',
-					'low-res-unweighted',
-					'low-res-validity-weighted',
-					'groundingParitySnapshotCases',
-					'webgpu-webgl-density-reference',
-					'webgpu-webgl-density-shadowless',
-					'webgpu-webgl-density-shadow-crisp',
-					'webgpu-webgl-density-damped',
-					'same-budget-shadow-control',
-					'same-budget-direct-shadow-control',
-					'same-budget-quality-candidate',
-					'shadowMapSize: snapshotCase.shadowMapSize',
-					'disableShadowsDuringBake: snapshotCase.disableShadowsDuringBake',
 					'applyGroundingParitySnapshot',
-					'restoreGroundingParitySnapshot',
-					'shadows-off',
-					'direct-off',
-					'panel-hidden',
-					'solids-hidden',
-					'cubemap-16-l0-only',
-					'cubemap-16-l0-l1',
-					'cubemap-16-band1-0.6',
-					'disableDirectLightDuringBake',
-					'hideSolidGeometryDuringBake',
-					'hideLightPanelDuringBake',
-					'ceilingEmitter',
-					'cellEdgeContrast',
-					'runProbeDiagnosticMatrix',
-					'l0-only',
-					'l0-l1-l2',
-					'leak-normal-constant-validity',
-					'normalCustomToConstantDarkPixelRatioDelta',
-					'resolution-6',
-					'cubemap-32'
+					'restoreGroundingParitySnapshot'
+				]
+			},
+			{
+				sourceText: smokeRunnerSource,
+				tokens: [
+					'runProbeLeakMatrix',
+					'runLightProbeGridGpuProofGateAssertions'
 				]
 			}
 		]
 	);
+
 
 
 

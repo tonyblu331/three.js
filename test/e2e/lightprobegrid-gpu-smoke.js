@@ -16,7 +16,7 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 
 		}
 
-		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectComputeProjectionRuntimeParity', 'inspectSHMathContract', 'inspectAtlasPacking', 'inspectVisibilityDepthMoments', 'inspectVisibilityWeightingAtLeakReceivers', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'runArtifactMatrix', 'runProbeDiagnosticMatrix', 'runProbeArtifactRegionMatrix', 'captureLeakRegionMetrics', 'runProbeLeakMatrix', 'applyGroundingParitySnapshot', 'restoreGroundingParitySnapshot', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
+		for ( const method of [ 'waitUntilReady', 'getMetrics', 'setPrecision', 'setLightingMode', 'setMaterialType', 'setLeakReductionMode', 'rebake', 'captureColorSanity', 'inspectAddonContract', 'inspectProbePositions', 'inspectSamplingControls', 'inspectProjectionParity', 'inspectComputeProjectionRuntimeParity', 'inspectSHMathContract', 'inspectAtlasPacking', 'inspectVisibilityDepthMoments', 'inspectVisibilityWeightingAtLeakReceivers', 'inspectProbeOccupancy', 'compareLeakReductionModes', 'captureLeakRegionMetrics', 'runProbeLeakMatrix', 'applyGroundingParitySnapshot', 'restoreGroundingParitySnapshot', 'testBakeCoalescing', 'runBenchmarkCase', 'runBenchmarkMatrix' ] ) {
 
 			if ( typeof harness[ method ] !== 'function' ) {
 
