@@ -1062,6 +1062,15 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right, escapeClassification, summary );
 			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic( shContributionDiagnostic );
 			const receiverGpuDebugDiagnostic = await captureReceiverGpuDebugDiagnostics( receiverSurfaceQuadratureDiagnostic );
+			const compactReceiverSurfaceQuadratureDiagnostic = {
+				status: receiverSurfaceQuadratureDiagnostic.status,
+				fixtureMode: receiverSurfaceQuadratureDiagnostic.fixtureMode,
+				proofBoundary: receiverSurfaceQuadratureDiagnostic.proofBoundary,
+				quadratureRule: receiverSurfaceQuadratureDiagnostic.quadratureRule,
+				sampleCountPerReceiver: receiverSurfaceQuadratureDiagnostic.sampleCountPerReceiver,
+				renderMetrics: receiverSurfaceQuadratureDiagnostic.renderMetrics,
+				summary: receiverSurfaceQuadratureDiagnostic.summary
+			};
 			const dominantEscapeReason = Object.entries( escapeClassification.escapeReasons )
 				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
 				.at( 0 ) ?? [ 'none', 0 ];
@@ -1163,7 +1172,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				summary,
 				escapeClassification,
 				shContributionDiagnostic,
-				receiverSurfaceQuadratureDiagnostic,
+				receiverSurfaceQuadratureDiagnostic: compactReceiverSurfaceQuadratureDiagnostic,
 				receiverGpuDebugDiagnostic,
 				interrogationFinding,
 				dominantEscapeReason: {
