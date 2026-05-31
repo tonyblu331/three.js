@@ -30,36 +30,24 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 		visibilityMomentInspection.bytes > 0 &&
 		visibilityMomentInspection.evidenceStatus === 'SUPPORTED',
 	'visibility moment inspection: expected private moment-backed visibilityDepthTarget with non-zero memory.' );
-	assert( Array.isArray( visibilityMomentInspection.samples ) &&
-		visibilityMomentInspection.samples.length > 0 &&
-		visibilityMomentInspection.stats.sampleCount === visibilityMomentInspection.samples.length &&
+	assert( visibilityMomentInspection.samples === undefined &&
+		visibilityMomentInspection.stats.sampleCount > 0 &&
 		visibilityMomentInspection.stats.finiteSampleCount > 0 &&
 		visibilityMomentInspection.stats.hitSampleCount > 0,
-	'visibility moment inspection: expected finite direct readback samples with at least one hit-confidence sample.' );
+	'visibility moment inspection: expected compact finite direct readback counters with at least one hit-confidence sample.' );
 	assert( visibilityMomentInspection.encoding === 'radial-distance' &&
 		visibilityMomentInspection.stats.encoding === visibilityMomentInspection.encoding &&
 		visibilityMomentInspection.stats.bytes === visibilityMomentInspection.bytes &&
-		Number.isFinite( visibilityMomentInspection.stats.minMeanDistance ) &&
-		Number.isFinite( visibilityMomentInspection.stats.maxMeanDistance ) &&
-		Number.isFinite( visibilityMomentInspection.stats.minVariance ) &&
-		Number.isFinite( visibilityMomentInspection.stats.maxVariance ) &&
-		Number.isFinite( visibilityMomentInspection.stats.meanVariance ) &&
-		Number.isFinite( visibilityMomentInspection.stats.minHitConfidence ) &&
-		Number.isFinite( visibilityMomentInspection.stats.maxHitConfidence ) &&
-		Number.isFinite( visibilityMomentInspection.stats.meanHitConfidence ),
-	'visibility moment inspection: expected radial moment stats, variance distribution, hit confidence distribution, and byte accounting.' );
+		Number.isFinite( visibilityMomentInspection.stats.meanDistanceRange.min ) &&
+		Number.isFinite( visibilityMomentInspection.stats.meanDistanceRange.max ) &&
+		Number.isFinite( visibilityMomentInspection.stats.varianceRange.min ) &&
+		Number.isFinite( visibilityMomentInspection.stats.varianceRange.max ) &&
+		Number.isFinite( visibilityMomentInspection.stats.hitConfidenceRange.min ) &&
+		Number.isFinite( visibilityMomentInspection.stats.hitConfidenceRange.max ),
+	'visibility moment inspection: expected compact radial moment ranges and byte accounting.' );
 	assert( visibilityMomentInspection.momentQualityProfile?.varianceMetric?.includes( 'radial-distance variance' ) &&
-		visibilityMomentInspection.momentQualityProfile?.activeRepackMode === 'five-tap-octa-neighborhood' &&
-		Array.isArray( visibilityMomentInspection.momentQualityProfile?.sweepPlan ),
-	'visibility moment inspection: expected honest private moment-quality profile and deferred sweep plan.' );
-	assert( visibilityMomentInspection.samples.every( sample =>
-		sample.finite === true &&
-			sample.momentEncoding === visibilityMomentInspection.encoding &&
-			Number.isFinite( sample.meanDistance ) &&
-			Number.isFinite( sample.meanSquaredDistance ) &&
-			Number.isFinite( sample.variance ) &&
-			Number.isFinite( sample.backfaceConfidence ) ),
-	'visibility moment inspection: expected every proof sample to expose finite radial-moment fields.' );
+		visibilityMomentInspection.momentQualityProfile?.activeRepackMode === 'five-tap-octa-neighborhood',
+	'visibility moment inspection: expected honest private moment-quality profile.' );
 	results.push( { step: 'visibility moment inspection', visibilityMomentInspection } );
 
 	const visibilityWeightingDiagnostic = await call( 'inspectVisibilityWeightingAtLeakReceivers' );

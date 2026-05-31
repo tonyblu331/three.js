@@ -417,7 +417,7 @@ ${ runnerRuntimeAssertionsSource }`;
 	requireSource(
 		exampleSource.includes( 'inspectVisibilityDepthMoments' ) &&
 			exampleSource.includes( 'readVisibilityDepthInfo()' ) &&
-			exampleSource.includes( 'return probeGrid.getVisibilityDepthInfo();' ) &&
+			exampleSource.includes( 'compactVisibilityDepthInfo( probeGrid.getVisibilityDepthInfo() )' ) &&
 			exampleSource.includes( 'visibilityDepthTarget' ) &&
 			exampleSource.includes( 'info.mode !== \'moments\'' ) &&
 			exampleSource.includes( 'meanDistance' ) &&

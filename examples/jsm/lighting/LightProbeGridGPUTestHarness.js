@@ -1246,15 +1246,15 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			encoding: info.encoding ?? 'unavailable',
 			activeResolution: resolution,
 			activeRepackMode: 'five-tap-octa-neighborhood',
-			samplePolicy: 'center-plus-four-neighbor octa texel averaging from radial distance cubemap',
-			varianceMetric: 'radial-distance variance; do not label as log variance until encoding changes',
-			sweepPlan: [
-				{ visibilityDepthResolution: 4, repackMode: 'single-sample', status: 'DEFERRED' },
-				{ visibilityDepthResolution: 8, repackMode: 'five-tap', status: resolution === 8 ? 'ACTIVE' : 'AVAILABLE-CURRENT-CODEPATH' },
-				{ visibilityDepthResolution: 16, repackMode: 'future-multi-sample', status: 'DEFERRED' }
-			],
-			stats
+			varianceMetric: 'radial-distance variance; do not label as log variance until encoding changes'
 		} );
+		const createStatsRange = ( values ) => values.length > 0 ? {
+			min: roundMetric( Math.min( ...values ) ),
+			max: roundMetric( Math.max( ...values ) )
+		} : {
+			min: null,
+			max: null
+		};
 
 		const unavailable = ( reason ) => {
 
@@ -1262,14 +1262,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				sampleCount: 0,
 				finiteSampleCount: 0,
 				hitSampleCount: 0,
-				minMeanDistance: null,
-				maxMeanDistance: null,
-				minVariance: null,
-				maxVariance: null,
-				meanVariance: null,
-				minHitConfidence: null,
-				maxHitConfidence: null,
-				meanHitConfidence: null,
+				meanDistanceRange: createStatsRange( [] ),
+				varianceRange: createStatsRange( [] ),
+				hitConfidenceRange: createStatsRange( [] ),
 				bytes: info.bytes ?? 0,
 				encoding: info.encoding ?? 'unavailable'
 			};
@@ -1277,7 +1272,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			return {
 				...info,
 				proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
-				samples: [],
 				stats,
 				momentQualityProfile: createMomentQualityProfile( stats ),
 				evidenceStatus: 'OPEN',
@@ -1306,48 +1300,37 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			{ label: 'probe-mid-down', probeIndex: midProbe, x: center, y: edge },
 			{ label: 'probe-mid-up', probeIndex: midProbe, x: center, y: oppositeEdge }
 		];
-		const samples = [];
+		const finiteSamples = [];
+		let hitSampleCount = 0;
 
 		for ( const point of readbackPoints ) {
 
 			const moment = await readLightProbeGridGPUVisibilityMomentPixel( _lightProbeContext.renderer, target, point );
-
-			samples.push( {
-				...point,
+			const sample = {
 				meanDistance: roundMetric( moment.meanDistance ),
-				meanSquaredDistance: roundMetric( moment.meanSquaredDistance ),
 				variance: roundMetric( Math.max( moment.variance, 0 ) ),
 				hitConfidence: roundMetric( moment.hitConfidence ),
-				validity: roundMetric( moment.backfaceConfidence ),
-				backfaceConfidence: roundMetric( moment.backfaceConfidence ),
-				momentEncoding: info.encoding,
 				finite: moment.finite
-			} );
+			};
+
+			if ( sample.finite === false ) continue;
+
+			finiteSamples.push( sample );
+			if ( sample.hitConfidence > 0 ) hitSampleCount ++;
 
 		}
 
-		const finiteSamples = samples.filter( sample => sample.finite === true );
-		const hitSamples = finiteSamples.filter( sample => sample.hitConfidence > 0 );
 		const meanDistances = finiteSamples.map( sample => sample.meanDistance );
 		const variances = finiteSamples.map( sample => sample.variance );
 		const hitConfidences = finiteSamples.map( sample => sample.hitConfidence );
 
 		const stats = {
-			sampleCount: samples.length,
+			sampleCount: readbackPoints.length,
 			finiteSampleCount: finiteSamples.length,
-			hitSampleCount: hitSamples.length,
-			minMeanDistance: meanDistances.length > 0 ? roundMetric( Math.min( ...meanDistances ) ) : null,
-			maxMeanDistance: meanDistances.length > 0 ? roundMetric( Math.max( ...meanDistances ) ) : null,
-			minVariance: variances.length > 0 ? roundMetric( Math.min( ...variances ) ) : null,
-			maxVariance: variances.length > 0 ? roundMetric( Math.max( ...variances ) ) : null,
-			meanVariance: variances.length > 0 ?
-				roundMetric( variances.reduce( ( total, value ) => total + value, 0 ) / variances.length ) :
-				null,
-			minHitConfidence: hitConfidences.length > 0 ? roundMetric( Math.min( ...hitConfidences ) ) : null,
-			maxHitConfidence: hitConfidences.length > 0 ? roundMetric( Math.max( ...hitConfidences ) ) : null,
-			meanHitConfidence: hitConfidences.length > 0 ?
-				roundMetric( hitConfidences.reduce( ( total, value ) => total + value, 0 ) / hitConfidences.length ) :
-				null,
+			hitSampleCount,
+			meanDistanceRange: createStatsRange( meanDistances ),
+			varianceRange: createStatsRange( variances ),
+			hitConfidenceRange: createStatsRange( hitConfidences ),
 			bytes: info.bytes ?? 0,
 			encoding: info.encoding ?? 'unavailable'
 		};
@@ -1355,10 +1338,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		return {
 			...info,
 			proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
-			samples,
 			stats,
 			momentQualityProfile: createMomentQualityProfile( stats ),
-			evidenceStatus: finiteSamples.length === samples.length && hitSamples.length > 0 ? 'SUPPORTED' : 'OPEN'
+			evidenceStatus: finiteSamples.length === readbackPoints.length && hitSampleCount > 0 ? 'SUPPORTED' : 'OPEN'
 		};
 
 	};
@@ -1888,10 +1870,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 	const readVisibilityDepthInfo = () => {
 
 		const probeGrid = _lightProbeContext?.probeGrid;
+		const compactVisibilityDepthInfo = ( info ) => {
+
+			const compactInfo = { ...info };
+			delete compactInfo.samples;
+			delete compactInfo.stats;
+			return compactInfo;
+
+		};
 
 		if ( typeof probeGrid?.getVisibilityDepthInfo === 'function' ) {
 
-			return probeGrid.getVisibilityDepthInfo();
+			return compactVisibilityDepthInfo( probeGrid.getVisibilityDepthInfo() );
 
 		}
 
@@ -1901,21 +1891,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			resolution: 0,
 			moments: 0,
 			bytes: 0,
-			texture: null,
-			samples: [],
-			stats: {
-				sampleCount: 0,
-				finiteSampleCount: 0,
-				hitSampleCount: 0,
-				minMeanDistance: null,
-				maxMeanDistance: null,
-				minVariance: null,
-				maxVariance: null,
-				meanVariance: null,
-				minHitConfidence: null,
-				maxHitConfidence: null,
-				meanHitConfidence: null
-			}
+			texture: null
 		};
 
 	};
