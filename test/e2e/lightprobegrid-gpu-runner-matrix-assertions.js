@@ -44,9 +44,9 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 		visibilityMoments.visibilityDepth.mode === 'moments' &&
 		visibilityMoments.visibilityDepth.bytes > 0,
 	'leak proof facts: expected custom validity control and moment-backed visibility candidate.' );
-	assert( scalarValidity.leakMetrics.receiverRegionMetricMode === 'object-bounds-rect-with-center-and-surface-isolated-diagnostics' &&
-		visibilityMoments.leakMetrics.receiverRegionMetricMode === 'object-bounds-rect-with-center-and-surface-isolated-diagnostics',
-	'leak proof facts: expected receiver center/surface/masked diagnostics.' );
+	assert( scalarValidity.leakMetrics.receiverRegionMetricMode === 'object-bounds-with-compact-center-surface-mask-ratios' &&
+		visibilityMoments.leakMetrics.receiverRegionMetricMode === 'object-bounds-with-compact-center-surface-mask-ratios',
+	'leak proof facts: expected compact receiver center/surface/masked ratios.' );
 	assert( scalarValidity.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels' &&
 		visibilityMoments.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels',
 	'leak proof facts: expected pre-tone linear masked visible-pixel metrics.' );

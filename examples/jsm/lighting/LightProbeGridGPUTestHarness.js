@@ -1488,8 +1488,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		}
 
 		let maxCellEdgeContrast = 0;
-		let totalCellEdgeContrast = 0;
-		let cellEdgeSamples = 0;
 
 		for ( let cy = 0; cy < cellCount; cy ++ ) {
 
@@ -1499,8 +1497,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 					const contrast = Math.abs( cellMeans[ cy ][ cx ] - cellMeans[ cy ][ cx + 1 ] );
 					maxCellEdgeContrast = Math.max( maxCellEdgeContrast, contrast );
-					totalCellEdgeContrast += contrast;
-					cellEdgeSamples ++;
 
 				}
 
@@ -1508,8 +1504,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 					const contrast = Math.abs( cellMeans[ cy ][ cx ] - cellMeans[ cy + 1 ][ cx ] );
 					maxCellEdgeContrast = Math.max( maxCellEdgeContrast, contrast );
-					totalCellEdgeContrast += contrast;
-					cellEdgeSamples ++;
 
 				}
 
@@ -1518,9 +1512,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		}
 
 		return {
-			region,
-			samples: luminance.length,
-			gridCells: cellCount,
 			color: {
 				r: roundMetric( color.r ),
 				g: roundMetric( color.g ),
@@ -1531,20 +1522,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				greenOverRed: roundMetric( color.g / Math.max( color.r, 0.0001 ) )
 			},
 			luminance: {
-				min: roundMetric( sorted[ 0 ] ),
 				p01: roundMetric( percentile( 0.01 ) ),
-				p05: roundMetric( percentile( 0.05 ) ),
-				median: roundMetric( percentile( 0.5 ) ),
-				p95: roundMetric( percentile( 0.95 ) ),
-				max: roundMetric( sorted[ sorted.length - 1 ] ),
 				mean: roundMetric( sum / Math.max( luminance.length, 1 ) )
 			},
-			darkThreshold: roundMetric( darkThreshold ),
 			darkPixelRatio: roundMetric( darkSamples / Math.max( luminance.length, 1 ) ),
-			blackThreshold,
 			blackPixelRatio: roundMetric( blackSamples / Math.max( luminance.length, 1 ) ),
-			cellEdgeContrast: roundMetric( maxCellEdgeContrast ),
-			averageCellEdgeContrast: roundMetric( totalCellEdgeContrast / Math.max( cellEdgeSamples, 1 ) )
+			cellEdgeContrast: roundMetric( maxCellEdgeContrast )
 		};
 
 	};
@@ -1555,9 +1538,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const height = colorCanvasSample.height;
 		const colorImage = colorCanvasSample.context.getImageData( 0, 0, width, height );
 		const maskImage = maskCanvasSample.context.getImageData( 0, 0, width, height );
-		const luminance = [];
 		const color = { r: 0, g: 0, b: 0 };
-		const bounds = { x0: width, x1: 0, y0: height, y1: 0 };
 		let sampleCount = 0;
 
 		for ( let i = 0; i < maskImage.data.length; i += 4 ) {
@@ -1570,22 +1551,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			if ( selected === false ) continue;
 
-			const pixelIndex = i / 4;
-			const x = pixelIndex % width;
-			const y = Math.floor( pixelIndex / width );
-			const red = colorImage.data[ i ];
-			const green = colorImage.data[ i + 1 ];
-			const blue = colorImage.data[ i + 2 ];
-			const value = red * 0.2126 + green * 0.7152 + blue * 0.0722;
-
-			bounds.x0 = Math.min( bounds.x0, x );
-			bounds.x1 = Math.max( bounds.x1, x );
-			bounds.y0 = Math.min( bounds.y0, y );
-			bounds.y1 = Math.max( bounds.y1, y );
-			luminance.push( value );
-			color.r += red;
-			color.g += green;
-			color.b += blue;
+			color.r += colorImage.data[ i ];
+			color.g += colorImage.data[ i + 1 ];
+			color.b += colorImage.data[ i + 2 ];
 			sampleCount ++;
 
 		}
@@ -1594,42 +1562,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		color.r /= safeSampleCount;
 		color.g /= safeSampleCount;
 		color.b /= safeSampleCount;
-		const sorted = luminance.length > 0 ? [ ...luminance ].sort( ( a, b ) => a - b ) : [ 0 ];
-		const percentile = ( value ) => sorted[ Math.min( sorted.length - 1, Math.max( 0, Math.floor( ( sorted.length - 1 ) * value ) ) ) ];
-		const darkThreshold = Math.max( 16, percentile( 0.5 ) * 0.35 );
-		const blackThreshold = 32;
-		const darkSamples = luminance.filter( value => value <= darkThreshold ).length;
-		const blackSamples = luminance.filter( value => value <= blackThreshold ).length;
 
 		return {
-			maskSelector,
-			samples: sampleCount,
-			coverageRatio: roundMetric( sampleCount / Math.max( width * height, 1 ) ),
-			region: sampleCount > 0 ? {
-				x0: roundMetric( bounds.x0 / width ),
-				x1: roundMetric( ( bounds.x1 + 1 ) / width ),
-				y0: roundMetric( bounds.y0 / height ),
-				y1: roundMetric( ( bounds.y1 + 1 ) / height )
-			} : null,
-			color: {
-				r: roundMetric( color.r ),
-				g: roundMetric( color.g ),
-				b: roundMetric( color.b )
-			},
 			colorBias: {
 				redOverGreen: roundMetric( color.r / Math.max( color.g, 0.0001 ) ),
 				greenOverRed: roundMetric( color.g / Math.max( color.r, 0.0001 ) )
-			},
-			luminance: {
-				min: roundMetric( sorted[ 0 ] ),
-				p05: roundMetric( percentile( 0.05 ) ),
-				median: roundMetric( percentile( 0.5 ) ),
-				p95: roundMetric( percentile( 0.95 ) ),
-				max: roundMetric( sorted[ sorted.length - 1 ] ),
-				mean: roundMetric( luminance.reduce( ( sum, value ) => sum + value, 0 ) / safeSampleCount )
-			},
-			darkPixelRatio: roundMetric( darkSamples / safeSampleCount ),
-			blackPixelRatio: roundMetric( blackSamples / safeSampleCount )
+			}
 		};
 
 	};
@@ -1677,8 +1615,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				mode: 'receiver-id-mask-visible-pixels',
-				occlusionMode: 'depth-preserved-full-scene-mask',
-				maskOccluderPolicy: 'non-receiver meshes render black and keep depth so the mask samples the same visible pixels as the color pass',
 				leftReceiverMasked,
 				rightReceiverMasked
 			};
@@ -1811,9 +1747,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			leftReceiver.colorBias.redOverGreen,
 			rightReceiver.colorBias.greenOverRed
 		);
-		const luminanceMean = ( leftReceiver.luminance.mean + rightReceiver.luminance.mean ) * 0.5;
-		const darkPixelRatio = Math.max( leftReceiver.darkPixelRatio, rightReceiver.darkPixelRatio );
-		const cellEdgeContrast = Math.max( leftReceiver.cellEdgeContrast, rightReceiver.cellEdgeContrast );
 		const centerWrongSideColorRatio = centerSamples === null ? null : Math.max(
 			centerSamples.leftReceiverCenter.colorBias.greenOverRed,
 			centerSamples.rightReceiverCenter.colorBias.redOverGreen
@@ -1840,10 +1773,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		);
 
 		return {
-			regions,
-			centerRegions: centerSamples,
-			surfaceRegions: surfaceSamples,
-			maskedRegions: maskedSamples,
 			wrongSideColorRatio: roundMetric( wrongSideColorRatio ),
 			centerWrongSideColorRatio: centerWrongSideColorRatio === null ? null : roundMetric( centerWrongSideColorRatio ),
 			surfaceWrongSideColorRatio: surfaceWrongSideColorRatio === null ? null : roundMetric( surfaceWrongSideColorRatio ),
@@ -1852,15 +1781,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			centerCorrectBounceRatio: centerCorrectBounceRatio === null ? null : roundMetric( centerCorrectBounceRatio ),
 			surfaceCorrectBounceRatio: surfaceCorrectBounceRatio === null ? null : roundMetric( surfaceCorrectBounceRatio ),
 			maskedCorrectBounceRatio: maskedCorrectBounceRatio === null ? null : roundMetric( maskedCorrectBounceRatio ),
-			receiverRegionMetricMode: 'object-bounds-rect-with-center-and-surface-isolated-diagnostics',
-			maskedReceiverRegionMetricMode: maskedSamples?.mode ?? 'not-captured',
-			luminance: {
-				mean: roundMetric( luminanceMean ),
-				minP05: roundMetric( Math.min( leftReceiver.luminance.p05, rightReceiver.luminance.p05 ) ),
-				maxP95: roundMetric( Math.max( leftReceiver.luminance.p95, rightReceiver.luminance.p95 ) )
-			},
-			darkPixelRatio: roundMetric( darkPixelRatio ),
-			cellEdgeContrast: roundMetric( cellEdgeContrast )
+			receiverRegionMetricMode: 'object-bounds-with-compact-center-surface-mask-ratios',
+			maskedReceiverRegionMetricMode: maskedSamples?.mode ?? 'not-captured'
 		};
 
 	};
