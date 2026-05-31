@@ -897,9 +897,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			}
 		);
 
-		const createRunRecord = ( timings, wallClockTotalMs, index, warmup, requestedBackend ) => ( {
+		const createRunRecord = ( timings, wallClockTotalMs, index, requestedBackend ) => ( {
 			index,
-			warmup,
 			requestedBackend,
 			selectedBackend: timings.projectionBackend,
 			projectionBackendRequest: timings.projectionBackendRequest,
@@ -929,7 +928,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const profileBackend = async ( requestedBackend, expectedBackend ) => {
 
 			const grid = createProfileGrid();
-			const warmups = [];
 			const runs = [];
 
 			try {
@@ -940,17 +938,14 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					const wallClockStart = getProfileNow();
 					const timings = await grid.bake( renderer, scene, { projectionBackendOverride: requestedBackend } );
 					const wallClockTotalMs = roundTimingMetric( Math.max( getProfileNow() - wallClockStart, 0 ) );
-					const record = createRunRecord( timings, wallClockTotalMs, warmup ? i : i - warmupRuns, warmup, requestedBackend );
 
 					if ( warmup ) {
 
-						warmups.push( record );
-
-					} else {
-
-						runs.push( record );
+						continue;
 
 					}
+
+					runs.push( createRunRecord( timings, wallClockTotalMs, i - warmupRuns, requestedBackend ) );
 
 				}
 
@@ -958,7 +953,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					requestedBackend,
 					expectedBackend,
 					selectedBackends: Array.from( new Set( runs.map( run => run.selectedBackend ) ) ),
-					warmupRuns: warmups,
 					measuredRuns: runs,
 					sceneUpdateMs: summarizeMetric( runs.map( run => run.sceneUpdateMs ) ),
 					projectionMs: summarizeMetric( runs.map( run => run.projectionMs ) ),
