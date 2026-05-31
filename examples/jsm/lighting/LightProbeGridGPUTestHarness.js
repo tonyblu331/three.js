@@ -196,6 +196,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
+	const createProjectionFixtureGrid = ( resolution, cubemapSize, probeValidity, renderer ) => new LightProbeGridGPU(
+		_lightProbeContext.gridMin,
+		_lightProbeContext.gridMax,
+		{
+			resolution,
+			cubemapSize,
+			projectionPrecision: 'half float',
+			probeValidity,
+			renderer
+		}
+	);
+
 	const roundVector = ( vector ) => ( {
 		x: roundMetric( vector.x ),
 		y: roundMetric( vector.y ),
@@ -730,17 +742,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		probeValidity[ totalProbes - 1 ] = 0;
 
-		const createParityGrid = () => new LightProbeGridGPU(
-			_lightProbeContext.gridMin,
-			_lightProbeContext.gridMax,
-			{
-				resolution,
-				cubemapSize,
-				projectionPrecision: 'half float',
-				probeValidity,
-				renderer
-			}
-		);
+		const createParityGrid = () => createProjectionFixtureGrid( resolution, cubemapSize, probeValidity, renderer );
 
 		const baselineGrid = createParityGrid();
 		const computeGrid = createParityGrid();
@@ -885,17 +887,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		probeValidity[ probeValidity.length - 1 ] = 0;
 
-		const createProfileGrid = () => new LightProbeGridGPU(
-			_lightProbeContext.gridMin,
-			_lightProbeContext.gridMax,
-			{
-				resolution,
-				cubemapSize,
-				projectionPrecision: 'half float',
-				probeValidity,
-				renderer
-			}
-		);
+		const createProfileGrid = () => createProjectionFixtureGrid( resolution, cubemapSize, probeValidity, renderer );
 
 		const createRunRecord = ( timings, wallClockTotalMs, index, requestedBackend ) => ( {
 			index,
