@@ -51,6 +51,7 @@ import {
 	VISIBILITY_MIN_VARIANCE
 } from './lightprobegridgpu/LightProbeGridGPUConstants.js';
 import {
+	createLightProbeGridGPUAtlasRepackMaterial,
 	getLightProbeGridGPUAtlasDepth,
 	getLightProbeGridGPUPackedAtlasBaseLayer,
 	getLightProbeGridGPUPackedAtlasLayer,
@@ -67,9 +68,6 @@ import {
 	createLightProbeGridGPUComputeProjectionNode,
 	createLightProbeGridGPUProjectionMaterial
 } from './lightprobegridgpu/LightProbeGridGPUProjection.js';
-import {
-	createLightProbeGridGPUAtlasRepackMaterial
-} from './lightprobegridgpu/LightProbeGridGPUAtlasRepack.js';
 import {
 	createLightProbeGridGPUVisibilityDistanceMaterial,
 	createLightProbeGridGPUVisibilityRepackMaterial,

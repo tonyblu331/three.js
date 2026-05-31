@@ -20,7 +20,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		cpuShMathSource,
 		gpuResourcesSource,
 		gpuProjectionSource,
-		gpuAtlasRepackSource,
 		gpuVisibilitySource,
 		gpuHelperSource,
 		gpuBakeSource,
@@ -57,7 +56,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUResources.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js', 'utf8' ),
-		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlasRepack.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js', 'utf8' ),
@@ -225,9 +223,9 @@ ${ runnerRuntimeAssertionsSource }`;
 	requireSource(
 		source.includes( 'createLightProbeGridGPUAtlasRepackMaterial(' ) &&
 			source.includes( '_createRepackMaterial( coefficientTexture )' ) === false &&
-			gpuAtlasRepackSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT' ) &&
-			gpuAtlasRepackSource.includes( 'createLightProbeGridGPUPackedSHVector' ) &&
-			gpuAtlasRepackSource.includes( 'getLightProbeGridGPUPackedSource' ),
+			gpuAtlasSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT' ) &&
+			gpuAtlasSource.includes( 'createLightProbeGridGPUPackedSHVector' ) &&
+			gpuAtlasSource.includes( 'getLightProbeGridGPUPackedSource' ),
 		'LightProbeGridGPU atlas repack material construction must use the shared packed SH coefficient layout outside the runtime facade.'
 	);
 
@@ -323,9 +321,9 @@ ${ runnerRuntimeAssertionsSource }`;
 			gpuAtlasSource.includes( 'getLightProbeGridGPUPackedAtlasLayer' ) &&
 			gpuAtlasSource.includes( 'getLightProbeGridGPUProbeIndex' ) &&
 			source.includes( 'getLightProbeGridGPUAtlasDepth( this.resolution )' ) &&
-			gpuAtlasRepackSource.includes( 'viewportCoordinate' ) &&
-			/const ix = int\( floor\( viewportCoordinate\.x \) \)/.test( gpuAtlasRepackSource ) &&
-			/const iy = int\( floor\( viewportCoordinate\.y \) \)/.test( gpuAtlasRepackSource ),
+			gpuAtlasSource.includes( 'viewportCoordinate' ) &&
+			/const ix = int\( floor\( viewportCoordinate\.x \) \)/.test( gpuAtlasSource ) &&
+			/const iy = int\( floor\( viewportCoordinate\.y \) \)/.test( gpuAtlasSource ),
 		'Atlas sample/load/repack/helper paths must use centralized atlas address helpers and WebGPU-native viewport coordinates for repack.'
 	);
 
@@ -634,8 +632,8 @@ ${ runnerRuntimeAssertionsSource }`;
 			source.includes( 'wrapShading' ) &&
 			source.includes( 'validityWeight' ) &&
 			source.includes( 'textureLoad( this.probeValidityTexture' ) &&
-			gpuAtlasRepackSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT[ 6 ]' ) &&
-			gpuAtlasRepackSource.includes( 'validity.x' ) &&
+			gpuAtlasSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT[ 6 ]' ) &&
+			gpuAtlasSource.includes( 'validity.x' ) &&
 			source.includes( 'c0Luminance' ) === false &&
 			exampleSource.includes( 'createProbeValidityData' ) &&
 			exampleSource.includes( 'leakReductionMode: \'off\'' ),
