@@ -60,6 +60,34 @@ const createGate = ( {
 	...( evidenceRef !== undefined ? { evidenceRef } : {} )
 } );
 
+const SEALED_WALL_GATE_DEFINITIONS = [
+	{
+		metric: 'wrongSideImprovement',
+		threshold: 0.05,
+		reason: 'Moment visibility should reduce sealed-wall wrong-side leakage before promotion.'
+	},
+	{
+		metric: 'maskedWrongSideImprovement',
+		threshold: 0.05,
+		reason: 'Masked visible-pixel leak should improve before promotion.'
+	},
+	{
+		metric: 'correctBouncePreservation',
+		threshold: 0.9,
+		reason: 'Leak reduction must not erase correct-side bounce.'
+	},
+	{
+		metric: 'preToneMaskedWrongSideImprovement',
+		threshold: 0.05,
+		reason: 'Linear pre-tone masked leak improvement is the promotion metric, not tone-mapped storytelling.'
+	},
+	{
+		metric: 'preToneMaskedCorrectBouncePreservation',
+		threshold: 0.9,
+		reason: 'Linear pre-tone leak gate must preserve correct bounce.'
+	}
+];
+
 export function createLightProbeProofFacts( results ) {
 
 	const initial = getResult( results, 'initial' ).metrics;
@@ -181,56 +209,16 @@ export function evaluateLightProbeProofGates( facts ) {
 			reason: 'Private visibility moments must have direct readback evidence before leak gates are interpreted.',
 			evidenceRef: 'visibility moment inspection'
 		} ),
-		createGate( {
-			id: 'sealedWall.wrongSideImprovement',
+		...SEALED_WALL_GATE_DEFINITIONS.map( ( { metric, threshold, reason } ) => createGate( {
+			id: `sealedWall.${ metric }`,
 			subject: 'sealedWall',
-			metric: 'wrongSideImprovement',
-			actual: facts.sealedWall.wrongSideImprovement,
-			expected: '>= 0.05',
-			pass: facts.sealedWall.wrongSideImprovement >= 0.05,
-			reason: 'Moment visibility should reduce sealed-wall wrong-side leakage before promotion.',
+			metric,
+			actual: facts.sealedWall[ metric ],
+			expected: `>= ${ threshold }`,
+			pass: facts.sealedWall[ metric ] >= threshold,
+			reason,
 			evidenceRef: 'leak proof facts'
-		} ),
-		createGate( {
-			id: 'sealedWall.maskedWrongSideImprovement',
-			subject: 'sealedWall',
-			metric: 'maskedWrongSideImprovement',
-			actual: facts.sealedWall.maskedWrongSideImprovement,
-			expected: '>= 0.05',
-			pass: facts.sealedWall.maskedWrongSideImprovement >= 0.05,
-			reason: 'Masked visible-pixel leak should improve before promotion.',
-			evidenceRef: 'leak proof facts'
-		} ),
-		createGate( {
-			id: 'sealedWall.correctBouncePreservation',
-			subject: 'sealedWall',
-			metric: 'correctBouncePreservation',
-			actual: facts.sealedWall.correctBouncePreservation,
-			expected: '>= 0.9',
-			pass: facts.sealedWall.correctBouncePreservation >= 0.9,
-			reason: 'Leak reduction must not erase correct-side bounce.',
-			evidenceRef: 'leak proof facts'
-		} ),
-		createGate( {
-			id: 'sealedWall.preToneMaskedWrongSideImprovement',
-			subject: 'sealedWall',
-			metric: 'preToneMaskedWrongSideImprovement',
-			actual: facts.sealedWall.preToneMaskedWrongSideImprovement,
-			expected: '>= 0.05',
-			pass: facts.sealedWall.preToneMaskedWrongSideImprovement >= 0.05,
-			reason: 'Linear pre-tone masked leak improvement is the promotion metric, not tone-mapped storytelling.',
-			evidenceRef: 'leak proof facts'
-		} ),
-		createGate( {
-			id: 'sealedWall.preToneMaskedCorrectBouncePreservation',
-			subject: 'sealedWall',
-			metric: 'preToneMaskedCorrectBouncePreservation',
-			actual: facts.sealedWall.preToneMaskedCorrectBouncePreservation,
-			expected: '>= 0.9',
-			pass: facts.sealedWall.preToneMaskedCorrectBouncePreservation >= 0.9,
-			reason: 'Linear pre-tone leak gate must preserve correct bounce.',
-			evidenceRef: 'leak proof facts'
-		} )
+		} ) )
 	];
 
 }

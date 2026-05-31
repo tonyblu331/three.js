@@ -34,10 +34,10 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js` | 102 | Visibility material/load helpers | Cohesive runtime helper. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js` | 113 | Bake state/result helpers | Cohesive runtime helper. |
 | `test/e2e/lightprobegrid-gpu-artifacts.js` | 97 | Compact artifact contract | Healthy after earlier report deletion. |
-| `test/e2e/lightprobegrid-gpu-proof-gates.js` | 278 | Proof gate derivation/assertions | Watch for repeated gate labels/status logic. |
+| `test/e2e/lightprobegrid-gpu-proof-gates.js` | 265 | Proof gate derivation/assertions | Sealed-wall thresholds are data-driven; watch for future status drift. |
 | `test/e2e/lightprobegrid-gpu-runner-*.js` | 692 | Smoke assertion runners | Mostly reasonable; keep assertions compact and contract-focused. |
 
-Tracked LightProbeGridGPU feature/proof set: about 6,644 LOC, excluding this plan.
+Tracked LightProbeGridGPU feature/proof set: about 6,631 LOC, excluding this plan.
 
 ## Dependency rules
 
