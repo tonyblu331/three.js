@@ -220,6 +220,28 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		}
 	);
 
+	const captureSyncRejection = ( operation ) => {
+
+		try {
+
+			operation();
+
+		} catch ( error ) {
+
+			return {
+				rejected: true,
+				message: error instanceof Error ? error.message : String( error )
+			};
+
+		}
+
+		return {
+			rejected: false,
+			message: ''
+		};
+
+	};
+
 	const roundVector = ( vector ) => ( {
 		x: roundMetric( vector.x ),
 		y: roundMetric( vector.y ),
@@ -2678,35 +2700,16 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			const contractGrid = createContractProbeGrid();
 			const first = new THREE.Vector3();
 			const last = new THREE.Vector3();
-			let invalidConstructorResolutionRejected = false;
-			let invalidConstructorResolutionMessage = '';
-			let invalidSetOptionsResolutionRejected = false;
-			let invalidSetOptionsResolutionMessage = '';
 
 			contractGrid.getProbePosition( 0, first );
 			contractGrid.getProbePosition( contractGrid.totalProbes - 1, last );
 
-			try {
-
-				createContractProbeGrid( { resolution: 1 } );
-
-			} catch ( error ) {
-
-				invalidConstructorResolutionRejected = true;
-				invalidConstructorResolutionMessage = error instanceof Error ? error.message : String( error );
-
-			}
-
-			try {
+			const invalidConstructorResolution = captureSyncRejection( () => createContractProbeGrid( { resolution: 1 } ) );
+			const invalidSetOptionsResolution = captureSyncRejection( () => {
 
 				contractGrid.setOptions( { resolution: 1 }, _lightProbeContext.renderer );
 
-			} catch ( error ) {
-
-				invalidSetOptionsResolutionRejected = true;
-				invalidSetOptionsResolutionMessage = error instanceof Error ? error.message : String( error );
-
-			}
+			} );
 
 			contractGrid.dispose();
 
@@ -2721,10 +2724,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					y: last.y,
 					z: last.z
 				},
-				invalidConstructorResolutionRejected,
-				invalidConstructorResolutionMessage,
-				invalidSetOptionsResolutionRejected,
-				invalidSetOptionsResolutionMessage
+				invalidConstructorResolutionRejected: invalidConstructorResolution.rejected,
+				invalidConstructorResolutionMessage: invalidConstructorResolution.message,
+				invalidSetOptionsResolutionRejected: invalidSetOptionsResolution.rejected,
+				invalidSetOptionsResolutionMessage: invalidSetOptionsResolution.message
 			};
 
 		},
@@ -2737,25 +2740,17 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				leakReductionMode: 'normal',
 				probeValidity: new Float32Array( [ 1, 1, 1, 1, 1, 1, 1, 0 ] )
 			} );
-			let invalidLeakReductionModeRejected = false;
-			let invalidLeakReductionModeMessage = '';
-
-			try {
+			const invalidLeakReductionMode = captureSyncRejection( () => {
 
 				configuredGrid.setOptions( { leakReductionMode: 'distance' }, _lightProbeContext.renderer );
 
-			} catch ( error ) {
-
-				invalidLeakReductionModeRejected = true;
-				invalidLeakReductionModeMessage = error instanceof Error ? error.message : String( error );
-
-			}
+			} );
 
 			const result = {
 				defaultSampling: defaultGrid.getSamplingInfo(),
 				configuredSampling: configuredGrid.getSamplingInfo(),
-				invalidLeakReductionModeRejected,
-				invalidLeakReductionModeMessage
+				invalidLeakReductionModeRejected: invalidLeakReductionMode.rejected,
+				invalidLeakReductionModeMessage: invalidLeakReductionMode.message
 			};
 
 			defaultGrid.dispose();
