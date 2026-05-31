@@ -208,6 +208,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		}
 	);
 
+	const createUnitProbeGrid = ( options = {} ) => new LightProbeGridGPU(
+		new THREE.Vector3( - 1, - 1, - 1 ),
+		new THREE.Vector3( 1, 1, 1 ),
+		{
+			resolution: 2,
+			cubemapSize: 4,
+			projectionPrecision: 'half float',
+			renderer: _lightProbeContext.renderer,
+			...options
+		}
+	);
+
 	const roundVector = ( vector ) => ( {
 		x: roundMetric( vector.x ),
 		y: roundMetric( vector.y ),
@@ -1057,17 +1069,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			{ length: totalProbes },
 			( _, index ) => 0.25 + ( index % 7 ) * 0.1
 		);
-		const testGrid = new LightProbeGridGPU(
-			new THREE.Vector3( - 1, - 1, - 1 ),
-			new THREE.Vector3( 1, 1, 1 ),
-			{
-				resolution,
-				cubemapSize: 4,
-				projectionPrecision: 'half float',
-				probeValidity,
-				renderer: _lightProbeContext.renderer
-			}
-		);
+		const testGrid = createUnitProbeGrid( { resolution, probeValidity } );
 
 		const encodeSyntheticCoefficient = ( probeIndex, coefficient, component ) =>
 			( probeIndex + 1 ) * syntheticProbeScale +
@@ -2728,30 +2730,13 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		inspectSamplingControls: () => {
 
-			const defaultGrid = new LightProbeGridGPU(
-				new THREE.Vector3( - 1, - 1, - 1 ),
-				new THREE.Vector3( 1, 1, 1 ),
-				{
-					resolution: 2,
-					cubemapSize: 4,
-					projectionPrecision: 'half float',
-					renderer: _lightProbeContext.renderer
-				}
-			);
-			const configuredGrid = new LightProbeGridGPU(
-				new THREE.Vector3( - 1, - 1, - 1 ),
-				new THREE.Vector3( 1, 1, 1 ),
-				{
-					resolution: 2,
-					cubemapSize: 4,
-					projectionPrecision: 'half float',
-					normalBias: 0.75,
-					viewBias: 0.25,
-					leakReductionMode: 'normal',
-					probeValidity: new Float32Array( [ 1, 1, 1, 1, 1, 1, 1, 0 ] ),
-					renderer: _lightProbeContext.renderer
-				}
-			);
+			const defaultGrid = createUnitProbeGrid();
+			const configuredGrid = createUnitProbeGrid( {
+				normalBias: 0.75,
+				viewBias: 0.25,
+				leakReductionMode: 'normal',
+				probeValidity: new Float32Array( [ 1, 1, 1, 1, 1, 1, 1, 0 ] )
+			} );
 			let invalidLeakReductionModeRejected = false;
 			let invalidLeakReductionModeMessage = '';
 
