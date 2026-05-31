@@ -101,7 +101,7 @@ The diagnostic files are larger than the runtime file in places. Current verifie
 - `LightProbeGridGPUTestHarness.js` 2534 lines after compact proof-facts cleanup.
 - `LightProbeGridGPUReceiverDiagnostics.js` 860 lines after deleting presentation/pixel-parity lab payloads.
 - `LightProbeGridGPUShDiagnostics.js` 467 lines after deleting probe-lab/oracle payload fanout.
-- `LightProbeGridGPUVisibilityWeightingStudy.js` 1015 lines after deleting the oracle-study fanout.
+- `LightProbeGridGPUVisibilityWeightingStudy.js` 959 lines after deleting the oracle-study fanout.
 - `LightProbeGridGPUOracleDiagnostics.js` removed from the default path; the old current-pipeline, dilation, sampling-bias, and SH-deringing studies were lab reports, not proof-summary inputs.
 
 These files are allowed to be diagnostic-heavy, but they duplicate CPU-side concepts: probe indexing, SH coefficient packing/unpacking, SH evaluation, sample-position math, visibility weights, and metric rounding.

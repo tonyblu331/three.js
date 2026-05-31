@@ -936,7 +936,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				const escapedProbes = receivers.flatMap( receiver => receiver.escapeSummary.escapedProbes.map( probe => ( {
 					receiver: receiver.label,
-					...probe
+					probeIndex: probe.probeIndex,
+					escapeReason: probe.escapeReason,
+					crossesDivider: probe.crossesDivider
 				} ) ) );
 				const escapeReasons = escapedProbes.reduce( ( reasons, row ) => {
 
@@ -1071,6 +1073,23 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				renderMetrics: receiverSurfaceQuadratureDiagnostic.renderMetrics,
 				summary: receiverSurfaceQuadratureDiagnostic.summary
 			};
+			const compactReceiver = receiver => ( {
+				label: receiver.label,
+				correctSide: receiver.correctSide,
+				totals: receiver.totals,
+				escapeSummary: receiver.escapeSummary,
+				rows: receiver.rows.map( row => ( {
+					probeIndex: row.probeIndex,
+					visibility: row.visibility,
+					scalarWeight: row.scalarWeight,
+					baseWeight: row.baseWeight,
+					compatibleKernel: row.compatibleKernel,
+					visibilityWeight: row.visibilityWeight,
+					crossesDivider: row.crossesDivider,
+					escaped: row.escaped,
+					escapeReason: row.escapeReason
+				} ) )
+			} );
 			const dominantEscapeReason = Object.entries( escapeClassification.escapeReasons )
 				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
 				.at( 0 ) ?? [ 'none', 0 ];
@@ -1083,83 +1102,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 						summary.wrongMinusCorrectSuppression > 0 ?
 							'WEIGHTING-SUPPRESSES-CORRECT-MORE-THAN-WRONG' :
 							'CPU-DIRECTIONAL-SUPPRESSION-SUPPORTED';
-			const visibilityBiasScales = [ 1, 0.5, 0.25, 0 ];
-			const visibilityBiasScaleSweep = [];
-			const hitConfidencePolicies = [
-				currentHitConfidencePolicy,
-				{ label: 'threshold-0.25', mode: 'threshold', threshold: 0.25 },
-				{ label: 'threshold-0.1', mode: 'threshold', threshold: 0.1 },
-				{ label: 'threshold-0.01', mode: 'threshold', threshold: 0.01 },
-				{ label: 'threshold-0', mode: 'threshold', threshold: 0 },
-				{ label: 'continuous', mode: 'continuous' },
-				{ label: 'always-moment', mode: 'always' },
-				{ label: 'ignore-hit', mode: 'ignore' }
-			];
-			const hitConfidencePolicySweep = [];
-
-			for ( const visibilityBiasScale of visibilityBiasScales ) {
-
-				const sweepLeft = visibilityBiasScale === 1 ? left : await analyzeReceiver( 'leftReceiver', _lightProbeContext.leakFixture.leftReceiver, 'left', visibilityBiasScale );
-				const sweepRight = visibilityBiasScale === 1 ? right : await analyzeReceiver( 'rightReceiver', _lightProbeContext.leakFixture.rightReceiver, 'right', visibilityBiasScale );
-
-				visibilityBiasScaleSweep.push( {
-					visibilityBiasScale,
-					summary: summarizeReceivers( sweepLeft, sweepRight ),
-					left: {
-						totals: sweepLeft.totals
-					},
-					right: {
-						totals: sweepRight.totals
-					}
-				} );
-
-			}
-
-			for ( const hitConfidencePolicy of hitConfidencePolicies ) {
-
-				const policyLeft = hitConfidencePolicy === currentHitConfidencePolicy ? left : await analyzeReceiver(
-					'leftReceiver',
-					_lightProbeContext.leakFixture.leftReceiver,
-					'left',
-					currentVisibilityBiasScale,
-					hitConfidencePolicy
-				);
-				const policyRight = hitConfidencePolicy === currentHitConfidencePolicy ? right : await analyzeReceiver(
-					'rightReceiver',
-					_lightProbeContext.leakFixture.rightReceiver,
-					'right',
-					currentVisibilityBiasScale,
-					hitConfidencePolicy
-				);
-
-				hitConfidencePolicySweep.push( {
-					policy: hitConfidencePolicy,
-					summary: summarizeReceivers( policyLeft, policyRight ),
-					left: {
-						totals: policyLeft.totals
-					},
-					right: {
-						totals: policyRight.totals
-					}
-				} );
-
-			}
-
-			const bestBiasScale = visibilityBiasScaleSweep.reduce( ( best, row ) =>
-				row.summary.wrongMinusCorrectSuppression < best.summary.wrongMinusCorrectSuppression ? row : best
-			);
-			const bestHitConfidencePolicy = hitConfidencePolicySweep.reduce( ( best, row ) =>
-				row.summary.wrongMinusCorrectSuppression < best.summary.wrongMinusCorrectSuppression ? row : best
-			);
-			const promotionSafeHitConfidencePolicies = hitConfidencePolicySweep.filter( row =>
-				row.summary.directionalSuppressionSupported === true &&
-				row.summary.correctSuppressionMean >= 0.9 &&
-				row.summary.wrongMinusCorrectSuppression <= - 0.05
-			);
-			const promotionSafeHitConfidencePolicy = promotionSafeHitConfidencePolicies.length > 0 ?
-				promotionSafeHitConfidencePolicies[ 0 ] :
-				null;
-
 			return {
 				status: summary.directionalSuppressionSupported ? 'SUPPORTED-DIRECTIONAL-SUPPRESSION' : 'OPEN-CORRECT-SIDE-SUPPRESSED',
 				fixtureMode,
@@ -1167,8 +1109,8 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					'CPU mirror of current shader weighting for thin-wall receiver centers; diagnostic only, not a public API.' :
 					'CPU mirror of current shader weighting for sealed-wall receiver centers; diagnostic only, not a public API.',
 				visibilityDepth: typeof _lightProbeContext.probeGrid.getVisibilityDepthInfo === 'function' ? _lightProbeContext.probeGrid.getVisibilityDepthInfo() : { available: false, mode: 'unavailable-proof-6-runtime-removed', resolution: 0, bytes: 0 },
-				left,
-				right,
+				left: compactReceiver( left ),
+				right: compactReceiver( right ),
 				summary,
 				escapeClassification,
 				shContributionDiagnostic,
@@ -1178,24 +1120,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				dominantEscapeReason: {
 					reason: dominantEscapeReason[ 0 ],
 					count: dominantEscapeReason[ 1 ]
-				},
-				visibilityBiasScaleSweep,
-				bestBiasScale: {
-					visibilityBiasScale: bestBiasScale.visibilityBiasScale,
-					summary: bestBiasScale.summary
-				},
-				hitConfidencePolicySweep,
-				bestHitConfidencePolicy: {
-					policy: bestHitConfidencePolicy.policy,
-					summary: bestHitConfidencePolicy.summary
-				},
-				promotionSafeHitConfidencePolicy: promotionSafeHitConfidencePolicy === null ? null : {
-					policy: promotionSafeHitConfidencePolicy.policy,
-					summary: promotionSafeHitConfidencePolicy.summary
-				},
-				hitConfidencePolicyDecision: promotionSafeHitConfidencePolicy === null ?
-					'OPEN-NO-PROMOTION-SAFE-POLICY' :
-					'SUPPORTED-PROMOTION-SAFE-POLICY'
+				}
 			};
 
 		} finally {
