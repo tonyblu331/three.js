@@ -2591,26 +2591,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
+	const setBakeParameter = async ( key, value ) => {
+
+		_lightProbeContext.params[ key ] = value;
+		await _lightProbeContext.recreateAndBake();
+
+	};
+
 	window.__webgpuLightProbeGridCornell = {
 		getMetrics: getProbeHarnessMetrics,
-		setResolution: async ( value ) => {
-
-			_lightProbeContext.params.resolution = value;
-			await _lightProbeContext.recreateAndBake();
-
-		},
-		setCubemapSize: async ( value ) => {
-
-			_lightProbeContext.params.cubemapSize = value;
-			await _lightProbeContext.recreateAndBake();
-
-		},
-		setPrecision: async ( value ) => {
-
-			_lightProbeContext.params.projectionPrecision = value;
-			await _lightProbeContext.recreateAndBake();
-
-		},
+		setResolution: value => setBakeParameter( 'resolution', value ),
+		setCubemapSize: value => setBakeParameter( 'cubemapSize', value ),
+		setPrecision: value => setBakeParameter( 'projectionPrecision', value ),
 		setLightingMode: ( value ) => {
 
 			_lightProbeContext.params.lightingMode = value;
@@ -2647,12 +2639,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			_lightProbeContext.updateMaterialType();
 
 		},
-		setLeakReductionMode: async ( value ) => {
-
-			_lightProbeContext.params.leakReductionMode = value;
-			await _lightProbeContext.recreateAndBake();
-
-		},
+		setLeakReductionMode: value => setBakeParameter( 'leakReductionMode', value ),
 		inspectAddonContract: () => {
 
 			const contractGrid = new LightProbeGridGPU(
