@@ -22,7 +22,7 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | --- | ---: | --- | --- |
 | `examples/jsm/lighting/LightProbeGridGPU.js` | 1262 | Runtime facade | GPU-resident; no CPU readback matches. |
 | `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2315 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, and profiling payload duplication. |
-| `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 717 | CPU/proof visibility weighting study | Next large diagnostic candidate. |
+| `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 629 | CPU/proof visibility weighting study | Trimmed unconsumed receiver/row lab payload; still the next large diagnostic candidate. |
 | `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | 188 | SH pressure diagnostics | Currently compact enough; avoid further splitting unless overlap appears. |
 | `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 139 | Receiver/surface diagnostics | Currently compact enough. |
 | `examples/jsm/lighting/LightProbeGridGPUExampleGUI.js` | 104 | Example controls | Stable. |
@@ -37,7 +37,7 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | `test/e2e/lightprobegrid-gpu-proof-gates.js` | 278 | Proof gate derivation/assertions | Watch for repeated gate labels/status logic. |
 | `test/e2e/lightprobegrid-gpu-runner-*.js` | 692 | Smoke assertion runners | Mostly reasonable; keep assertions compact and contract-focused. |
 
-Tracked LightProbeGridGPU feature/proof set: about 6,732 LOC, excluding this plan.
+Tracked LightProbeGridGPU feature/proof set: about 6,644 LOC, excluding this plan.
 
 ## Dependency rules
 

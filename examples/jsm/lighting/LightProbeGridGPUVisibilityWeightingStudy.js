@@ -18,7 +18,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 		restoreHarnessState,
 		restoreProbeVisibilitySnapshot,
 		roundMetric,
-		roundVector,
 		applyProofBakeSettings
 	} = dependencies;
 
@@ -278,7 +277,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			probeValidity = _lightProbeContext.createProbeValidityData( resolution );
 			const probePosition = new THREE.Vector3();
 			const receiverPosition = new THREE.Vector3();
-			const receiverLocalPosition = new THREE.Vector3();
 			const samplePosition = new THREE.Vector3();
 			const receiverNormal = new THREE.Vector3();
 			const receiverQuaternion = new THREE.Quaternion();
@@ -312,8 +310,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				}
 
-				receiverLocalPosition.copy( receiverPosition );
-				mesh.worldToLocal( receiverLocalPosition );
 				mesh.getWorldQuaternion( receiverQuaternion );
 				if ( surfaceSample?.worldNormal !== undefined ) {
 
@@ -467,42 +463,15 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 					rows.push( {
 						probeIndex,
-						coord: { x, y, z },
-						side,
 						relationToReceiver,
-						probePosition: {
-							x: roundMetric( probePosition.x ),
-							y: roundMetric( probePosition.y ),
-							z: roundMetric( probePosition.z )
-						},
-						octaTexel: {
-							x: moment.x,
-							y: moment.y
-						},
 						crossesDivider,
-						visibilitySegmentDividerAudit,
-						surfaceSegmentDividerAudit,
-						trilinearWeight: roundMetric( neighbor.trilinearWeight ),
-						normalWeight: roundMetric( normalWeight ),
-						validityWeight: roundMetric( validityWeight ),
-						confidenceWeight: roundMetric( confidenceWeight ),
-						layerCompatibility: roundMetric( layerCompatibility ),
 						compatibleKernel: roundMetric( compatibleKernel ),
-						dilationOnlyWeight: roundMetric( dilationOnlyWeight ),
-						receiverDistance: roundMetric( receiverDistance ),
-						meanDistance: roundMetric( moment.meanDistance ),
-						delta: roundMetric( delta ),
 						variance: roundMetric( moment.variance ),
 						hitConfidence: roundMetric( moment.hitConfidence ),
-						backfaceConfidence: roundMetric( moment.backfaceConfidence ),
-						momentEncoding: moment.momentEncoding,
-						chebyshevVisibility: roundMetric( chebyshevVisibility ),
-						momentVisibility: roundMetric( momentVisibility ),
 						visibility: roundMetric( visibility ),
 						scalarWeight: roundMetric( scalarWeight ),
 						baseWeight: roundMetric( baseWeight ),
 						visibilityWeight: roundMetric( visibilityWeight ),
-						suppression: roundMetric( suppression ),
 						escaped,
 						escapeReason
 					} );
@@ -540,59 +509,11 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				return {
 					label,
 					correctSide,
-					sampleKind: surfaceSample?.sampleKind ?? 'center',
-					sampleLabel: surfaceSample?.sampleLabel ?? 'center',
-					sampleUv: surfaceSample?.uv ?? { u: 0.5, v: 0.5 },
-					sampleScreenPixel: surfaceSample?.screenPixel ?? null,
 					quadratureWeight: roundMetric( surfaceSample?.quadratureWeight ?? 1 ),
-					receiverLocalPosition: roundVector( receiverLocalPosition ),
-					receiverPosition: {
-						x: roundMetric( receiverPosition.x ),
-						y: roundMetric( receiverPosition.y ),
-						z: roundMetric( receiverPosition.z )
-					},
 					receiverNormal: {
 						x: roundMetric( receiverNormal.x ),
 						y: roundMetric( receiverNormal.y ),
 						z: roundMetric( receiverNormal.z )
-					},
-					sampleNormalBias: roundMetric( activeNormalBias ),
-					sampleViewBias: roundMetric( activeViewBias ),
-					samplePosition: {
-						x: roundMetric( samplePosition.x ),
-						y: roundMetric( samplePosition.y ),
-						z: roundMetric( samplePosition.z )
-					},
-					probeCoord: {
-						x: roundMetric( probeCoord.x ),
-						y: roundMetric( probeCoord.y ),
-						z: roundMetric( probeCoord.z )
-					},
-					baseProbeCoord: {
-						x: roundMetric( base.x ),
-						y: roundMetric( base.y ),
-						z: roundMetric( base.z )
-					},
-					trilinearBlend: {
-						x: roundMetric( blend.x ),
-						y: roundMetric( blend.y ),
-						z: roundMetric( blend.z )
-					},
-					selectedProbeIndices: rows.map( row => row.probeIndex ),
-					visibilityBiasScale,
-					hitConfidencePolicy: hitConfidencePolicy.label,
-					runtimeVisibilityPath: useRuntimeVisibilityPath ?
-						'gpu-runtime-positionworld-distance-bias' :
-						useRuntimeUnguardedVisibilityPath ?
-							'gpu-runtime-unguarded-visibility' :
-							'legacy-cpu-biased-visibility-position',
-					probeMetaPath: useRuntimeProbeMeta ? 'gpu-runtime-probe-meta' : 'legacy-cpu-validity-only-meta',
-					normalSource: surfaceSample?.worldNormal !== undefined ? 'gpu-debug-normalWorld' : 'mesh-world-quaternion-local-z',
-					visibilityDistanceBias: roundMetric( runtimeVisibilityDistanceBias ),
-					visibilityReceiverPosition: {
-						x: roundMetric( runtimeVisibilityReceiverPosition.x ),
-						y: roundMetric( runtimeVisibilityReceiverPosition.y ),
-						z: roundMetric( runtimeVisibilityReceiverPosition.z )
 					},
 					rows,
 					totals: {
@@ -630,17 +551,8 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 						escapeReasons,
 						escapedProbes: escapedRows.map( row => ( {
 							probeIndex: row.probeIndex,
-							octaTexel: row.octaTexel,
 							escapeReason: row.escapeReason,
-							hitConfidence: row.hitConfidence,
-							meanDistance: row.meanDistance,
-							receiverDistance: row.receiverDistance,
-							delta: row.delta,
-							visibility: row.visibility,
-							suppression: row.suppression,
-							crossesDivider: row.crossesDivider,
-							visibilitySegmentDividerAudit: row.visibilitySegmentDividerAudit,
-							surfaceSegmentDividerAudit: row.surfaceSegmentDividerAudit
+							crossesDivider: row.crossesDivider
 						} ) )
 					}
 				};
