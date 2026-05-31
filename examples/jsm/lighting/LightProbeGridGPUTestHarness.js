@@ -2598,6 +2598,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
+	const createContractProbeGrid = ( options = {} ) => new LightProbeGridGPU(
+		new THREE.Vector3( - 1, - 2, - 3 ),
+		new THREE.Vector3( 4, 5, 6 ),
+		{
+			resolution: 2,
+			cubemapSize: 4,
+			projectionPrecision: 'half float',
+			renderer: _lightProbeContext.renderer,
+			...options
+		}
+	);
+
 	window.__webgpuLightProbeGridCornell = {
 		getMetrics: getProbeHarnessMetrics,
 		setResolution: value => setBakeParameter( 'resolution', value ),
@@ -2642,16 +2654,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		setLeakReductionMode: value => setBakeParameter( 'leakReductionMode', value ),
 		inspectAddonContract: () => {
 
-			const contractGrid = new LightProbeGridGPU(
-				new THREE.Vector3( - 1, - 2, - 3 ),
-				new THREE.Vector3( 4, 5, 6 ),
-				{
-					resolution: 2,
-					cubemapSize: 4,
-					projectionPrecision: 'half float',
-					renderer: _lightProbeContext.renderer
-				}
-			);
+			const contractGrid = createContractProbeGrid();
 			const contractHelper = contractGrid.createHelper();
 			const boundingBoxMin = contractGrid.boundingBox.min.toArray();
 			const boundingBoxMax = contractGrid.boundingBox.max.toArray();
@@ -2684,16 +2687,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		inspectProbePositions: () => {
 
-			const contractGrid = new LightProbeGridGPU(
-				new THREE.Vector3( - 1, - 2, - 3 ),
-				new THREE.Vector3( 4, 5, 6 ),
-				{
-					resolution: 2,
-					cubemapSize: 4,
-					projectionPrecision: 'half float',
-					renderer: _lightProbeContext.renderer
-				}
-			);
+			const contractGrid = createContractProbeGrid();
 			const first = new THREE.Vector3();
 			const last = new THREE.Vector3();
 			let invalidConstructorResolutionRejected = false;
@@ -2706,16 +2700,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			try {
 
-				new LightProbeGridGPU(
-					new THREE.Vector3( - 1, - 2, - 3 ),
-					new THREE.Vector3( 4, 5, 6 ),
-					{
-						resolution: 1,
-						cubemapSize: 4,
-						projectionPrecision: 'half float',
-						renderer: _lightProbeContext.renderer
-					}
-				);
+				createContractProbeGrid( { resolution: 1 } );
 
 			} catch ( error ) {
 
