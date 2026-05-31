@@ -19,8 +19,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 		restoreProbeVisibilitySnapshot,
 		roundMetric,
 		roundVector,
-		setBaseCornellProbeMeshesVisible,
-		setLeakFixtureMode
+		applyProofBakeSettings
 	} = dependencies;
 
 	const inspectVisibilityWeightingAtLeakReceivers = async ( fixtureMode = 'thin-wall' ) => {
@@ -268,30 +267,11 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 		try {
 
-			setBaseCornellProbeMeshesVisible( false );
-			setLeakFixtureMode( fixtureMode );
-
-			_lightProbeContext.params.resolution = resolution;
-			_lightProbeContext.params.cubemapSize = 8;
-			_lightProbeContext.params.projectionPrecision = 'half float';
-			_lightProbeContext.params.band1Intensity = 1;
-			_lightProbeContext.params.band2Intensity = 0.55;
-			_lightProbeContext.params.normalBias = 0.5;
-			_lightProbeContext.params.viewBias = 0;
-			_lightProbeContext.params.leakReductionMode = 'normal';
-			_lightProbeContext.params.useProbeValidity = true;
-			_lightProbeContext.params.lightingMode = 'probes only';
-			_lightProbeContext.params.probeHelper = false;
-			_lightProbeContext.probeHelper.visible = false;
-
-			if ( _lightProbeContext.params.materialType !== 'standard' ) {
-
-				_lightProbeContext.params.materialType = 'standard';
-				_lightProbeContext.updateMaterialType();
-
-			}
-
-			setLeakFixtureMode( fixtureMode );
+			applyProofBakeSettings( {
+				fixtureMode,
+				hideBaseCornell: true,
+				resolution
+			} );
 			await _lightProbeContext.recreateAndBakeRequired( `visibility weighting diagnostic ${ fixtureMode }` );
 			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 

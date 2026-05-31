@@ -1901,6 +1901,35 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
+	const applyProofBakeSettings = ( options = {} ) => {
+
+		if ( options.hideBaseCornell === true ) setBaseCornellProbeMeshesVisible( false );
+		if ( options.fixtureMode !== undefined ) setLeakFixtureMode( options.fixtureMode );
+
+		Object.assign( _lightProbeContext.params, {
+			resolution: options.resolution ?? 4,
+			cubemapSize: options.cubemapSize ?? 8,
+			projectionPrecision: options.projectionPrecision ?? 'half float',
+			band1Intensity: options.band1Intensity ?? 1,
+			band2Intensity: options.band2Intensity ?? 0.55,
+			normalBias: options.normalBias ?? 0.5,
+			viewBias: options.viewBias ?? 0,
+			leakReductionMode: options.leakReductionMode ?? 'normal',
+			useProbeValidity: options.useProbeValidity ?? true,
+			lightingMode: 'probes only',
+			probeHelper: false
+		} );
+		_lightProbeContext.probeHelper.visible = false;
+
+		if ( _lightProbeContext.params.materialType !== 'standard' ) {
+
+			_lightProbeContext.params.materialType = 'standard';
+			_lightProbeContext.updateMaterialType();
+
+		}
+
+	};
+
 	const readVisibilityDepthInfo = () => {
 
 		const probeGrid = _lightProbeContext?.probeGrid;
@@ -2074,25 +2103,14 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		}
 
-		_lightProbeContext.params.resolution = snapshotCase.resolution;
-		_lightProbeContext.params.cubemapSize = snapshotCase.cubemapSize;
-		_lightProbeContext.params.projectionPrecision = 'half float';
-		_lightProbeContext.params.band1Intensity = snapshotCase.band1Intensity;
-		_lightProbeContext.params.band2Intensity = snapshotCase.band2Intensity;
-		_lightProbeContext.params.normalBias = 0.5;
-		_lightProbeContext.params.viewBias = 0;
-		_lightProbeContext.params.leakReductionMode = snapshotCase.leakReductionMode;
-		_lightProbeContext.params.useProbeValidity = snapshotCase.useProbeValidity;
-		_lightProbeContext.params.lightingMode = 'probes only';
-		_lightProbeContext.params.probeHelper = false;
-		_lightProbeContext.probeHelper.visible = false;
-
-		if ( _lightProbeContext.params.materialType !== 'standard' ) {
-
-			_lightProbeContext.params.materialType = 'standard';
-			_lightProbeContext.updateMaterialType();
-
-		}
+		applyProofBakeSettings( {
+			band1Intensity: snapshotCase.band1Intensity,
+			band2Intensity: snapshotCase.band2Intensity,
+			cubemapSize: snapshotCase.cubemapSize,
+			leakReductionMode: snapshotCase.leakReductionMode,
+			resolution: snapshotCase.resolution,
+			useProbeValidity: snapshotCase.useProbeValidity
+		} );
 
 		await _lightProbeContext.recreateAndBakeRequired(
 			`grounding parity snapshot ${ label }`,
@@ -2206,8 +2224,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		restoreProbeVisibilitySnapshot,
 		roundMetric,
 		roundVector,
-		setBaseCornellProbeMeshesVisible,
-		setLeakFixtureMode
+		applyProofBakeSettings
 	} );
 
 	const inspectLeakReceiverNormalConvention = async ( fixtureMode = 'sealed-wall' ) => {
@@ -2445,28 +2462,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			for ( const proofCase of cases ) {
 
-				setBaseCornellProbeMeshesVisible( false );
-				setLeakFixtureMode( 'sealed-wall' );
-
-				_lightProbeContext.params.resolution = 4;
-				_lightProbeContext.params.cubemapSize = 8;
-				_lightProbeContext.params.projectionPrecision = 'half float';
-				_lightProbeContext.params.band1Intensity = 1;
-				_lightProbeContext.params.band2Intensity = 0.55;
-				_lightProbeContext.params.normalBias = 0.5;
-				_lightProbeContext.params.viewBias = 0;
-				_lightProbeContext.params.leakReductionMode = proofCase.leakReductionMode;
-				_lightProbeContext.params.useProbeValidity = proofCase.useProbeValidity;
-				_lightProbeContext.params.lightingMode = 'probes only';
-				_lightProbeContext.params.probeHelper = false;
-				_lightProbeContext.probeHelper.visible = false;
-
-				if ( _lightProbeContext.params.materialType !== 'standard' ) {
-
-					_lightProbeContext.params.materialType = 'standard';
-					_lightProbeContext.updateMaterialType();
-
-				}
+				applyProofBakeSettings( {
+					fixtureMode: 'sealed-wall',
+					hideBaseCornell: true,
+					leakReductionMode: proofCase.leakReductionMode,
+					useProbeValidity: proofCase.useProbeValidity
+				} );
 
 				await _lightProbeContext.recreateAndBakeRequired( `leak proof ${ proofCase.label }` );
 
