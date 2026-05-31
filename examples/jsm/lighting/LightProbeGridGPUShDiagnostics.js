@@ -4,7 +4,6 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 	const {
 		createAggregateEvaluation,
-		createColorChromaticity,
 		createReceiverChromaPressure,
 		createReceiverColorBias,
 		evaluateProbeCoefficientsForReceiver,
@@ -42,26 +41,8 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 		}
 
-		const scalarAggregate = await createAggregateEvaluation( receiver, 'scalarWeight', 'scalar-all-neighbors' );
-		const visibilityAggregate = await createAggregateEvaluation( receiver, 'visibilityWeight', 'visibility-all-neighbors' );
-		const correctVisibilityAggregate = await createAggregateEvaluation(
-			receiver,
-			'visibilityWeight',
-			'visibility-correct-side-only',
-			row => row.relationToReceiver === 'correct-side'
-		);
-		const wrongScalarAggregate = await createAggregateEvaluation(
-			receiver,
-			'scalarWeight',
-			'scalar-wrong-side-only',
-			row => row.relationToReceiver === 'wrong-side'
-		);
-		const wrongVisibilityAggregate = await createAggregateEvaluation(
-			receiver,
-			'visibilityWeight',
-			'visibility-wrong-side-only',
-			row => row.relationToReceiver === 'wrong-side'
-		);
+		const scalarAggregate = await createAggregateEvaluation( receiver, 'scalarWeight' );
+		const visibilityAggregate = await createAggregateEvaluation( receiver, 'visibilityWeight' );
 		const visibilityMix = Math.max(
 			0,
 			Math.min( visibilityAggregate.totalWeight / visibilityWeightFloor, 1 )
@@ -73,9 +54,8 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 		);
 		const runtimeIrradiance = evaluateProbeCoefficientsForReceiver( runtimeCoefficients, normal );
 		const invertedRuntimeIrradiance = evaluateProbeCoefficientsForReceiver( runtimeCoefficients, invertedNormal );
-		const scalarWrongRatio = scalarAggregate.colorBias.wrongOverCorrect;
-		const runtimeWrongRatio = createReceiverColorBias( runtimeIrradiance, receiver.correctSide ).wrongOverCorrect;
-		const wrongRatioImprovement = ( scalarWrongRatio - runtimeWrongRatio ) / Math.max( scalarWrongRatio, 0.0001 );
+		const runtimeColorBias = createReceiverColorBias( runtimeIrradiance, receiver.correctSide );
+		const invertedRuntimeColorBias = createReceiverColorBias( invertedRuntimeIrradiance, receiver.correctSide );
 
 		return {
 			label: receiver.label,
@@ -83,60 +63,18 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 			rows,
 			aggregates: {
 				scalar: {
-					label: scalarAggregate.label,
-					totalWeight: scalarAggregate.totalWeight,
-					irradiance: scalarAggregate.irradiance,
-					colorBias: scalarAggregate.colorBias,
-					chromaticity: scalarAggregate.chromaticity,
-					chromaPressure: scalarAggregate.chromaPressure
+					colorBias: scalarAggregate.colorBias
 				},
 				visibility: {
-					label: visibilityAggregate.label,
-					totalWeight: visibilityAggregate.totalWeight,
-					irradiance: visibilityAggregate.irradiance,
-					colorBias: visibilityAggregate.colorBias,
-					chromaticity: visibilityAggregate.chromaticity,
-					chromaPressure: visibilityAggregate.chromaPressure
+					colorBias: visibilityAggregate.colorBias
 				},
 				runtimeFinal: {
-					label: 'runtime-final-mixed-coefficients',
-					visibilityMix: roundMetric( visibilityMix ),
-					irradiance: runtimeIrradiance,
-					colorBias: createReceiverColorBias( runtimeIrradiance, receiver.correctSide ),
-					chromaticity: createColorChromaticity( runtimeIrradiance ),
-					chromaPressure: createReceiverChromaPressure( runtimeIrradiance, receiver.correctSide ),
-					wrongRatioImprovement: roundMetric( wrongRatioImprovement )
+					colorBias: runtimeColorBias,
+					chromaPressure: createReceiverChromaPressure( runtimeIrradiance, receiver.correctSide )
 				},
 				invertedNormalRuntimeFinal: {
 					label: 'runtime-final-mixed-coefficients-inverted-normal',
-					irradiance: invertedRuntimeIrradiance,
-					colorBias: createReceiverColorBias( invertedRuntimeIrradiance, receiver.correctSide ),
-					chromaticity: createColorChromaticity( invertedRuntimeIrradiance ),
-					chromaPressure: createReceiverChromaPressure( invertedRuntimeIrradiance, receiver.correctSide )
-				},
-				correctVisibilityOnly: {
-					label: correctVisibilityAggregate.label,
-					totalWeight: correctVisibilityAggregate.totalWeight,
-					irradiance: correctVisibilityAggregate.irradiance,
-					colorBias: correctVisibilityAggregate.colorBias,
-					chromaticity: correctVisibilityAggregate.chromaticity,
-					chromaPressure: correctVisibilityAggregate.chromaPressure
-				},
-				wrongScalarOnly: {
-					label: wrongScalarAggregate.label,
-					totalWeight: wrongScalarAggregate.totalWeight,
-					irradiance: wrongScalarAggregate.irradiance,
-					colorBias: wrongScalarAggregate.colorBias,
-					chromaticity: wrongScalarAggregate.chromaticity,
-					chromaPressure: wrongScalarAggregate.chromaPressure
-				},
-				wrongVisibilityOnly: {
-					label: wrongVisibilityAggregate.label,
-					totalWeight: wrongVisibilityAggregate.totalWeight,
-					irradiance: wrongVisibilityAggregate.irradiance,
-					colorBias: wrongVisibilityAggregate.colorBias,
-					chromaticity: wrongVisibilityAggregate.chromaticity,
-					chromaPressure: wrongVisibilityAggregate.chromaPressure
+					colorBias: invertedRuntimeColorBias
 				}
 			}
 		};
@@ -204,47 +142,19 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 		const positiveChromaPressure = row => Math.max( row.chromaPressure.wrongMinusCorrect, 0 );
 		const summarizeProbeContentReceiver = receiver => {
 
-			const visibilityRows = receiver.rows.filter( row => row.visibilityWeight > 0.0001 );
-			const scalarRows = receiver.rows.filter( row => row.scalarWeight > 0.0001 );
-			const correctRows = visibilityRows.filter( row => row.relationToReceiver === 'correct-side' );
-			const wrongRows = visibilityRows.filter( row => row.relationToReceiver === 'wrong-side' );
-			const maxCorrectSideChromaPressure = correctRows.reduce( ( max, row ) => Math.max( max, positiveChromaPressure( row ) ), 0 );
-			const weightedVisibilityChromaPressureMean = createWeightedMean(
-				visibilityRows,
-				'visibilityWeight',
-				positiveChromaPressure
+			const correctRows = receiver.rows.filter( row =>
+				row.visibilityWeight > 0.0001 &&
+				row.relationToReceiver === 'correct-side'
 			);
+			const maxCorrectSideChromaPressure = correctRows.reduce( ( max, row ) => Math.max( max, positiveChromaPressure( row ) ), 0 );
 			const weightedCorrectSideVisibilityChromaPressureMean = createWeightedMean(
 				correctRows,
 				'visibilityWeight',
 				positiveChromaPressure
 			);
-			const weightedCorrectSideL0WrongOverCorrectMean = createWeightedMean(
-				correctRows,
-				'visibilityWeight',
-				row => row.l0ColorBias.wrongOverCorrect
-			);
-			const weightedCorrectSideIrradianceWrongOverCorrectMean = createWeightedMean(
-				correctRows,
-				'visibilityWeight',
-				row => row.colorBias.wrongOverCorrect
-			);
-
 			return {
-				label: receiver.label,
-				correctSide: receiver.correctSide,
-				rowCount: receiver.rows.length,
-				visibilityRowCount: visibilityRows.length,
-				scalarRowCount: scalarRows.length,
-				correctSideVisibilityRowCount: correctRows.length,
-				wrongSideVisibilityRowCount: wrongRows.length,
-				weightedVisibilityChromaPressureMean,
 				weightedCorrectSideVisibilityChromaPressureMean,
-				weightedCorrectSideL0WrongOverCorrectMean,
-				weightedCorrectSideIrradianceWrongOverCorrectMean,
 				runtimeFinalChromaPressure: receiver.aggregates.runtimeFinal.chromaPressure,
-				scalarChromaPressure: receiver.aggregates.scalar.chromaPressure,
-				visibilityChromaPressure: receiver.aggregates.visibility.chromaPressure,
 				maxCorrectSideChromaPressure: roundMetric( maxCorrectSideChromaPressure )
 			};
 
@@ -262,12 +172,6 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 				( total, receiver ) => total + receiver.weightedCorrectSideVisibilityChromaPressureMean,
 				0
 			) / Math.max( probeContentReceivers.length, 1 )
-		);
-		const probeContentChromaStatus = Math.max( maxCorrectSideChromaPressure, maxRuntimeFinalChromaPressure ) >= 0.05 ?
-			'OPEN-PROBE-CONTENT-CHROMA-PRESSURE' :
-			'SUPPORTED-PROBE-CONTENT-CHROMA-BOUNDED';
-		const runtimeWrongRatioImprovementMean = roundMetric(
-			( scalarWrongRatioMean - runtimeWrongRatioMean ) / Math.max( scalarWrongRatioMean, 0.0001 )
 		);
 		const aggregateMixedColorSuspected = Math.max( visibilityWrongRatioMean, runtimeWrongRatioMean ) >= 0.25;
 		const correctSideMixedColorRowPressure = correctSideMixedColorRows.length > 0;
@@ -291,19 +195,10 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 				visibilityWrongRatioMean,
 				runtimeWrongRatioMean,
 				invertedNormalRuntimeWrongRatioMean,
-				runtimeWrongRatioImprovementMean,
-				probeContentChromaStatus,
 				maxCorrectSideChromaPressure,
 				maxRuntimeFinalChromaPressure,
 				weightedCorrectSideChromaPressureMean,
 				weightedCorrectSideWrongOverCorrectMean,
-				correctSideMixedColorRowCount: correctSideMixedColorRows.length,
-				correctSideVisibilityRowCount: correctVisibilityRows.length,
-				correctSideMixedColorRowPressure,
-				aggregateMixedColorSuspected,
-				wrongSideEscapedProbeCount: escapeSummary.wrongSideEscapedCount,
-				directionalSuppressionSupported: weightingSummary.directionalSuppressionSupported,
-				bakedShMixedColorSuspected
 			}
 		};
 

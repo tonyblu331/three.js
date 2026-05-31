@@ -767,7 +767,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 			};
 
-			const createAggregateEvaluation = async ( receiver, weightKey, label, predicate = () => true, coefficientReader = readProbeCoefficients ) => {
+			const createAggregateEvaluation = async ( receiver, weightKey, predicate = () => true, coefficientReader = readProbeCoefficients ) => {
 
 				const normal = new THREE.Vector3(
 					receiver.receiverNormal.x,
@@ -778,12 +778,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				const irradiance = evaluateProbeCoefficientsForReceiver( aggregate.coefficients, normal );
 
 				return {
-					label,
 					totalWeight: roundMetric( aggregate.totalWeight ),
 					coefficients: aggregate.coefficients,
-					irradiance,
 					colorBias: createReceiverColorBias( irradiance, receiver.correctSide ),
-					chromaticity: createColorChromaticity( irradiance ),
 					chromaPressure: createReceiverChromaPressure( irradiance, receiver.correctSide )
 				};
 
@@ -794,7 +791,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				analyzeShContributionDiagnostics
 			} = createLightProbeGridGPUShDiagnostics( {
 				createAggregateEvaluation,
-				createColorChromaticity,
 				createReceiverChromaPressure,
 				createReceiverColorBias,
 				evaluateProbeCoefficientsForReceiver,
