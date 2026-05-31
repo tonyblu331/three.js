@@ -33,7 +33,7 @@ Working tree is intentionally mid-refactor and not yet committed. The current sl
 | Runtime projection builders | Done | `LightProbeGridGPUProjection.js` owns fragment and compute projection construction and shares cubemap traversal / SH coefficient accumulation helpers instead of duplicating them in the runtime facade. |
 | Runtime atlas/repack ownership | Done | `LightProbeGridGPUAtlas.js` now owns atlas addressing, probe indexing, and coefficient atlas repack material creation so atlas behavior is not split across thin files. |
 | Runtime visibility materials | Done | `LightProbeGridGPUVisibility.js` owns visibility distance/repack material creation plus octahedral visibility lookup helpers, removing duplicated oct mapping from the runtime facade. |
-| Runtime helper visualization | Done | `LightProbeGridGPUHelper.js` owns helper mesh/material/debug construction and helper depth mode application, keeping optional visualization out of the runtime facade. |
+| Runtime helper visualization | Done | Helper mesh/material/debug construction was inlined back into `LightProbeGridGPU.js`; the former helper module was a single-use thin split. |
 | Runtime bake state/metrics | Done | `LightProbeGridGPUBake.js` owns bake state capture/restore and timing result construction, so `_bake()` focuses on orchestration instead of restore boilerplate and duplicated timing field mapping. |
 | Source invariant alignment | Done | `lightprobegrid-gpu-source-invariants.js` now reads the new proof readback and artifact assertion modules, so the invariants track the new ownership boundaries instead of stale monolith locations. |
 
@@ -51,7 +51,6 @@ Working tree is intentionally mid-refactor and not yet committed. The current sl
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js` | 263 lines | Proof-only CPU SH math contract. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js` | 242 lines | Runtime projection material/node builders with shared cubemap traversal and SH accumulation. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js` | 135 lines | Runtime visibility material builders and octahedral visibility load helpers. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js` | 95 lines | Runtime helper mesh/material/debug visualization owner. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js` | 132 lines | Bake state capture/restore and bake timing/result metadata owner. |
 | `test/e2e/lightprobegrid-gpu-artifacts.js` | 1592 lines | Smaller than before but still a report artifact writer with more extraction potential. |
 | `test/e2e/lightprobegrid-gpu-artifact-performance-assertions.js` | 238 lines | New focused performance artifact contract. |
@@ -128,7 +127,6 @@ flowchart TD
   A --> E["LightProbeGridGPUProjection.js\nfragment + compute projection builders"]
   A --> F["LightProbeGridGPUSampling.js\natlas/manual irradiance node builders"]
   A --> G["LightProbeGridGPUVisibility.js\nvisibility moment target/repack helpers"]
-  A --> H["LightProbeGridGPUHelper.js\ninstanced helper/debug material"]
 
   I["TestHarness / Diagnostics"] --> J["LightProbeGridGPUCpuMath.js\nCPU SH eval + packing mirror"]
   I --> K["LightProbeGridGPUProofReadback.js\nreadback adapters only"]
@@ -161,7 +159,6 @@ examples/jsm/lighting/
     LightProbeGridGPUProjection.js             # fragment + compute projection builders
     LightProbeGridGPUSampling.js               # runtime irradiance sampling node builders
     LightProbeGridGPUVisibility.js             # guarded visibility target/repack helpers
-    LightProbeGridGPUHelper.js                 # helper mesh/debug visualization
     LightProbeGridGPUCpuShMath.js              # proof-only CPU SH math mirror
     LightProbeGridGPUProofReadback.js          # proof-only readback adapters
     LightProbeGridGPUProofMetrics.js           # diagnostic metrics if shared by browser diagnostics
@@ -199,7 +196,7 @@ import { SH_COEFFICIENTS } from './lightprobegridgpu/LightProbeGridGPUConstants.
 | --- | --- | --- |
 | Domain model | `LightProbeGridGPU.js`, `LightProbeGridGPUConstants.js`, `LightProbeGridGPUAtlas.js` | The model is a GPU probe grid, atlas layout, probe positions, and SH coefficient contract. |
 | Application/use-case orchestration | `LightProbeGridGPU.js` bake facade plus maybe `LightProbeGridGPUBake.js` if `_bake` stays too large | Keep orchestration close to the object; split only when it reduces complexity. |
-| Rendering infrastructure | `LightProbeGridGPUProjection.js`, `LightProbeGridGPUSampling.js`, `LightProbeGridGPUVisibility.js`, `LightProbeGridGPUHelper.js` | These own render targets, TSL nodes, materials, and render passes. |
+| Rendering infrastructure | `LightProbeGridGPUProjection.js`, `LightProbeGridGPUSampling.js`, `LightProbeGridGPUVisibility.js` | These own render targets, TSL nodes, materials, and render passes. |
 | Diagnostic adapters | `LightProbeGridGPUProofReadback.js`, `LightProbeGridGPUCpuShMath.js`, diagnostics/study files | CPU readback and CPU mirrors are adapters around runtime, not runtime. |
 | Reporting | `test/e2e/lightprobegrid-gpu-*` | Keep Node report artifacts in tests, not examples runtime. |
 
@@ -485,7 +482,7 @@ Keep only responsibilities that define the object contract or coordinate instanc
 | fragment and compute projection material/node builders | `LightProbeGridGPUProjection.js` | Projection algorithm can evolve independently from object API. |
 | atlas repack material and repack pass helper | `LightProbeGridGPUAtlas.js` | Repack uses the packed atlas layout contract, so keep it with atlas ownership instead of a separate thin file. |
 | runtime irradiance sampling node builders | `LightProbeGridGPUSampling.js` | Sampling algorithm is large and independently testable by source invariants/proof output. |
-| helper/debug material internals | `LightProbeGridGPUHelper.js` | Helper visualization is optional UI/debug behavior. |
+| helper/debug material internals | `LightProbeGridGPU.js` | Helper visualization is single-use runtime UI/debug behavior; keep local unless duplication reappears. |
 | visibility distance material and moment repack | `LightProbeGridGPUVisibility.js` | Guarded verifier path must stay bounded and not blur into public DDGI claims. |
 | CPU SH basis/evaluation/projection mirror | `LightProbeGridGPUCpuShMath.js` | CPU mirror is diagnostic-only and should not sit in runtime/harness closures. |
 | atlas/moment readback adapters | `LightProbeGridGPUProofReadback.js` | Readback is forbidden in runtime but valid in proof diagnostics. |
@@ -1046,9 +1043,9 @@ Acceptance:
 
 ### Slice G: helper visualization
 
-Status: **done**.
+Status: **consolidated**.
 
-`LightProbeGridGPUHelper.js` now owns:
+`LightProbeGridGPUHelper.js` was removed; `LightProbeGridGPU.js` locally owns:
 
 - helper instanced mesh creation;
 - helper probe sphere geometry and material;
@@ -1061,7 +1058,7 @@ Acceptance:
 - runtime has no `_createHelper()` method.
 - runtime has no local `InstancedMesh`, `SphereGeometry`, `MeshBasicNodeMaterial`, `Matrix4`, or `instanceIndex` helper construction imports.
 - public `createHelper()` still returns the helper and preserves depth/debug controls.
-- source invariants read `LightProbeGridGPUHelper.js` and verify the helper ownership boundary.
+- source invariants verify helper construction remains local and not split into another thin single-use file.
 
 ### Slice H: bake state and timing result
 

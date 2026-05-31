@@ -20,7 +20,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		cpuShMathSource,
 		gpuProjectionSource,
 		gpuVisibilitySource,
-		gpuHelperSource,
 		gpuBakeSource,
 		smokeRunnerSource,
 		proofGatesSource,
@@ -51,7 +50,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js', 'utf8' ),
-		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-gates.js', 'utf8' ),
@@ -233,14 +231,10 @@ ${ runnerRuntimeAssertionsSource }`;
 		source.includes( 'createLightProbeGridGPUHelper(' ) &&
 			source.includes( 'applyLightProbeGridGPUHelperDepthMode(' ) &&
 			source.includes( '_createHelper()' ) === false &&
-			source.includes( 'new InstancedMesh' ) === false &&
-			source.includes( 'new SphereGeometry' ) === false &&
-			source.includes( 'instanceIndex' ) === false &&
-			gpuHelperSource.includes( 'createLightProbeGridGPUHelper' ) &&
-			gpuHelperSource.includes( 'applyLightProbeGridGPUHelperDepthMode' ) &&
-			gpuHelperSource.includes( 'new InstancedMesh' ) &&
-			gpuHelperSource.includes( 'instanceIndex' ),
-		'LightProbeGridGPU helper mesh/material/debug construction must live outside the runtime facade while runtime keeps public helper controls.'
+			source.includes( 'new InstancedMesh' ) &&
+			source.includes( 'new SphereGeometry' ) &&
+			source.includes( 'instanceIndex' ),
+		'LightProbeGridGPU helper mesh/material/debug construction is local because the helper seam is single-use and intentionally not a separate thin file.'
 	);
 
 	requireSource(
@@ -300,7 +294,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			/setRenderTarget\( this\.atlasTarget, this\._getPackedAtlasLayer/.test( source ) &&
 			(
 				/atlasLoad\.load\( this\._getPackedAtlasLoadCoord/.test( source ) ||
-				/atlasLoad\.load\( getPackedAtlasLoadCoord/.test( gpuHelperSource )
+				/atlasLoad\.load\( getPackedAtlasLoadCoord/.test( source )
 			) &&
 			gpuAtlasSource.includes( 'getLightProbeGridGPUPaddedAtlasSlices' ) &&
 			gpuAtlasSource.includes( 'getLightProbeGridGPUAtlasDepth' ) &&
