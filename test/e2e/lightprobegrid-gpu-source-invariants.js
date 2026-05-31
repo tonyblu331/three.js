@@ -33,9 +33,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		sourceInvariantSource,
 		runnerCoreAssertionsSource,
 		runnerVisibilityAssertionsSource,
-		runnerVisibilityBaseAssertionsSource,
-		runnerVisibilityReceiverAssertionsSource,
-		runnerVisibilityNormalAssertionsSource,
 		runnerMatrixAssertionsSource,
 		runnerRuntimeAssertionsSource,
 		webglExample,
@@ -69,9 +66,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-source-invariants.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-core-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-assertions.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-base-assertions.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-receiver-assertions.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-visibility-normal-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-matrix-assertions.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-runtime-assertions.js', 'utf8' ),
 		fs.readFile( 'examples/webgl_lightprobes.html', 'utf8' ),
@@ -96,9 +90,6 @@ ${ configSource }
 ${ sourceInvariantSource }
 ${ runnerCoreAssertionsSource }
 ${ runnerVisibilityAssertionsSource }
-${ runnerVisibilityBaseAssertionsSource }
-${ runnerVisibilityReceiverAssertionsSource }
-${ runnerVisibilityNormalAssertionsSource }
 ${ runnerMatrixAssertionsSource }
 ${ runnerRuntimeAssertionsSource }`;
 
