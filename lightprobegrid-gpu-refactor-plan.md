@@ -98,7 +98,7 @@ The file is doing real work, not just noise, but the responsibilities are now st
 
 The diagnostic files are larger than the runtime file in places. Current verified sizes after the first cleanup slices:
 
-- `LightProbeGridGPUTestHarness.js` 2534 lines after compact proof-facts cleanup.
+- `LightProbeGridGPUTestHarness.js` 2524 lines after compact artifact snapshot cleanup.
 - `LightProbeGridGPUReceiverDiagnostics.js` 818 lines after deleting surface coefficient attribution row fanout.
 - `LightProbeGridGPUShDiagnostics.js` 335 lines after deleting unreturned SH band/coefficient row fanout.
 - `LightProbeGridGPUVisibilityWeightingStudy.js` 767 lines after deleting unreturned SH band/coefficient helper studies.

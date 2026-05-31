@@ -1869,20 +1869,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
-		const [ leftWall, rightWall, center, upperCenter, floorCenter ] = sampleCanvas( [
-			{ x0: 0.08, x1: 0.24, y0: 0.32, y1: 0.68 },
-			{ x0: 0.76, x1: 0.92, y0: 0.32, y1: 0.68 },
-			{ x0: 0.42, x1: 0.58, y0: 0.38, y1: 0.62 },
-			{ x0: 0.36, x1: 0.64, y0: 0.18, y1: 0.34 },
-			{ x0: 0.34, x1: 0.66, y0: 0.68, y1: 0.88 }
+		const [ center ] = sampleCanvas( [
+			{ x0: 0.42, x1: 0.58, y0: 0.38, y1: 0.62 }
 		] );
 
 		return {
-			leftWall: createArtifactColor( leftWall ),
-			rightWall: createArtifactColor( rightWall ),
-			center: createArtifactColor( center ),
-			upperCenter: createArtifactColor( upperCenter ),
-			floorCenter: createArtifactColor( floorCenter )
+			center: createArtifactColor( center )
 		};
 
 	};
@@ -2221,9 +2213,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			},
 			metrics: getProbeHarnessMetrics(),
 			bakeTexelBudget: createBakeTexelBudget(),
-			colorSanity: await captureColorSanity(),
 			artifactSignature: captureArtifactSignature(),
-			localArtifactMetric: createLocalArtifactMetric(),
 			regions,
 			artifactPressure: createObjectArtifactPressure( regions )
 		};
