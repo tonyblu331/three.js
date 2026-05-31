@@ -842,7 +842,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 			const escapeClassification = combineEscapeSummary( [ left, right ] );
 			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right, escapeClassification, summary );
-			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic( shContributionDiagnostic );
+			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic();
 			const receiverGpuDebugDiagnostic = await captureReceiverGpuDebugDiagnostics( receiverSurfaceQuadratureDiagnostic );
 			const compactReceiver = receiver => ( {
 				label: receiver.label,

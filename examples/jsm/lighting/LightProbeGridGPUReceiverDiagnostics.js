@@ -52,19 +52,11 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 	};
 
-	const createReceiverSurfaceQuadratureDiagnostic = async ( centerContributionDiagnostic ) => {
+	const createReceiverSurfaceQuadratureDiagnostic = async () => {
 
 		const summarizeReceiverSurface = async ( label, mesh, correctSide ) => {
 
-			const totals = {
-				scalarWrongOverCorrect: 0,
-				visibilityWrongOverCorrect: 0,
-				runtimeWrongOverCorrect: 0,
-				invertedNormalRuntimeWrongOverCorrect: 0,
-				runtimeVisibilityMix: 0,
-				scalarTotalWeight: 0,
-				visibilityTotalWeight: 0
-			};
+			let runtimeWrongOverCorrect = 0;
 			let totalQuadratureWeight = 0;
 			let sampleCount = 0;
 			const sampleDescriptors = createGaussLegendreReceiverSamples( mesh );
@@ -84,32 +76,13 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 				totalQuadratureWeight += weight;
 				sampleCount ++;
-				totals.scalarWrongOverCorrect += contribution.aggregates.scalar.colorBias.wrongOverCorrect * weight;
-				totals.visibilityWrongOverCorrect += contribution.aggregates.visibility.colorBias.wrongOverCorrect * weight;
-				totals.runtimeWrongOverCorrect += contribution.aggregates.runtimeFinal.colorBias.wrongOverCorrect * weight;
-				totals.invertedNormalRuntimeWrongOverCorrect += contribution.aggregates.invertedNormalRuntimeFinal.colorBias.wrongOverCorrect * weight;
-				totals.runtimeVisibilityMix += contribution.aggregates.runtimeFinal.visibilityMix * weight;
-				totals.scalarTotalWeight += contribution.aggregates.scalar.totalWeight * weight;
-				totals.visibilityTotalWeight += contribution.aggregates.visibility.totalWeight * weight;
+				runtimeWrongOverCorrect += contribution.aggregates.runtimeFinal.colorBias.wrongOverCorrect * weight;
 
 			}
 
-			const weightedMean = key => roundMetric( totals[ key ] / Math.max( totalQuadratureWeight, 0.0001 ) );
-
 			return {
-				label,
-				correctSide,
 				sampleCount,
-				quadratureWeightSum: roundMetric( totalQuadratureWeight ),
-				weightedMeans: {
-					scalarWrongOverCorrect: weightedMean( 'scalarWrongOverCorrect' ),
-					visibilityWrongOverCorrect: weightedMean( 'visibilityWrongOverCorrect' ),
-					runtimeWrongOverCorrect: weightedMean( 'runtimeWrongOverCorrect' ),
-					invertedNormalRuntimeWrongOverCorrect: weightedMean( 'invertedNormalRuntimeWrongOverCorrect' ),
-					runtimeVisibilityMix: weightedMean( 'runtimeVisibilityMix' ),
-					scalarTotalWeight: weightedMean( 'scalarTotalWeight' ),
-					visibilityTotalWeight: weightedMean( 'visibilityTotalWeight' )
-				}
+				runtimeWrongOverCorrect: roundMetric( runtimeWrongOverCorrect / Math.max( totalQuadratureWeight, 0.0001 ) )
 			};
 
 		};
@@ -117,11 +90,8 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		const renderMetrics = captureLeakRegionMetrics();
 		const leftSurface = await summarizeReceiverSurface( 'leftReceiver', _lightProbeContext.leakFixture.leftReceiver, 'left' );
 		const rightSurface = await summarizeReceiverSurface( 'rightReceiver', _lightProbeContext.leakFixture.rightReceiver, 'right' );
-		const averageSurface = key => roundMetric( ( leftSurface.weightedMeans[ key ] + rightSurface.weightedMeans[ key ] ) * 0.5 );
-		const maxSurface = key => roundMetric( Math.max( leftSurface.weightedMeans[ key ], rightSurface.weightedMeans[ key ] ) );
-		const surfaceRuntimeWrongRatioMean = averageSurface( 'runtimeWrongOverCorrect' );
-		const surfaceRuntimeWrongRatioMax = maxSurface( 'runtimeWrongOverCorrect' );
-		const centerRuntimeWrongRatioMean = centerContributionDiagnostic.summary.runtimeWrongRatioMean;
+		const surfaceRuntimeWrongRatioMean = roundMetric( ( leftSurface.runtimeWrongOverCorrect + rightSurface.runtimeWrongOverCorrect ) * 0.5 );
+		const surfaceRuntimeWrongRatioMax = roundMetric( Math.max( leftSurface.runtimeWrongOverCorrect, rightSurface.runtimeWrongOverCorrect ) );
 		const renderSurfaceWrongRatio = renderMetrics.surfaceWrongSideColorRatio;
 		const renderMaskedWrongRatio = renderMetrics.maskedWrongSideColorRatio;
 		const agreementTolerance = 0.15;
@@ -132,15 +102,15 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		const maskedCpuRenderDeltaMax = renderMaskedWrongRatio === null ? null :
 			roundMetric( Math.abs( renderMaskedWrongRatio - surfaceRuntimeWrongRatioMax ) );
 		const renderAgreementCandidates = [
-			{ aggregation: 'surface-region-receiver-mean', delta: surfaceCpuRenderDeltaMean, cpuRatio: surfaceRuntimeWrongRatioMean },
-			{ aggregation: 'surface-region-receiver-max', delta: surfaceCpuRenderDeltaMax, cpuRatio: surfaceRuntimeWrongRatioMax }
+			{ aggregation: 'surface-region-receiver-mean', delta: surfaceCpuRenderDeltaMean },
+			{ aggregation: 'surface-region-receiver-max', delta: surfaceCpuRenderDeltaMax }
 		];
 
 		if ( maskedCpuRenderDeltaMean !== null ) {
 
 			renderAgreementCandidates.push(
-				{ aggregation: 'masked-visible-pixels-receiver-mean', delta: maskedCpuRenderDeltaMean, cpuRatio: surfaceRuntimeWrongRatioMean },
-				{ aggregation: 'masked-visible-pixels-receiver-max', delta: maskedCpuRenderDeltaMax, cpuRatio: surfaceRuntimeWrongRatioMax }
+				{ aggregation: 'masked-visible-pixels-receiver-mean', delta: maskedCpuRenderDeltaMean },
+				{ aggregation: 'masked-visible-pixels-receiver-max', delta: maskedCpuRenderDeltaMax }
 			);
 
 		}
@@ -159,37 +129,13 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 			proofBoundary: 'Proof-only receiver-surface quadrature over PlaneGeometry samples using packed SH/visibility readbacks; diagnostic mirror only, not runtime CPU readback or public API.',
 			quadratureRule: 'tensor-product-gauss-legendre-3x3-over-receiver-plane',
 			sampleCountPerReceiver: leftSurface.sampleCount,
-			left: leftSurface,
-			right: rightSurface,
-			renderMetrics: {
-				boundsWrongSideColorRatio: renderMetrics.wrongSideColorRatio,
-				centerWrongSideColorRatio: renderMetrics.centerWrongSideColorRatio,
-				surfaceWrongSideColorRatio: renderMetrics.surfaceWrongSideColorRatio,
-				maskedWrongSideColorRatio: renderMetrics.maskedWrongSideColorRatio,
-				maskedCorrectBounceRatio: renderMetrics.maskedCorrectBounceRatio,
-				maskedReceiverRegionMetricMode: renderMetrics.maskedReceiverRegionMetricMode,
-				receiverRegionMetricMode: renderMetrics.receiverRegionMetricMode
-			},
 			summary: {
-				surfaceScalarWrongRatioMean: averageSurface( 'scalarWrongOverCorrect' ),
-				surfaceScalarWrongRatioMax: maxSurface( 'scalarWrongOverCorrect' ),
-				surfaceVisibilityWrongRatioMean: averageSurface( 'visibilityWrongOverCorrect' ),
-				surfaceVisibilityWrongRatioMax: maxSurface( 'visibilityWrongOverCorrect' ),
 				surfaceRuntimeWrongRatioMean,
 				surfaceRuntimeWrongRatioMax,
-				surfaceInvertedNormalRuntimeWrongRatioMean: averageSurface( 'invertedNormalRuntimeWrongOverCorrect' ),
-				surfaceInvertedNormalRuntimeWrongRatioMax: maxSurface( 'invertedNormalRuntimeWrongOverCorrect' ),
-				surfaceRuntimeVisibilityMixMean: averageSurface( 'runtimeVisibilityMix' ),
-				centerRuntimeWrongRatioMean,
-				centerVsSurfaceCpuDelta: roundMetric( Math.abs( surfaceRuntimeWrongRatioMean - centerRuntimeWrongRatioMean ) ),
 				surfaceCpuRenderDelta,
 				surfaceCpuRenderDeltaMean,
 				surfaceCpuRenderDeltaMax,
-				maskedCpuRenderDeltaMean,
-				maskedCpuRenderDeltaMax,
 				cpuRenderAgreementAggregation,
-				cpuRenderAgreementCpuRatio: bestRenderAgreement.cpuRatio,
-				agreementTolerance,
 				cpuRenderAgreementGate: surfaceCpuRenderDelta <= agreementTolerance ? 'SUPPORTED' : 'OPEN'
 			}
 		};
