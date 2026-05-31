@@ -4,31 +4,18 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 	const {
 		_lightProbeContext,
-		addScaledCoefficients,
-		auditDividerSegment,
 		createAggregateEvaluation,
 		createColorChromaticity,
 		createReceiverChromaPressure,
 		createReceiverColorBias,
-		createShBandDecomposition,
-		createShCoefficientContributionStudy,
-		createZeroCoefficients,
-		diagnosticState,
 		dividerX,
-		evaluateIrradianceContract,
 		evaluateProbeCoefficientsForReceiver,
-		getColorChannel,
-		getWrongColorChannel,
-		measureNegativeEnergy,
 		mixCoefficients,
 		readSourceMappedProbeCoefficients,
 		readProbeCoefficients,
 		resolution,
 		roundColor,
 		roundMetric,
-		roundVector,
-		scaleCoefficients,
-		shCoefficientTerms,
 		visibilityWeightFloor
 	} = dependencies;
 
@@ -40,27 +27,6 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 			receiver.receiverNormal.z
 		);
 		const invertedNormal = normal.clone().multiplyScalar( - 1 );
-		const scaleColorValue = ( color, scale ) => ( {
-			r: color.r * scale,
-			g: color.g * scale,
-			b: color.b * scale
-		} );
-		const createWeightedContributionRow = ( contribution, scale ) => {
-
-			const scaledContribution = scaleColorValue( contribution.contribution, scale );
-			const correctContribution = getColorChannel( scaledContribution, receiver.correctSide );
-			const wrongContribution = getWrongColorChannel( scaledContribution, receiver.correctSide );
-
-			return {
-				...contribution,
-				weightedContribution: roundColor( scaledContribution ),
-				weightedCorrectContribution: roundMetric( correctContribution ),
-				weightedWrongContribution: roundMetric( wrongContribution ),
-				weightedWrongMinusCorrect: roundMetric( wrongContribution - correctContribution ),
-				weightedNegativeEnergy: measureNegativeEnergy( scaledContribution )
-			};
-
-		};
 		const rows = [];
 
 		for ( const row of receiver.rows ) {
@@ -69,61 +35,25 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 			const dilatedProbe = await readSourceMappedProbeCoefficients( row.probeIndex );
 			const irradiance = evaluateProbeCoefficientsForReceiver( probe.coefficients, normal );
 			const l0Irradiance = roundColor( probe.l0Irradiance );
-			const bandDecomposition = createShBandDecomposition( probe.coefficients, normal, receiver.correctSide );
-			const coefficientContributionStudy = createShCoefficientContributionStudy( probe.coefficients, normal, receiver.correctSide );
-			const dilatedIrradiance = evaluateProbeCoefficientsForReceiver( dilatedProbe.coefficients, normal );
-			const dilatedL0Irradiance = roundColor( dilatedProbe.l0Irradiance );
-			const dilatedBandDecomposition = createShBandDecomposition(
-				dilatedProbe.coefficients,
-				normal,
-				receiver.correctSide
-			);
-			const dilatedCoefficientContributionStudy = createShCoefficientContributionStudy(
-				dilatedProbe.coefficients,
-				normal,
-				receiver.correctSide
-			);
 			const dilationSourcePosition = new THREE.Vector3();
 			_lightProbeContext.getGridProbePosition( dilatedProbe.sourceProbeIndex, resolution, dilationSourcePosition );
 			const dilationSourceSide = dilationSourcePosition.x < dividerX ? 'left' : 'right';
-			const dilationSourceRelationToReceiver = dilationSourceSide === receiver.correctSide ?
-				'correct-side' :
-				'wrong-side';
 
 			rows.push( {
 				probeIndex: row.probeIndex,
 				sourceProbeIndex: dilatedProbe.sourceProbeIndex,
 				dilationSourceDiffers: dilatedProbe.dilated,
 				sourceSide: dilationSourceSide,
-				sourceRelationToReceiver: dilationSourceRelationToReceiver,
-				sourceValidity: roundMetric( diagnosticState.probeValidity[ dilatedProbe.sourceProbeIndex ] ?? 1 ),
-				coord: row.coord,
 				side: row.side,
 				relationToReceiver: row.relationToReceiver,
-				probePosition: row.probePosition,
-				crossesDivider: row.crossesDivider,
-				visibilitySegmentDividerAudit: row.visibilitySegmentDividerAudit,
-				surfaceSegmentDividerAudit: row.surfaceSegmentDividerAudit,
 				scalarWeight: row.scalarWeight,
 				visibilityWeight: row.visibilityWeight,
-				visibility: row.visibility,
 				validity: roundMetric( probe.validity ),
 				irradiance,
 				l0Irradiance,
 				chromaticity: createColorChromaticity( irradiance ),
-				l0Chromaticity: createColorChromaticity( l0Irradiance ),
 				chromaPressure: createReceiverChromaPressure( irradiance, receiver.correctSide ),
 				l0ChromaPressure: createReceiverChromaPressure( l0Irradiance, receiver.correctSide ),
-				bandDecomposition,
-				coefficientContributionStudy,
-				energy: roundMetric( irradiance.r + irradiance.g + irradiance.b ),
-				l0Energy: roundMetric( l0Irradiance.r + l0Irradiance.g + l0Irradiance.b ),
-				dilatedIrradiance,
-				dilatedL0Irradiance,
-				dilatedBandDecomposition,
-				dilatedCoefficientContributionStudy,
-				dilatedChromaPressure: createReceiverChromaPressure( dilatedIrradiance, receiver.correctSide ),
-				dilatedL0ChromaPressure: createReceiverChromaPressure( dilatedL0Irradiance, receiver.correctSide ),
 				colorBias: createReceiverColorBias( irradiance, receiver.correctSide ),
 				l0ColorBias: createReceiverColorBias( l0Irradiance, receiver.correctSide )
 			} );
@@ -164,79 +94,11 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 		const scalarWrongRatio = scalarAggregate.colorBias.wrongOverCorrect;
 		const runtimeWrongRatio = createReceiverColorBias( runtimeIrradiance, receiver.correctSide ).wrongOverCorrect;
 		const wrongRatioImprovement = ( scalarWrongRatio - runtimeWrongRatio ) / Math.max( scalarWrongRatio, 0.0001 );
-		const runtimeRows = rows.map( row => {
-
-			const scalarNormalizedWeight = row.scalarWeight / Math.max( scalarAggregate.totalWeight, 0.0001 );
-			const visibilityNormalizedWeight = row.visibilityWeight / Math.max( visibilityAggregate.totalWeight, 0.0001 );
-			const runtimeFinalWeight = ( scalarNormalizedWeight * ( 1 - visibilityMix ) ) +
-				( visibilityNormalizedWeight * visibilityMix );
-			const runtimeWeightedIrradiance = scaleColorValue( row.irradiance, runtimeFinalWeight );
-			const runtimeWeightedDilatedIrradiance = scaleColorValue( row.dilatedIrradiance, runtimeFinalWeight );
-			const correctContribution = getColorChannel( runtimeWeightedIrradiance, receiver.correctSide );
-			const wrongContribution = getWrongColorChannel( runtimeWeightedIrradiance, receiver.correctSide );
-			const dilatedCorrectContribution = getColorChannel( runtimeWeightedDilatedIrradiance, receiver.correctSide );
-			const dilatedWrongContribution = getWrongColorChannel( runtimeWeightedDilatedIrradiance, receiver.correctSide );
-			const fullUnclamped = row.bandDecomposition.fullUnclamped.irradiance;
-			const fullClamped = row.bandDecomposition.fullClamped.irradiance;
-			const dilatedFullUnclamped = row.dilatedBandDecomposition.fullUnclamped.irradiance;
-			const dilatedFullClamped = row.dilatedBandDecomposition.fullClamped.irradiance;
-
-			return {
-				...row,
-				scalarNormalizedWeight: roundMetric( scalarNormalizedWeight ),
-				visibilityNormalizedWeight: roundMetric( visibilityNormalizedWeight ),
-				runtimeFinalWeight: roundMetric( runtimeFinalWeight ),
-				runtimeWeightedIrradiance: roundColor( runtimeWeightedIrradiance ),
-				runtimeWeightedCorrectContribution: roundMetric( correctContribution ),
-				runtimeWeightedWrongContribution: roundMetric( wrongContribution ),
-				runtimeWeightedWrongMinusCorrect: roundMetric( wrongContribution - correctContribution ),
-				wrongChannelPressure: roundMetric( Math.max( wrongContribution - correctContribution, 0 ) ),
-				correctChannelPreservation: roundMetric( correctContribution ),
-				runtimeWeightedDilatedIrradiance: roundColor( runtimeWeightedDilatedIrradiance ),
-				runtimeWeightedDilatedCorrectContribution: roundMetric( dilatedCorrectContribution ),
-				runtimeWeightedDilatedWrongContribution: roundMetric( dilatedWrongContribution ),
-				runtimeWeightedDilatedWrongMinusCorrect: roundMetric( dilatedWrongContribution - dilatedCorrectContribution ),
-				dilatedWrongChannelPressure: roundMetric( Math.max( dilatedWrongContribution - dilatedCorrectContribution, 0 ) ),
-				dilatedCorrectChannelPreservation: roundMetric( dilatedCorrectContribution ),
-				dilatedSourceWrongPressureDelta: roundMetric(
-					Math.max( dilatedWrongContribution - dilatedCorrectContribution, 0 ) -
-					Math.max( wrongContribution - correctContribution, 0 )
-				),
-				fullUnclampedNegativeEnergy: row.bandDecomposition.fullUnclamped.negativeEnergy,
-				postClampEnergyDelta: roundMetric(
-					( fullClamped.r - fullUnclamped.r ) +
-					( fullClamped.g - fullUnclamped.g ) +
-					( fullClamped.b - fullUnclamped.b )
-				),
-				dilatedFullUnclampedNegativeEnergy: row.dilatedBandDecomposition.fullUnclamped.negativeEnergy,
-				dilatedPostClampEnergyDelta: roundMetric(
-					( dilatedFullClamped.r - dilatedFullUnclamped.r ) +
-					( dilatedFullClamped.g - dilatedFullUnclamped.g ) +
-					( dilatedFullClamped.b - dilatedFullUnclamped.b )
-				),
-				runtimeWeightedBandContributions: row.coefficientContributionStudy.bands.map( band =>
-					createWeightedContributionRow( band, runtimeFinalWeight )
-				),
-				runtimeWeightedCoefficientContributions: row.coefficientContributionStudy.rows.map( coefficient =>
-					createWeightedContributionRow( coefficient, runtimeFinalWeight )
-				),
-				runtimeWeightedDilatedBandContributions: row.dilatedCoefficientContributionStudy.bands.map( band =>
-					createWeightedContributionRow( band, runtimeFinalWeight )
-				),
-				runtimeWeightedDilatedCoefficientContributions: row.dilatedCoefficientContributionStudy.rows.map( coefficient =>
-					createWeightedContributionRow( coefficient, runtimeFinalWeight )
-				)
-			};
-
-		} );
 
 		return {
 			label: receiver.label,
 			correctSide: receiver.correctSide,
-			receiverPosition: receiver.receiverPosition,
-			receiverNormal: receiver.receiverNormal,
-			proofBoundary: 'Readback-only packed SH atlas coefficient contribution mirror for receiver neighbors; diagnostic only, not a public API.',
-			rows: runtimeRows,
+			rows,
 			aggregates: {
 				scalar: {
 					label: scalarAggregate.label,

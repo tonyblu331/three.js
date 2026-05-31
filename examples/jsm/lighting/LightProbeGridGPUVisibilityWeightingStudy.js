@@ -53,18 +53,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 		const probeCoefficientCache = new Map();
 		let probeValidity = null;
 		let probeSourceMap = null;
-		const diagnosticState = {
-			get probeValidity() {
-
-				return probeValidity;
-
-			},
-			get probeSourceMap() {
-
-				return probeSourceMap;
-
-			}
-		};
 		const readSourceMappedProbeCoefficients = async ( probeIndex, dilationSources = probeSourceMap ) => {
 
 			const sourceIndex = dilationSources[ probeIndex ] ?? probeIndex;
@@ -157,198 +145,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				clampNegative: true
 			} )
 		);
-		const subtractColor = ( a, b ) => ( {
-			r: a.r - b.r,
-			g: a.g - b.g,
-			b: a.b - b.b
-		} );
-		const positiveColor = color => ( {
-			r: Math.max( color.r, 0 ),
-			g: Math.max( color.g, 0 ),
-			b: Math.max( color.b, 0 )
-		} );
-		const measureNegativeEnergy = color => roundMetric(
-			Math.max( - color.r, 0 ) +
-			Math.max( - color.g, 0 ) +
-			Math.max( - color.b, 0 )
-		);
-		const createShBandEntry = ( label, color, correctSide ) => {
-
-			const rounded = roundColor( color );
-			const positive = roundColor( positiveColor( color ) );
-
-			return {
-				label,
-				irradiance: rounded,
-				positiveIrradiance: positive,
-				energy: roundMetric( rounded.r + rounded.g + rounded.b ),
-				positiveEnergy: roundMetric( positive.r + positive.g + positive.b ),
-				negativeEnergy: measureNegativeEnergy( color ),
-				chromaticity: createColorChromaticity( positive ),
-				chromaPressure: createReceiverChromaPressure( positive, correctSide ),
-				colorBias: createReceiverColorBias( positive, correctSide )
-			};
-
-		};
-
-		const createShBandDecomposition = ( coefficients, receiverNormal, correctSide ) => {
-
-			const l0 = evaluateIrradianceContract( coefficients, receiverNormal, {
-				band1Intensity: 0,
-				band2Intensity: 0,
-				clampNegative: false
-			} );
-			const l0L1 = evaluateIrradianceContract( coefficients, receiverNormal, {
-				band1Intensity: _lightProbeContext.params.band1Intensity,
-				band2Intensity: 0,
-				clampNegative: false
-			} );
-			const fullUnclamped = evaluateIrradianceContract( coefficients, receiverNormal, {
-				band1Intensity: _lightProbeContext.params.band1Intensity,
-				band2Intensity: _lightProbeContext.params.band2Intensity,
-				clampNegative: false
-			} );
-			const fullClamped = evaluateIrradianceContract( coefficients, receiverNormal, {
-				band1Intensity: _lightProbeContext.params.band1Intensity,
-				band2Intensity: _lightProbeContext.params.band2Intensity,
-				clampNegative: true
-			} );
-			const l1Increment = subtractColor( l0L1, l0 );
-			const l2Increment = subtractColor( fullUnclamped, l0L1 );
-			const l0Entry = createShBandEntry( 'l0', l0, correctSide );
-			const l1Entry = createShBandEntry( 'l1-increment', l1Increment, correctSide );
-			const l2Entry = createShBandEntry( 'l2-increment', l2Increment, correctSide );
-			const l0L1Entry = createShBandEntry( 'l0-l1-cumulative', l0L1, correctSide );
-			const fullUnclampedEntry = createShBandEntry( 'full-unclamped', fullUnclamped, correctSide );
-			const fullClampedEntry = createShBandEntry( 'full-clamped', fullClamped, correctSide );
-			const l0Pressure = Math.max( l0Entry.chromaPressure.wrongMinusCorrect, 0 );
-			const l0L1Pressure = Math.max( l0L1Entry.chromaPressure.wrongMinusCorrect, 0 );
-			const fullPressure = Math.max( fullClampedEntry.chromaPressure.wrongMinusCorrect, 0 );
-			const l1Delta = roundMetric( Math.max( l0L1Pressure - l0Pressure, 0 ) );
-			const l2Delta = roundMetric( Math.max( fullPressure - l0L1Pressure, 0 ) );
-			const dominantBand = [
-				{ band: 'l0', pressure: roundMetric( l0Pressure ) },
-				{ band: 'l1', pressure: l1Delta },
-				{ band: 'l2', pressure: l2Delta }
-			].sort( ( a, b ) => b.pressure - a.pressure )[ 0 ];
-
-			return {
-				l0: l0Entry,
-				l1Increment: l1Entry,
-				l2Increment: l2Entry,
-				l0L1: l0L1Entry,
-				fullUnclamped: fullUnclampedEntry,
-				fullClamped: fullClampedEntry,
-				pressure: {
-					l0: roundMetric( l0Pressure ),
-					l0L1: roundMetric( l0L1Pressure ),
-					full: roundMetric( fullPressure ),
-					l1Delta,
-					l2Delta,
-					dominantBand: dominantBand.band,
-					dominantBandPressure: dominantBand.pressure
-				}
-			};
-
-		};
-
-		const shCoefficientTerms = [
-			{ index: 0, band: 'l0', name: 'L00', basis: 'constant' },
-			{ index: 1, band: 'l1', name: 'L1-1', basis: 'y' },
-			{ index: 2, band: 'l1', name: 'L10', basis: 'z' },
-			{ index: 3, band: 'l1', name: 'L11', basis: 'x' },
-			{ index: 4, band: 'l2', name: 'L2-2', basis: 'xy' },
-			{ index: 5, band: 'l2', name: 'L2-1', basis: 'yz' },
-			{ index: 6, band: 'l2', name: 'L20', basis: '3z2-1' },
-			{ index: 7, band: 'l2', name: 'L21', basis: 'xz' },
-			{ index: 8, band: 'l2', name: 'L22', basis: 'x2-y2' }
-		];
-		const getShIrradianceBasisScales = normal => {
-
-			const x = normal.x;
-			const y = normal.y;
-			const z = normal.z;
-
-			return [
-				0.886227,
-				2.0 * 0.511664 * y * _lightProbeContext.params.band1Intensity,
-				2.0 * 0.511664 * z * _lightProbeContext.params.band1Intensity,
-				2.0 * 0.511664 * x * _lightProbeContext.params.band1Intensity,
-				2.0 * 0.429043 * x * y * _lightProbeContext.params.band2Intensity,
-				2.0 * 0.429043 * y * z * _lightProbeContext.params.band2Intensity,
-				( 0.743125 * z * z - 0.247708 ) * _lightProbeContext.params.band2Intensity,
-				2.0 * 0.429043 * x * z * _lightProbeContext.params.band2Intensity,
-				0.429043 * ( x * x - y * y ) * _lightProbeContext.params.band2Intensity
-			];
-
-		};
-
-		const getColorChannel = ( color, side ) => side === 'left' ? color.r : color.g;
-		const getWrongColorChannel = ( color, side ) => side === 'left' ? color.g : color.r;
-		const createShCoefficientContributionStudy = ( coefficients, normal, correctSide ) => {
-
-			const basisScales = getShIrradianceBasisScales( normal );
-			const rows = shCoefficientTerms.map( term => {
-
-				const coefficient = coefficients[ term.index ];
-				const scale = basisScales[ term.index ];
-				const contribution = {
-					r: coefficient.r * scale,
-					g: coefficient.g * scale,
-					b: coefficient.b * scale
-				};
-				const correctContribution = getColorChannel( contribution, correctSide );
-				const wrongContribution = getWrongColorChannel( contribution, correctSide );
-
-				return {
-					coefficientIndex: term.index,
-					name: term.name,
-					band: term.band,
-					basis: term.basis,
-					basisScale: roundMetric( scale ),
-					rawCoefficient: roundColor( coefficient ),
-					contribution: roundColor( contribution ),
-					correctContribution: roundMetric( correctContribution ),
-					wrongContribution: roundMetric( wrongContribution ),
-					wrongMinusCorrect: roundMetric( wrongContribution - correctContribution ),
-					absoluteWrongMinusCorrect: roundMetric( Math.abs( wrongContribution - correctContribution ) ),
-					negativeEnergy: measureNegativeEnergy( contribution )
-				};
-
-			} );
-			const bands = [ 'l0', 'l1', 'l2' ].map( band => {
-
-				const contribution = rows
-					.filter( row => row.band === band )
-					.reduce( ( total, row ) => ( {
-						r: total.r + row.contribution.r,
-						g: total.g + row.contribution.g,
-						b: total.b + row.contribution.b
-					} ), { r: 0, g: 0, b: 0 } );
-				const correctContribution = getColorChannel( contribution, correctSide );
-				const wrongContribution = getWrongColorChannel( contribution, correctSide );
-
-				return {
-					band,
-					contribution: roundColor( contribution ),
-					correctContribution: roundMetric( correctContribution ),
-					wrongContribution: roundMetric( wrongContribution ),
-					wrongMinusCorrect: roundMetric( wrongContribution - correctContribution ),
-					negativeEnergy: measureNegativeEnergy( contribution )
-				};
-
-			} );
-			const sortedRows = [ ...rows ].sort( ( a, b ) =>
-				b.wrongMinusCorrect - a.wrongMinusCorrect
-			);
-
-			return {
-				rows: sortedRows,
-				bands: bands.sort( ( a, b ) => b.wrongMinusCorrect - a.wrongMinusCorrect ),
-				dominantCoefficient: sortedRows[ 0 ] ?? null
-			};
-
-		};
 
 		const readProbeCoefficients = async ( probeIndex ) => {
 
@@ -1015,31 +811,18 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				analyzeShContributionDiagnostics
 			} = createLightProbeGridGPUShDiagnostics( {
 				_lightProbeContext,
-				addScaledCoefficients,
-				auditDividerSegment,
 				createAggregateEvaluation,
 				createColorChromaticity,
 				createReceiverChromaPressure,
 				createReceiverColorBias,
-				createShBandDecomposition,
-				createShCoefficientContributionStudy,
-				createZeroCoefficients,
-				diagnosticState,
 				dividerX,
-				evaluateIrradianceContract,
 				evaluateProbeCoefficientsForReceiver,
-				getColorChannel,
-				getWrongColorChannel,
-				measureNegativeEnergy,
 				mixCoefficients,
 				readSourceMappedProbeCoefficients,
 				readProbeCoefficients,
 				resolution,
 				roundColor,
 				roundMetric,
-				roundVector,
-				scaleCoefficients,
-				shCoefficientTerms,
 				visibilityWeightFloor
 			} );
 			const {
