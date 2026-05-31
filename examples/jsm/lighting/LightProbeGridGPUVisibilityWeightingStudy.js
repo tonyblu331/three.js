@@ -466,8 +466,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 						relationToReceiver,
 						crossesDivider,
 						compatibleKernel: roundMetric( compatibleKernel ),
-						variance: roundMetric( moment.variance ),
-						hitConfidence: roundMetric( moment.hitConfidence ),
 						visibility: roundMetric( visibility ),
 						scalarWeight: roundMetric( scalarWeight ),
 						baseWeight: roundMetric( baseWeight ),
@@ -498,11 +496,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				const visibilityWrong = sum( 'wrong-side', 'visibilityWeight' );
 				const baseSum = rows.reduce( ( total, row ) => total + row.baseWeight, 0 );
 				const visibleSum = rows.reduce( ( total, row ) => total + row.visibilityWeight, 0 );
-				const varianceValues = rows.map( row => row.variance ).filter( Number.isFinite );
-				const hitConfidenceValues = rows.map( row => row.hitConfidence ).filter( Number.isFinite );
-				const meanValue = ( values ) => values.length > 0 ?
-					values.reduce( ( total, value ) => total + value, 0 ) / values.length :
-					null;
 				const baseContributionSum = baseCorrect + baseWrong;
 				const visibleContributionSum = visibilityCorrect + visibilityWrong;
 
@@ -519,23 +512,11 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					totals: {
 						scalarCorrect: roundMetric( scalarCorrect ),
 						scalarWrong: roundMetric( scalarWrong ),
-						baseCorrect: roundMetric( baseCorrect ),
-						baseWrong: roundMetric( baseWrong ),
-						visibilityCorrect: roundMetric( visibilityCorrect ),
-						visibilityWrong: roundMetric( visibilityWrong ),
 						baseSum: roundMetric( baseSum ),
 						visibleSum: roundMetric( visibleSum ),
 						visibilityMass: roundMetric( visibleSum / Math.max( baseSum, 0.0001 ) ),
 						baseWrongContributionRatio: roundMetric( baseWrong / Math.max( baseContributionSum, 0.0001 ) ),
 						visibleWrongContributionRatio: roundMetric( visibilityWrong / Math.max( visibleContributionSum, 0.0001 ) ),
-						baseCorrectContributionRatio: roundMetric( baseCorrect / Math.max( baseContributionSum, 0.0001 ) ),
-						visibleCorrectContributionRatio: roundMetric( visibilityCorrect / Math.max( visibleContributionSum, 0.0001 ) ),
-						varianceMin: varianceValues.length > 0 ? roundMetric( Math.min( ...varianceValues ) ) : null,
-						varianceMax: varianceValues.length > 0 ? roundMetric( Math.max( ...varianceValues ) ) : null,
-						varianceMean: varianceValues.length > 0 ? roundMetric( meanValue( varianceValues ) ) : null,
-						hitConfidenceMin: hitConfidenceValues.length > 0 ? roundMetric( Math.min( ...hitConfidenceValues ) ) : null,
-						hitConfidenceMax: hitConfidenceValues.length > 0 ? roundMetric( Math.max( ...hitConfidenceValues ) ) : null,
-						hitConfidenceMean: hitConfidenceValues.length > 0 ? roundMetric( meanValue( hitConfidenceValues ) ) : null,
 						correctSuppression: roundMetric( visibilityCorrect / Math.max( scalarCorrect, 0.0001 ) ),
 						wrongSuppression: roundMetric( visibilityWrong / Math.max( scalarWrong, 0.0001 ) )
 					},
@@ -572,8 +553,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				const averageReceiver = ( key ) => receiverRows.reduce(
 					( total, receiver ) => total + ( receiver.totals[ key ] ?? 0 ), 0
 				) / Math.max( receiverRows.length, 1 );
-				const minReceiver = ( key ) => Math.min( ...receiverRows.map( receiver => receiver.totals[ key ] ?? 0 ) );
-				const maxReceiver = ( key ) => Math.max( ...receiverRows.map( receiver => receiver.totals[ key ] ?? 0 ) );
 				const correctSuppressionMean = averageComparable( 'correctSuppression' );
 				const wrongSuppressionMean = averageComparable( 'wrongSuppression' );
 				const wrongMinusCorrectSuppression = wrongSuppressionMean - correctSuppressionMean;
@@ -584,15 +563,8 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					baseSumMean: roundMetric( averageReceiver( 'baseSum' ) ),
 					visibleSumMean: roundMetric( averageReceiver( 'visibleSum' ) ),
 					visibilityMassMean: roundMetric( averageReceiver( 'visibilityMass' ) ),
-					visibilityMassMin: roundMetric( minReceiver( 'visibilityMass' ) ),
-					visibilityMassMax: roundMetric( maxReceiver( 'visibilityMass' ) ),
-					baseWrongContributionRatioMean: roundMetric( averageReceiver( 'baseWrongContributionRatio' ) ),
 					visibleWrongContributionRatioMean: roundMetric( averageReceiver( 'visibleWrongContributionRatio' ) ),
 					wrongContributionRatioDelta: roundMetric( visibilityWrongContributionDelta ),
-					varianceMean: roundMetric( averageReceiver( 'varianceMean' ) ),
-					hitConfidenceMean: roundMetric( averageReceiver( 'hitConfidenceMean' ) ),
-					correctSuppressionMean: roundMetric( correctSuppressionMean ),
-					wrongSuppressionMean: roundMetric( wrongSuppressionMean ),
 					wrongMinusCorrectSuppression: roundMetric( wrongMinusCorrectSuppression ),
 					directionalSuppressionSupported: comparableReceivers.length > 0 &&
 						wrongMinusCorrectSuppression <= 0

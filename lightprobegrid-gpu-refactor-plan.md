@@ -22,7 +22,7 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | --- | ---: | --- | --- |
 | `examples/jsm/lighting/LightProbeGridGPU.js` | 1262 | Runtime facade | GPU-resident; no CPU readback matches. |
 | `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2316 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, profiling, and leak-proof row payload duplication. |
-| `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 629 | CPU/proof visibility weighting study | Trimmed unconsumed receiver/row lab payload; still the next large diagnostic candidate. |
+| `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 601 | CPU/proof visibility weighting study | Trimmed unconsumed row variance/hit-confidence summaries and unused contribution ratios. |
 | `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | 188 | SH pressure diagnostics | Currently compact enough; avoid further splitting unless overlap appears. |
 | `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 139 | Receiver/surface diagnostics | Currently compact enough. |
 | `examples/jsm/lighting/LightProbeGridGPUExampleGUI.js` | 104 | Example controls | Stable. |
@@ -37,7 +37,7 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | `test/e2e/lightprobegrid-gpu-proof-gates.js` | 264 | Proof gate derivation/assertions | Sealed-wall thresholds are data-driven; watch for future status drift. |
 | `test/e2e/lightprobegrid-gpu-runner-*.js` | 689 | Smoke assertion runners | Mostly reasonable; matrix assertions now target compact leak-proof settings and rows. |
 
-Tracked LightProbeGridGPU feature/proof set: about 6,628 LOC, excluding this plan.
+Tracked LightProbeGridGPU feature/proof set: about 6,600 LOC, excluding this plan.
 
 ## Dependency rules
 
@@ -74,11 +74,12 @@ Reports / e2e
 - Harness validation rejection checks share one local capture primitive.
 - Compute projection profiling keeps warmup execution but no longer returns warmup or full per-run payload arrays.
 - Leak-proof rows now share top-level proof settings and sampling instead of repeating frozen fixture controls per row.
+- Visibility weighting summaries no longer carry unused variance, hit-confidence, min/max visibility-mass, or mirrored correct-side contribution ratios.
 
 ## Current hotspots
 
 1. **Harness monolith** — `LightProbeGridGPUTestHarness.js` remains the largest file and still mixes many proof endpoints. Continue cutting only repeated behavior or unconsumed payload.
-2. **Visibility weighting study** — `LightProbeGridGPUVisibilityWeightingStudy.js` still has enough size to inspect for repeated weighting/readback summary logic.
+2. **Visibility weighting study** — `LightProbeGridGPUVisibilityWeightingStudy.js` is smaller but still worth checking for repeated receiver aggregation/readback shape.
 3. **Proof gate labels/statuses** — `lightprobegrid-gpu-proof-gates.js` may contain duplicated status composition as gates evolve.
 4. **Plan/docs drift** — keep this roadmap short. Do not let architecture docs become another token sink.
 
