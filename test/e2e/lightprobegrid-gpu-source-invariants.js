@@ -1,5 +1,5 @@
 import { lightProbeWebGLReferenceLabel } from './lightprobegrid-gpu-smoke-config.js';
-import { deriveVisibilityProofStatus, isMomentBackedVisibility } from './lightprobegrid-gpu-proof-visibility.js';
+import { deriveVisibilityProofStatus, isMomentBackedVisibility } from './lightprobegrid-gpu-proof-gates.js';
 import * as fs from 'fs/promises';
 
 export async function checkSmokeSourceInvariants( file, smokeHarness ) {
@@ -24,7 +24,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		gpuBakeSource,
 		smokeRunnerSource,
 		proofGatesSource,
-		proofVisibilitySource,
 		artifactSource,
 		imageMetricsSource,
 		proofValidationSource,
@@ -56,7 +55,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-smoke.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-gates.js', 'utf8' ),
-		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-visibility.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-artifacts.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-image-metrics.js', 'utf8' ),
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-proof-validation.js', 'utf8' ),
@@ -80,7 +78,6 @@ ${ receiverDiagnosticsSource }
 ${ cpuShMathSource }`;
 	const e2eSource = `${ smokeRunnerSource }
 ${ proofGatesSource }
-${ proofVisibilitySource }
 ${ artifactSource }
 ${ imageMetricsSource }
 ${ proofValidationSource }
@@ -449,15 +446,15 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		proofVisibilitySource.includes( 'export function isMomentBackedVisibility( info )' ) &&
-			proofVisibilitySource.includes( 'info.available === true' ) &&
-			proofVisibilitySource.includes( 'info.mode === \'moments\'' ) &&
-			proofVisibilitySource.includes( 'info.texture !== null' ) &&
-			proofVisibilitySource.includes( 'info.bytes > 0' ) &&
-			proofVisibilitySource.includes( 'info.stats.finiteSampleCount > 0' ) &&
-			proofVisibilitySource.includes( 'info.stats.hitSampleCount > 0' ) &&
-			proofVisibilitySource.includes( 'visibilityLabel: momentBacked ? \'visibility-moments\' : \'visibility-scaffold-disabled\'' ) &&
-			proofVisibilitySource.includes( 'ddgiStatus: momentBacked && rawOpen === false ?' ) &&
+		proofGatesSource.includes( 'export function isMomentBackedVisibility( info )' ) &&
+			proofGatesSource.includes( 'info.available === true' ) &&
+			proofGatesSource.includes( 'info.mode === \'moments\'' ) &&
+			proofGatesSource.includes( 'info.texture !== null' ) &&
+			proofGatesSource.includes( 'info.bytes > 0' ) &&
+			proofGatesSource.includes( 'info.stats.finiteSampleCount > 0' ) &&
+			proofGatesSource.includes( 'info.stats.hitSampleCount > 0' ) &&
+			proofGatesSource.includes( 'visibilityLabel: momentBacked ? \'visibility-moments\' : \'visibility-scaffold-disabled\'' ) &&
+			proofGatesSource.includes( 'ddgiStatus: momentBacked && rawOpen === false ?' ) &&
 			e2eSource.includes( 'buildExecuted: false' ) &&
 			e2eSource.includes( 'OPEN-COLOR-MAPPING' ),
 		'Proof helpers must gate visibility-moments and IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS on strict moment-backed evidence, and report open color mapping honestly.'
