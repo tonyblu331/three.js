@@ -3,17 +3,13 @@ import * as THREE from 'three/webgpu';
 export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 	const {
-		_lightProbeContext,
 		createAggregateEvaluation,
 		createColorChromaticity,
 		createReceiverChromaPressure,
 		createReceiverColorBias,
-		dividerX,
 		evaluateProbeCoefficientsForReceiver,
 		mixCoefficients,
-		readSourceMappedProbeCoefficients,
 		readProbeCoefficients,
-		resolution,
 		roundColor,
 		roundMetric,
 		visibilityWeightFloor
@@ -32,28 +28,14 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 		for ( const row of receiver.rows ) {
 
 			const probe = await readProbeCoefficients( row.probeIndex );
-			const dilatedProbe = await readSourceMappedProbeCoefficients( row.probeIndex );
 			const irradiance = evaluateProbeCoefficientsForReceiver( probe.coefficients, normal );
 			const l0Irradiance = roundColor( probe.l0Irradiance );
-			const dilationSourcePosition = new THREE.Vector3();
-			_lightProbeContext.getGridProbePosition( dilatedProbe.sourceProbeIndex, resolution, dilationSourcePosition );
-			const dilationSourceSide = dilationSourcePosition.x < dividerX ? 'left' : 'right';
 
 			rows.push( {
-				probeIndex: row.probeIndex,
-				sourceProbeIndex: dilatedProbe.sourceProbeIndex,
-				dilationSourceDiffers: dilatedProbe.dilated,
-				sourceSide: dilationSourceSide,
-				side: row.side,
 				relationToReceiver: row.relationToReceiver,
 				scalarWeight: row.scalarWeight,
 				visibilityWeight: row.visibilityWeight,
-				validity: roundMetric( probe.validity ),
-				irradiance,
-				l0Irradiance,
-				chromaticity: createColorChromaticity( irradiance ),
 				chromaPressure: createReceiverChromaPressure( irradiance, receiver.correctSide ),
-				l0ChromaPressure: createReceiverChromaPressure( l0Irradiance, receiver.correctSide ),
 				colorBias: createReceiverColorBias( irradiance, receiver.correctSide ),
 				l0ColorBias: createReceiverColorBias( l0Irradiance, receiver.correctSide )
 			} );
@@ -226,9 +208,7 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 			const scalarRows = receiver.rows.filter( row => row.scalarWeight > 0.0001 );
 			const correctRows = visibilityRows.filter( row => row.relationToReceiver === 'correct-side' );
 			const wrongRows = visibilityRows.filter( row => row.relationToReceiver === 'wrong-side' );
-			const maxChromaRow = correctRows.reduce( ( best, row ) => (
-				best === null || positiveChromaPressure( row ) > positiveChromaPressure( best ) ? row : best
-			), null );
+			const maxCorrectSideChromaPressure = correctRows.reduce( ( max, row ) => Math.max( max, positiveChromaPressure( row ) ), 0 );
 			const weightedVisibilityChromaPressureMean = createWeightedMean(
 				visibilityRows,
 				'visibilityWeight',
@@ -258,8 +238,6 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 				scalarRowCount: scalarRows.length,
 				correctSideVisibilityRowCount: correctRows.length,
 				wrongSideVisibilityRowCount: wrongRows.length,
-				invalidNeighborCount: receiver.rows.filter( row => row.validity < 1 ).length,
-				dilatedSourceRowCount: receiver.rows.filter( row => row.dilationSourceDiffers === true ).length,
 				weightedVisibilityChromaPressureMean,
 				weightedCorrectSideVisibilityChromaPressureMean,
 				weightedCorrectSideL0WrongOverCorrectMean,
@@ -267,24 +245,7 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 				runtimeFinalChromaPressure: receiver.aggregates.runtimeFinal.chromaPressure,
 				scalarChromaPressure: receiver.aggregates.scalar.chromaPressure,
 				visibilityChromaPressure: receiver.aggregates.visibility.chromaPressure,
-				maxCorrectSideChromaPressure: maxChromaRow === null ? 0 : roundMetric( positiveChromaPressure( maxChromaRow ) ),
-				dominantCorrectSideProbe: maxChromaRow === null ? null : {
-					probeIndex: maxChromaRow.probeIndex,
-					sourceProbeIndex: maxChromaRow.sourceProbeIndex,
-					dilationSourceDiffers: maxChromaRow.dilationSourceDiffers,
-					side: maxChromaRow.side,
-					sourceSide: maxChromaRow.sourceSide,
-					validity: maxChromaRow.validity,
-					visibilityWeight: maxChromaRow.visibilityWeight,
-					scalarWeight: maxChromaRow.scalarWeight,
-					irradiance: maxChromaRow.irradiance,
-					l0Irradiance: maxChromaRow.l0Irradiance,
-					chromaticity: maxChromaRow.chromaticity,
-					chromaPressure: maxChromaRow.chromaPressure,
-					l0ChromaPressure: maxChromaRow.l0ChromaPressure,
-					colorBias: maxChromaRow.colorBias,
-					l0ColorBias: maxChromaRow.l0ColorBias
-				}
+				maxCorrectSideChromaPressure: roundMetric( maxCorrectSideChromaPressure )
 			};
 
 		};
@@ -305,8 +266,6 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 		const probeContentChromaStatus = Math.max( maxCorrectSideChromaPressure, maxRuntimeFinalChromaPressure ) >= 0.05 ?
 			'OPEN-PROBE-CONTENT-CHROMA-PRESSURE' :
 			'SUPPORTED-PROBE-CONTENT-CHROMA-BOUNDED';
-		const invalidNeighborCount = probeContentReceivers.reduce( ( total, receiver ) => total + receiver.invalidNeighborCount, 0 );
-		const dilatedSourceRowCount = probeContentReceivers.reduce( ( total, receiver ) => total + receiver.dilatedSourceRowCount, 0 );
 		const runtimeWrongRatioImprovementMean = roundMetric(
 			( scalarWrongRatioMean - runtimeWrongRatioMean ) / Math.max( scalarWrongRatioMean, 0.0001 )
 		);
@@ -337,8 +296,6 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 				maxCorrectSideChromaPressure,
 				maxRuntimeFinalChromaPressure,
 				weightedCorrectSideChromaPressureMean,
-				invalidNeighborCount,
-				dilatedSourceRowCount,
 				weightedCorrectSideWrongOverCorrectMean,
 				correctSideMixedColorRowCount: correctSideMixedColorRows.length,
 				correctSideVisibilityRowCount: correctVisibilityRows.length,

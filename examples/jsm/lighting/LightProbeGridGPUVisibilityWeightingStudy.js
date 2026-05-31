@@ -51,21 +51,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 		const dividerIntersectionPoint = new THREE.Vector3();
 		const probeCoefficientCache = new Map();
 		let probeValidity = null;
-		let probeSourceMap = null;
-		const readSourceMappedProbeCoefficients = async ( probeIndex, dilationSources = probeSourceMap ) => {
-
-			const sourceIndex = dilationSources[ probeIndex ] ?? probeIndex;
-			const source = await readProbeCoefficients( sourceIndex );
-
-			return {
-				...source,
-				probeIndex,
-				sourceProbeIndex: sourceIndex,
-				dilated: sourceIndex !== probeIndex
-			};
-
-		};
-
 		const createZeroCoefficients = () => Array.from( { length: 9 }, () => ( { r: 0, g: 0, b: 0 } ) );
 		const addScaledCoefficients = ( target, source, weight ) => {
 
@@ -311,7 +296,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
 			probeValidity = _lightProbeContext.createProbeValidityData( resolution );
-			probeSourceMap = _lightProbeContext.createProbeSourceMapData( resolution, probeValidity );
 			const probePosition = new THREE.Vector3();
 			const receiverPosition = new THREE.Vector3();
 			const receiverLocalPosition = new THREE.Vector3();
@@ -809,17 +793,13 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				analyzeReceiverShContributions,
 				analyzeShContributionDiagnostics
 			} = createLightProbeGridGPUShDiagnostics( {
-				_lightProbeContext,
 				createAggregateEvaluation,
 				createColorChromaticity,
 				createReceiverChromaPressure,
 				createReceiverColorBias,
-				dividerX,
 				evaluateProbeCoefficientsForReceiver,
 				mixCoefficients,
-				readSourceMappedProbeCoefficients,
 				readProbeCoefficients,
-				resolution,
 				roundColor,
 				roundMetric,
 				visibilityWeightFloor
@@ -847,10 +827,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			const compactReceiver = receiver => ( {
 				label: receiver.label,
 				correctSide: receiver.correctSide,
-				totals: receiver.totals,
-				escapeSummary: receiver.escapeSummary,
 				rows: receiver.rows.map( row => ( {
-					probeIndex: row.probeIndex,
 					visibility: row.visibility,
 					scalarWeight: row.scalarWeight,
 					baseWeight: row.baseWeight,
