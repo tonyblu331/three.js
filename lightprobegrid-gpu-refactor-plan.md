@@ -99,9 +99,9 @@ The file is doing real work, not just noise, but the responsibilities are now st
 The diagnostic files are larger than the runtime file in places. Current verified sizes after the first cleanup slices:
 
 - `LightProbeGridGPUTestHarness.js` 2524 lines after compact artifact snapshot cleanup.
-- `LightProbeGridGPUReceiverDiagnostics.js` 818 lines after deleting surface coefficient attribution row fanout.
+- `LightProbeGridGPUReceiverDiagnostics.js` 192 lines after deleting the prototype GPU debug variant sweep and unreturned surface sample payloads.
 - `LightProbeGridGPUShDiagnostics.js` 335 lines after deleting unreturned SH band/coefficient row fanout.
-- `LightProbeGridGPUVisibilityWeightingStudy.js` 767 lines after deleting unreturned SH band/coefficient helper studies.
+- `LightProbeGridGPUVisibilityWeightingStudy.js` 755 lines after removing obsolete receiver diagnostic dependencies.
 - `LightProbeGridGPUOracleDiagnostics.js` removed from the default path; the old current-pipeline, dilation, sampling-bias, and SH-deringing studies were lab reports, not proof-summary inputs.
 
 These files are allowed to be diagnostic-heavy, but they duplicate CPU-side concepts: probe indexing, SH coefficient packing/unpacking, SH evaluation, sample-position math, visibility weights, and metric rounding.

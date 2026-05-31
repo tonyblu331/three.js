@@ -11,7 +11,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 	const {
 		_lightProbeContext,
-		captureCanvasSample,
 		captureLeakRegionMetrics,
 		createHarnessStateSnapshot,
 		createProbeVisibilitySnapshot,
@@ -832,12 +831,10 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				_lightProbeContext,
 				analyzeReceiver,
 				analyzeReceiverShContributions,
-				captureCanvasSample,
 				captureLeakRegionMetrics,
 				currentHitConfidencePolicy,
 				currentVisibilityBiasScale,
 				fixtureMode,
-				roundColor,
 				roundMetric
 			} );
 
@@ -847,15 +844,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right, escapeClassification, summary );
 			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic( shContributionDiagnostic );
 			const receiverGpuDebugDiagnostic = await captureReceiverGpuDebugDiagnostics( receiverSurfaceQuadratureDiagnostic );
-			const compactReceiverSurfaceQuadratureDiagnostic = {
-				status: receiverSurfaceQuadratureDiagnostic.status,
-				fixtureMode: receiverSurfaceQuadratureDiagnostic.fixtureMode,
-				proofBoundary: receiverSurfaceQuadratureDiagnostic.proofBoundary,
-				quadratureRule: receiverSurfaceQuadratureDiagnostic.quadratureRule,
-				sampleCountPerReceiver: receiverSurfaceQuadratureDiagnostic.sampleCountPerReceiver,
-				renderMetrics: receiverSurfaceQuadratureDiagnostic.renderMetrics,
-				summary: receiverSurfaceQuadratureDiagnostic.summary
-			};
 			const compactReceiver = receiver => ( {
 				label: receiver.label,
 				correctSide: receiver.correctSide,
@@ -897,7 +885,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				summary,
 				escapeClassification,
 				shContributionDiagnostic,
-				receiverSurfaceQuadratureDiagnostic: compactReceiverSurfaceQuadratureDiagnostic,
+				receiverSurfaceQuadratureDiagnostic,
 				receiverGpuDebugDiagnostic,
 				interrogationFinding,
 				dominantEscapeReason: {

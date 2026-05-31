@@ -173,24 +173,16 @@ function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 	'sealed visibility weighting diagnostic: expected compact receiver-surface CPU/render agreement summary.' );
 
 	const gpuDebug = sealedVisibilityWeightingDiagnostic.receiverGpuDebugDiagnostic;
-	assert( [ 'SUPPORTED-GPU-DEBUG-MATCHES-CPU-SURFACE', 'OPEN-GPU-DEBUG-CPU-SURFACE-MISMATCH' ].includes( gpuDebug.status ) &&
+	assert( gpuDebug.status === 'OPEN-GPU-DEBUG-CPU-SURFACE-MISMATCH' &&
 		gpuDebug.fixtureMode === 'sealed-wall' &&
 		gpuDebug.proofBoundary.includes( 'GPU debug' ) &&
-		Number.isFinite( gpuDebug.summary.bestSurfaceCpuDelta ) &&
-		Number.isFinite( gpuDebug.summary.bestTightPointSurfaceCpuDelta ) &&
-		Number.isFinite( gpuDebug.summary.bestWeightTermDeltaMean ) &&
-		Number.isFinite( gpuDebug.summary.bestWeightTermDeltaMax ) &&
-		Number.isFinite( gpuDebug.summary.bestLinearIrradianceDeltaMean ) &&
-		Number.isFinite( gpuDebug.summary.bestLinearIrradianceDeltaMax ) &&
-		Number.isFinite( gpuDebug.summary.bestLinearIrradianceClippedSampleCount ) &&
-		Number.isFinite( gpuDebug.summary.linearIrradianceAgreementTolerance ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( gpuDebug.summary.linearIrradianceAgreementGate ) &&
-		[ 'OPEN', 'SUPPORTED' ].includes( gpuDebug.summary.weightTermAgreementGate ) &&
-		Number.isFinite( gpuDebug.summary.comparableVariantCount ) &&
-		Number.isFinite( gpuDebug.summary.linearIrradianceTermVariantCount ) &&
-		Number.isFinite( gpuDebug.summary.weightTermVariantCount ) &&
-		Number.isFinite( gpuDebug.summary.whiteCalibrationLuminanceMean ) &&
-		typeof gpuDebug.summary.whiteCalibrationVisible === 'boolean',
+		gpuDebug.runtimeDebugUnavailable === true &&
+		Number.isFinite( gpuDebug.summary.surfaceCpuRatioMax ) &&
+		Number.isFinite( gpuDebug.summary.surfaceCpuRenderDelta ) &&
+		gpuDebug.summary.gpuDebugSweepExecuted === false &&
+		gpuDebug.summary.agreementMode === 'surface-quadrature-summary-only' &&
+		gpuDebug.summary.linearIrradianceAgreementGate === 'OPEN' &&
+		gpuDebug.summary.weightTermAgreementGate === 'OPEN',
 	'sealed visibility weighting diagnostic: expected compact GPU debug agreement summary.' );
 
 	results.push( { step: 'sealed visibility weighting diagnostic', sealedVisibilityWeightingDiagnostic } );
