@@ -18,7 +18,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		gpuConstantsSource,
 		gpuAtlasSource,
 		cpuShMathSource,
-		gpuResourcesSource,
 		gpuProjectionSource,
 		gpuVisibilitySource,
 		gpuHelperSource,
@@ -51,7 +50,6 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js', 'utf8' ),
-		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUResources.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js', 'utf8' ),
@@ -189,9 +187,9 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		gpuResourcesSource.includes( 'disposeLightProbeGridGPUFullscreenMesh' ) &&
-			gpuResourcesSource.includes( 'mesh.geometry.dispose()' ) &&
-			gpuResourcesSource.includes( 'helper.material.dispose()' ) &&
+		source.includes( 'disposeLightProbeGridGPUFullscreenMesh' ) &&
+			source.includes( 'mesh.geometry.dispose()' ) &&
+			source.includes( 'helper.material.dispose()' ) &&
 			source.includes( 'disposeLightProbeGridGPUResource( this.atlasTarget )' ) &&
 			source.includes( 'this.texture = null' ),
 		'LightProbeGridGPU dispose() must release instance-owned GPU resources and clear the public texture reference.'

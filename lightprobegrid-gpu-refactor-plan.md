@@ -29,7 +29,7 @@ Working tree is intentionally mid-refactor and not yet committed. The current sl
 | Receiver readback lifecycle cleanup | Done | `LightProbeGridGPUReceiverDiagnostics.js` uses scoped mesh override and receiver readback snapshot/restore helpers instead of repeated `materialStates`, `visibilityStates`, and renderer state restore blocks. |
 | Constants/atlas ownership | Done | `LightProbeGridGPUConstants.js` and `LightProbeGridGPUAtlas.js` now own shared SH counts, packed atlas constants, atlas layer/depth helpers, and probe index/coordinate helpers. |
 | CPU SH proof math | Done | `LightProbeGridGPUCpuShMath.js` owns proof-only SH basis, synthetic cube projection, irradiance contract evaluation, and coefficient/color delta helpers. |
-| Runtime resource lifecycle | Done | `LightProbeGridGPUResources.js` owns fullscreen pass creation and focused disposal helpers; runtime no longer repeats direct fullscreen camera/mesh/scene construction or geometry/material disposal calls. |
+| Runtime resource helper consolidation | Done | Single-use fullscreen pass/disposal helpers were inlined back into `LightProbeGridGPU.js`; the thin resources file was removed to avoid split bloat. |
 | Runtime projection builders | Done | `LightProbeGridGPUProjection.js` owns fragment and compute projection construction and shares cubemap traversal / SH coefficient accumulation helpers instead of duplicating them in the runtime facade. |
 | Runtime atlas/repack ownership | Done | `LightProbeGridGPUAtlas.js` now owns atlas addressing, probe indexing, and coefficient atlas repack material creation so atlas behavior is not split across thin files. |
 | Runtime visibility materials | Done | `LightProbeGridGPUVisibility.js` owns visibility distance/repack material creation plus octahedral visibility lookup helpers, removing duplicated oct mapping from the runtime facade. |
@@ -41,7 +41,7 @@ Working tree is intentionally mid-refactor and not yet committed. The current sl
 
 | File | Current size | Status |
 | --- | ---: | --- |
-| `examples/jsm/lighting/LightProbeGridGPU.js` | 1561 lines | Runtime facade is smaller; zero CPU readback, no local projection cubemap loop, no direct fullscreen resource boilerplate, no local atlas repack material, no local visibility repack material, no local helper mesh construction, and no inline bake restore/timing object boilerplate. |
+| `examples/jsm/lighting/LightProbeGridGPU.js` | 1209 lines | Runtime facade remains GPU-resident; single-use fullscreen/disposal helpers are local again after removing the thin resources file. |
 | `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 3800 lines | Still monolithic, but raw proof readbacks, local decoders, and local CPU SH math mirrors were removed. |
 | `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 3309 lines | Still monolithic, but readback/state lifecycle duplication is now centralized. |
 | `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 1243 lines | Still large, but probe indexing, probe coefficient, and visibility moment readbacks now use shared modules. |
@@ -49,7 +49,6 @@ Working tree is intentionally mid-refactor and not yet committed. The current sl
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js` | 60 lines | Shared constants only; intentionally thin because the values are cross-cutting and stable. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js` | 118 lines | Shared atlas/probe indexing helpers plus atlas repack material; merged with the former thin repack file to keep atlas ownership cohesive. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js` | 263 lines | Proof-only CPU SH math contract. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUResources.js` | 39 lines | Runtime resource lifecycle helpers; intentionally thin because it removes repeated mesh/pass/dispose boilerplate. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js` | 242 lines | Runtime projection material/node builders with shared cubemap traversal and SH accumulation. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js` | 135 lines | Runtime visibility material builders and octahedral visibility load helpers. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUHelper.js` | 95 lines | Runtime helper mesh/material/debug visualization owner. |
@@ -159,7 +158,6 @@ examples/jsm/lighting/
   lightprobegridgpu/                           # internal feature implementation, not public docs API
     LightProbeGridGPUConstants.js              # pure constants and labels
     LightProbeGridGPUAtlas.js                  # atlas layout/addressing/index helpers + repack material
-    LightProbeGridGPUResources.js              # render target/material/mesh lifecycle helpers
     LightProbeGridGPUProjection.js             # fragment + compute projection builders
     LightProbeGridGPUSampling.js               # runtime irradiance sampling node builders
     LightProbeGridGPUVisibility.js             # guarded visibility target/repack helpers
@@ -193,7 +191,6 @@ Internal imports from the facade become:
 
 ```js
 import { SH_COEFFICIENTS } from './lightprobegridgpu/LightProbeGridGPUConstants.js';
-import { createLightProbeGridGPUResources } from './lightprobegridgpu/LightProbeGridGPUResources.js';
 ```
 
 ### DDD mapping without DDD folder bloat
@@ -202,7 +199,7 @@ import { createLightProbeGridGPUResources } from './lightprobegridgpu/LightProbe
 | --- | --- | --- |
 | Domain model | `LightProbeGridGPU.js`, `LightProbeGridGPUConstants.js`, `LightProbeGridGPUAtlas.js` | The model is a GPU probe grid, atlas layout, probe positions, and SH coefficient contract. |
 | Application/use-case orchestration | `LightProbeGridGPU.js` bake facade plus maybe `LightProbeGridGPUBake.js` if `_bake` stays too large | Keep orchestration close to the object; split only when it reduces complexity. |
-| Rendering infrastructure | `LightProbeGridGPUResources.js`, `LightProbeGridGPUProjection.js`, `LightProbeGridGPUSampling.js`, `LightProbeGridGPUVisibility.js`, `LightProbeGridGPUHelper.js` | These own render targets, TSL nodes, materials, and render passes. |
+| Rendering infrastructure | `LightProbeGridGPUProjection.js`, `LightProbeGridGPUSampling.js`, `LightProbeGridGPUVisibility.js`, `LightProbeGridGPUHelper.js` | These own render targets, TSL nodes, materials, and render passes. |
 | Diagnostic adapters | `LightProbeGridGPUProofReadback.js`, `LightProbeGridGPUCpuShMath.js`, diagnostics/study files | CPU readback and CPU mirrors are adapters around runtime, not runtime. |
 | Reporting | `test/e2e/lightprobegrid-gpu-*` | Keep Node report artifacts in tests, not examples runtime. |
 
@@ -484,7 +481,7 @@ Keep only responsibilities that define the object contract or coordinate instanc
 | --- | --- | --- |
 | constants and backend labels | `LightProbeGridGPUConstants.js` | Pure configuration shared by runtime/proof contracts. |
 | atlas layer math and probe indexing | `LightProbeGridGPUAtlas.js` | Repeated addressing contract; high-value DRY seam. |
-| render target / material / mesh creation | `LightProbeGridGPUResources.js` | Resource lifecycle is not the public class identity. |
+| render target / material / mesh creation | `LightProbeGridGPU.js` | Current helper set is single-use and local; do not split again unless duplicated lifecycle code reappears. |
 | fragment and compute projection material/node builders | `LightProbeGridGPUProjection.js` | Projection algorithm can evolve independently from object API. |
 | atlas repack material and repack pass helper | `LightProbeGridGPUAtlas.js` | Repack uses the packed atlas layout contract, so keep it with atlas ownership instead of a separate thin file. |
 | runtime irradiance sampling node builders | `LightProbeGridGPUSampling.js` | Sampling algorithm is large and independently testable by source invariants/proof output. |
@@ -505,13 +502,13 @@ class LightProbeGridGPU extends Object3D {
 		super();
 		initializePublicContract( this, min, max, options );
 		initializeRuntimeState( this, options );
-		createLightProbeGridGPUResources( this, options.renderer ?? null );
+		// single-use resource helpers are local to LightProbeGridGPU.js
 	}
 
 	setOptions( options = {}, renderer = null ) {
 		const update = resolveLightProbeGridGPUOptions( this, options );
 		applyLightProbeGridGPUOptions( this, update );
-		if ( update.recreateResources ) createLightProbeGridGPUResources( this, renderer );
+		if ( update.recreateResources ) this._createResources( renderer );
 	}
 
 	createIrradianceNode() {
@@ -529,7 +526,7 @@ class LightProbeGridGPU extends Object3D {
 	}
 
 	dispose() {
-		disposeLightProbeGridGPUResources( this );
+		this._disposeResources();
 		this.texture = null;
 	}
 
@@ -578,7 +575,7 @@ Why: atlas addressing is repeated across sampling, repack, helper, and readback 
 
 Risk: TSL node helpers and CPU helpers need different value types. Keep separate helpers if a single generic function becomes clever.
 
-#### `LightProbeGridGPUResources.js`
+#### Removed `LightProbeGridGPUResources.js`
 
 Owns resource creation/disposal shape:
 

@@ -7,11 +7,15 @@ import {
 	HalfFloatType,
 	IrradianceNode,
 	LinearFilter,
+	Mesh,
 	NearestFilter,
 	Object3D,
+	OrthographicCamera,
+	PlaneGeometry,
 	RenderTarget,
 	RenderTarget3D,
 	RGBAFormat,
+	Scene,
 	StorageTexture,
 	Vector3
 } from 'three/webgpu';
@@ -59,12 +63,6 @@ import {
 	getLightProbeGridGPUProbeCoord
 } from './lightprobegridgpu/LightProbeGridGPUAtlas.js';
 import {
-	createLightProbeGridGPUFullscreenPass,
-	disposeLightProbeGridGPUFullscreenMesh,
-	disposeLightProbeGridGPUHelper,
-	disposeLightProbeGridGPUResource
-} from './lightprobegridgpu/LightProbeGridGPUResources.js';
-import {
 	createLightProbeGridGPUComputeProjectionNode,
 	createLightProbeGridGPUProjectionMaterial
 } from './lightprobegridgpu/LightProbeGridGPUProjection.js';
@@ -85,6 +83,39 @@ import {
 
 const _probePosition = /*@__PURE__*/ new Vector3();
 const _gridSize = /*@__PURE__*/ new Vector3();
+
+const disposeLightProbeGridGPUResource = ( resource ) => {
+
+	if ( resource !== null ) resource.dispose();
+
+};
+
+const disposeLightProbeGridGPUFullscreenMesh = ( mesh ) => {
+
+	if ( mesh !== null ) mesh.geometry.dispose();
+
+};
+
+const disposeLightProbeGridGPUHelper = ( helper ) => {
+
+	if ( helper === null ) return;
+
+	helper.geometry.dispose();
+	helper.material.dispose();
+
+};
+
+const createLightProbeGridGPUFullscreenPass = ( material ) => {
+
+	const camera = new OrthographicCamera( - 1, 1, 1, - 1, - 1, 1 );
+	const mesh = new Mesh( new PlaneGeometry( 2, 2 ), material );
+	const scene = new Scene();
+
+	scene.add( mesh );
+
+	return { camera, mesh, scene };
+
+};
 
 const getBakeTimingPerformance = () => globalThis.performance;
 const getBakeTimingNow = () => {
