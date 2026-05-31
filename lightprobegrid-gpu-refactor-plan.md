@@ -21,7 +21,7 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | File | Lines | Role | Status |
 | --- | ---: | --- | --- |
 | `examples/jsm/lighting/LightProbeGridGPU.js` | 1262 | Runtime facade | GPU-resident; no CPU readback matches. |
-| `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2315 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, and profiling payload duplication. |
+| `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2316 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, profiling, and leak-proof row payload duplication. |
 | `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 629 | CPU/proof visibility weighting study | Trimmed unconsumed receiver/row lab payload; still the next large diagnostic candidate. |
 | `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | 188 | SH pressure diagnostics | Currently compact enough; avoid further splitting unless overlap appears. |
 | `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 139 | Receiver/surface diagnostics | Currently compact enough. |
@@ -34,10 +34,10 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js` | 102 | Visibility material/load helpers | Cohesive runtime helper. |
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js` | 113 | Bake state/result helpers | Cohesive runtime helper. |
 | `test/e2e/lightprobegrid-gpu-artifacts.js` | 97 | Compact artifact contract | Healthy after earlier report deletion. |
-| `test/e2e/lightprobegrid-gpu-proof-gates.js` | 265 | Proof gate derivation/assertions | Sealed-wall thresholds are data-driven; watch for future status drift. |
-| `test/e2e/lightprobegrid-gpu-runner-*.js` | 692 | Smoke assertion runners | Mostly reasonable; keep assertions compact and contract-focused. |
+| `test/e2e/lightprobegrid-gpu-proof-gates.js` | 264 | Proof gate derivation/assertions | Sealed-wall thresholds are data-driven; watch for future status drift. |
+| `test/e2e/lightprobegrid-gpu-runner-*.js` | 689 | Smoke assertion runners | Mostly reasonable; matrix assertions now target compact leak-proof settings and rows. |
 
-Tracked LightProbeGridGPU feature/proof set: about 6,631 LOC, excluding this plan.
+Tracked LightProbeGridGPU feature/proof set: about 6,628 LOC, excluding this plan.
 
 ## Dependency rules
 
@@ -73,6 +73,7 @@ Reports / e2e
 - Harness contract/unit/projection fixture setup is consolidated locally.
 - Harness validation rejection checks share one local capture primitive.
 - Compute projection profiling keeps warmup execution but no longer returns warmup or full per-run payload arrays.
+- Leak-proof rows now share top-level proof settings and sampling instead of repeating frozen fixture controls per row.
 
 ## Current hotspots
 

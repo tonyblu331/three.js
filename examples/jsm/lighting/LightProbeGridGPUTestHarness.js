@@ -2387,11 +2387,39 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
+	const createLeakProofMetricSnapshot = ( metrics ) => ( {
+		wrongSideColorRatio: metrics.wrongSideColorRatio,
+		maskedWrongSideColorRatio: metrics.maskedWrongSideColorRatio,
+		correctBounceRatio: metrics.correctBounceRatio,
+		receiverRegionMetricMode: metrics.receiverRegionMetricMode
+	} );
+
+	const createLeakProofRendererMetricSnapshot = ( rendererMetrics ) => ( {
+		mode: rendererMetrics.mode,
+		metrics: {
+			maskedWrongSideColorRatio: rendererMetrics.metrics.maskedWrongSideColorRatio,
+			maskedCorrectBounceRatio: rendererMetrics.metrics.maskedCorrectBounceRatio
+		}
+	} );
+
+	const createLeakProofSettingsSnapshot = () => ( {
+		resolution: _lightProbeContext.params.resolution,
+		cubemapSize: _lightProbeContext.params.cubemapSize,
+		band1Intensity: _lightProbeContext.params.band1Intensity,
+		band2Intensity: _lightProbeContext.params.band2Intensity,
+		normalBias: _lightProbeContext.params.normalBias,
+		viewBias: _lightProbeContext.params.viewBias,
+		lightingMode: _lightProbeContext.params.lightingMode,
+		materialType: _lightProbeContext.params.materialType
+	} );
+
 	const captureLeakProofFacts = async () => {
 
 		const previousState = createHarnessStateSnapshot();
 		const previousVisibility = createProbeVisibilitySnapshot();
 		const rows = [];
+		let proofSettings = null;
+		let sampling = null;
 		const cases = [
 			{
 				label: 'sealed-wall-validity-weighted',
@@ -2437,29 +2465,23 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
+				if ( proofSettings === null ) proofSettings = createLeakProofSettingsSnapshot();
+				if ( sampling === null ) sampling = _lightProbeContext.probeGrid.getSamplingInfo();
+
+				const leakMetrics = captureLeakRegionMetrics();
+				const preToneLeakMetrics = captureLeakRegionMetricsWithRendererMapping( {
+					mode: 'pre-tone-linear-output-masked-visible-pixels',
+					toneMapping: THREE.NoToneMapping,
+					toneMappingLabel: 'NoToneMapping',
+					outputColorSpace: THREE.LinearSRGBColorSpace
+				} );
+
 				rows.push( {
 					label: proofCase.label,
-					fixtureMode: 'sealed-wall',
-					resolution: _lightProbeContext.params.resolution,
-					cubemapSize: _lightProbeContext.params.cubemapSize,
-					band1Intensity: _lightProbeContext.params.band1Intensity,
-					band2Intensity: _lightProbeContext.params.band2Intensity,
-					normalBias: _lightProbeContext.params.normalBias,
-					viewBias: _lightProbeContext.params.viewBias,
-					leakReductionMode: _lightProbeContext.params.leakReductionMode,
-					useProbeValidity: _lightProbeContext.params.useProbeValidity,
 					guardedVisibilityProofMode,
-					lightingMode: _lightProbeContext.params.lightingMode,
-					materialType: _lightProbeContext.params.materialType,
-					sampling: _lightProbeContext.probeGrid.getSamplingInfo(),
-					visibilityDepth: readVisibilityDepthInfo(),
-					leakMetrics: captureLeakRegionMetrics(),
-					preToneLeakMetrics: captureLeakRegionMetricsWithRendererMapping( {
-						mode: 'pre-tone-linear-output-masked-visible-pixels',
-						toneMapping: THREE.NoToneMapping,
-						toneMappingLabel: 'NoToneMapping',
-						outputColorSpace: THREE.LinearSRGBColorSpace
-					} )
+					...( guardedVisibilityProofMode === 'guarded' ? { visibilityDepth: readVisibilityDepthInfo() } : {} ),
+					leakMetrics: createLeakProofMetricSnapshot( leakMetrics ),
+					preToneLeakMetrics: createLeakProofRendererMetricSnapshot( preToneLeakMetrics )
 				} );
 
 			}
@@ -2472,14 +2494,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
 		const readWrongSide = row => row.leakMetrics.wrongSideColorRatio;
-		const readCenterWrongSide = row => row.leakMetrics.centerWrongSideColorRatio ?? row.leakMetrics.wrongSideColorRatio;
-		const readSurfaceWrongSide = row => row.leakMetrics.surfaceWrongSideColorRatio ?? readCenterWrongSide( row );
-		const readMaskedWrongSide = row => row.leakMetrics.maskedWrongSideColorRatio ?? readSurfaceWrongSide( row );
+		const readMaskedWrongSide = row => row.leakMetrics.maskedWrongSideColorRatio ?? readWrongSide( row );
 		const readPreToneMaskedWrongSide = row => row.preToneLeakMetrics.metrics.maskedWrongSideColorRatio ?? readMaskedWrongSide( row );
 		const readCorrectBounce = row => row.leakMetrics.correctBounceRatio;
-		const readMaskedCorrectBounce = row => row.leakMetrics.maskedCorrectBounceRatio ?? readCorrectBounce( row );
-		const readPreToneMaskedCorrectBounce = row => row.preToneLeakMetrics.metrics.maskedCorrectBounceRatio ?? readMaskedCorrectBounce( row );
-		const signedDelta = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) - read( rowMap.get( a ) ) );
+		const readPreToneMaskedCorrectBounce = row => row.preToneLeakMetrics.metrics.maskedCorrectBounceRatio ?? readCorrectBounce( row );
 		const ratio = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
 		const improvementRatio = ( a, b, read ) => roundMetric( ( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
 		const baseline = 'sealed-wall-validity-weighted';
@@ -2493,6 +2511,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		return {
 			fixtureMode: 'sealed-wall',
 			proofBoundary: 'Compact sealed-wall leak proof facts for default verifier gates; exploratory thin-wall, zero-thickness, and artifact matrices are intentionally excluded from default artifacts.',
+			proofSettings,
+			sampling,
 			rows,
 			sealedWall: {
 				status: wrongSideImprovement >= 0.05 &&
@@ -2508,30 +2528,16 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				linearPromotionMetricMode: 'pre-tone-linear-output-masked-visible-pixels',
 				visibility: {
 					wrongSide: {
-						delta: signedDelta( baseline, candidate, readWrongSide ),
 						improvement: wrongSideImprovement
 					},
-					centerWrongSide: {
-						delta: signedDelta( baseline, candidate, readCenterWrongSide ),
-						improvement: improvementRatio( baseline, candidate, readCenterWrongSide )
-					},
-					surfaceWrongSide: {
-						delta: signedDelta( baseline, candidate, readSurfaceWrongSide ),
-						improvement: improvementRatio( baseline, candidate, readSurfaceWrongSide )
-					},
 					maskedWrongSide: {
-						delta: signedDelta( baseline, candidate, readMaskedWrongSide ),
 						improvement: maskedWrongSideImprovement
 					},
 					preToneMaskedWrongSide: {
-						delta: signedDelta( baseline, candidate, readPreToneMaskedWrongSide ),
 						improvement: preToneMaskedWrongSideImprovement
 					},
 					correctBounce: {
 						preservation: correctBouncePreservation
-					},
-					maskedCorrectBounce: {
-						preservation: ratio( baseline, candidate, readMaskedCorrectBounce )
 					},
 					preToneMaskedCorrectBounce: {
 						preservation: preToneMaskedCorrectBouncePreservation

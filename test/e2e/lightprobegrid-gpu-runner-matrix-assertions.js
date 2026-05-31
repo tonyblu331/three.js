@@ -32,14 +32,11 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 	assert( scalarValidity.guardedVisibilityProofMode === 'off' &&
 		visibilityMoments.guardedVisibilityProofMode === 'guarded',
 	'leak proof facts: expected moment visibility to be isolated against scalar validity control.' );
-	assert( scalarValidity.resolution === 4 &&
-		scalarValidity.cubemapSize === 8 &&
-		visibilityMoments.resolution === 4 &&
-		visibilityMoments.cubemapSize === 8,
+	assert( leakProofFacts.proofSettings.resolution === 4 &&
+		leakProofFacts.proofSettings.cubemapSize === 8,
 	'leak proof facts: expected low-res 4^3 / cubemap 8 sealed-wall fixture.' );
-	assert( scalarValidity.sampling.weightedProbeSampling === true &&
-		scalarValidity.sampling.probeValidityMode === 'custom' &&
-		visibilityMoments.sampling.weightedProbeSampling === true &&
+	assert( leakProofFacts.sampling.weightedProbeSampling === true &&
+		leakProofFacts.sampling.probeValidityMode === 'custom' &&
 		visibilityMoments.visibilityDepth.available === true &&
 		visibilityMoments.visibilityDepth.mode === 'moments' &&
 		visibilityMoments.visibilityDepth.bytes > 0,
@@ -50,16 +47,16 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 	assert( scalarValidity.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels' &&
 		visibilityMoments.preToneLeakMetrics?.mode === 'pre-tone-linear-output-masked-visible-pixels',
 	'leak proof facts: expected pre-tone linear masked visible-pixel metrics.' );
+	assert( leakProofFacts.proofSettings.band1Intensity === 1 &&
+		leakProofFacts.proofSettings.band2Intensity === 0.55 &&
+		leakProofFacts.proofSettings.normalBias === 0.5 &&
+		leakProofFacts.proofSettings.viewBias === 0 &&
+		leakProofFacts.proofSettings.lightingMode === 'probes only' &&
+		leakProofFacts.proofSettings.materialType === 'standard',
+	'leak proof facts: expected frozen proof fixture controls.' );
 
 	for ( const row of leakProofFacts.rows ) {
 
-		assert( row.band1Intensity === 1 &&
-			row.band2Intensity === 0.55 &&
-			row.normalBias === 0.5 &&
-			row.viewBias === 0 &&
-			row.lightingMode === 'probes only' &&
-			row.materialType === 'standard',
-		`leak proof facts ${ row.label }: expected frozen proof fixture controls.` );
 		assert( Number.isFinite( row.leakMetrics.wrongSideColorRatio ) &&
 			Number.isFinite( row.leakMetrics.maskedWrongSideColorRatio ) &&
 			Number.isFinite( row.leakMetrics.correctBounceRatio ) &&

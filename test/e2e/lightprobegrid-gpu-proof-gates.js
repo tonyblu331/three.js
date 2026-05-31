@@ -126,7 +126,6 @@ export function createLightProbeProofFacts( results ) {
 			maskedWrongSideImprovement: sealedVisibility.maskedWrongSide.improvement,
 			preToneMaskedWrongSideImprovement: sealedVisibility.preToneMaskedWrongSide.improvement,
 			correctBouncePreservation: sealedVisibility.correctBounce.preservation,
-			maskedCorrectBouncePreservation: sealedVisibility.maskedCorrectBounce.preservation,
 			preToneMaskedCorrectBouncePreservation: sealedVisibility.preToneMaskedCorrectBounce.preservation
 		}
 	};
