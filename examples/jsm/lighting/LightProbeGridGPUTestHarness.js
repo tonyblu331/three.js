@@ -910,60 +910,26 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const measuredRuns = 3;
 		const probeValidity = new Float32Array( resolution * resolution * resolution ).fill( 1 );
 		const staticWork = createProjectionStaticWork( resolution, cubemapSize );
-		const getProfileNow = () => {
-
-			const nonDeterministicNow = performance._now;
-			return typeof nonDeterministicNow === 'function' ?
-				nonDeterministicNow.call( performance ) :
-				performance.now();
-
-		};
 
 		probeValidity[ probeValidity.length - 1 ] = 0;
 
 		const createProfileGrid = () => createProjectionFixtureGrid( resolution, cubemapSize, probeValidity, renderer );
 
-		const createRunRecord = ( timings, wallClockTotalMs, index, requestedBackend ) => ( {
-			index,
-			requestedBackend,
-			selectedBackend: timings.projectionBackend,
-			projectionBackendRequest: timings.projectionBackendRequest,
-			sceneUpdateMs: timings.sceneUpdateMs,
-			projectionMs: timings.projectionMs,
-			computeShProjectionMs: timings.computeShProjectionMs ?? timings.projectionMs,
-			cubemapMs: timings.cubemapMs,
-			radianceCubemapCaptureMs: timings.radianceCubemapCaptureMs ?? timings.cubemapMs,
-			copyMs: timings.copyMs,
-			atlasRepackMs: timings.atlasRepackMs ?? timings.copyMs,
-			distanceCubemapCaptureMs: timings.distanceCubemapCaptureMs ?? timings.visibilityCubemapMs ?? 0,
-			visibilityRepackMs: timings.visibilityRepackMs ?? 0,
-			verifierReadbackMs: timings.verifierReadbackMs ?? 0,
-			totalBakeMs: timings.totalBakeMs,
-			wallClockTotalMs,
-			projectionCubemapSweepsPerProbe: timings.projectionCubemapSweepsPerProbe,
-			projectionTexelVisits: timings.projectionTexelVisits,
-			timingSource: timings.timingSource ?? 'unavailable',
-			timingSourceKind: timings.timingSourceKind ?? 'unavailable',
-			gpuTimestampStatus: timings.gpuTimestampStatus ?? 'unavailable',
-			projectionTimingSource: timings.projectionTimingSource ?? timings.timingSource ?? 'unavailable',
-			deterministicTimerDetected: timings.deterministicTimerDetected === true,
-			timingBuckets: timings.timingBuckets ?? null,
-			computeProjectionFallbackReason: timings.computeProjectionFallbackReason ?? null
-		} );
-
 		const profileBackend = async ( requestedBackend, expectedBackend ) => {
 
 			const grid = createProfileGrid();
-			const runs = [];
+			const projectionMsSamples = [];
+			const selectedBackends = [];
+			const projectionTimingSources = [];
+			const fallbackReasons = new Set();
+			let deterministicTimerDetected = false;
 
 			try {
 
 				for ( let i = 0; i < warmupRuns + measuredRuns; i ++ ) {
 
 					const warmup = i < warmupRuns;
-					const wallClockStart = getProfileNow();
 					const timings = await grid.bake( renderer, scene, { projectionBackendOverride: requestedBackend } );
-					const wallClockTotalMs = roundTimingMetric( Math.max( getProfileNow() - wallClockStart, 0 ) );
 
 					if ( warmup ) {
 
@@ -971,34 +937,25 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 					}
 
-					runs.push( createRunRecord( timings, wallClockTotalMs, i - warmupRuns, requestedBackend ) );
+					projectionMsSamples.push( timings.projectionMs );
+					selectedBackends.push( timings.projectionBackend );
+					projectionTimingSources.push( timings.projectionTimingSource ?? timings.timingSource ?? 'unavailable' );
+					deterministicTimerDetected = deterministicTimerDetected || timings.deterministicTimerDetected === true;
+
+					if ( timings.computeProjectionFallbackReason ) fallbackReasons.add( timings.computeProjectionFallbackReason );
 
 				}
 
 				return {
 					requestedBackend,
 					expectedBackend,
-					selectedBackends: Array.from( new Set( runs.map( run => run.selectedBackend ) ) ),
-					measuredRuns: runs,
-					sceneUpdateMs: summarizeMetric( runs.map( run => run.sceneUpdateMs ) ),
-					projectionMs: summarizeMetric( runs.map( run => run.projectionMs ) ),
-					computeShProjectionMs: summarizeMetric( runs.map( run => run.computeShProjectionMs ) ),
-					cubemapMs: summarizeMetric( runs.map( run => run.cubemapMs ) ),
-					radianceCubemapCaptureMs: summarizeMetric( runs.map( run => run.radianceCubemapCaptureMs ) ),
-					copyMs: summarizeMetric( runs.map( run => run.copyMs ) ),
-					atlasRepackMs: summarizeMetric( runs.map( run => run.atlasRepackMs ) ),
-					distanceCubemapCaptureMs: summarizeMetric( runs.map( run => run.distanceCubemapCaptureMs ) ),
-					visibilityRepackMs: summarizeMetric( runs.map( run => run.visibilityRepackMs ) ),
-					verifierReadbackMs: summarizeMetric( runs.map( run => run.verifierReadbackMs ) ),
-					totalBakeMs: summarizeMetric( runs.map( run => run.wallClockTotalMs ) ),
-					probeGridTotalBakeMs: summarizeMetric( runs.map( run => run.totalBakeMs ) ),
-					timingSources: Array.from( new Set( runs.map( run => run.timingSource ) ) ),
-					timingSourceKinds: Array.from( new Set( runs.map( run => run.timingSourceKind ) ) ),
-					gpuTimestampStatuses: Array.from( new Set( runs.map( run => run.gpuTimestampStatus ) ) ),
-					projectionTimingSources: Array.from( new Set( runs.map( run => run.projectionTimingSource ) ) ),
-					deterministicTimerDetected: runs.some( run => run.deterministicTimerDetected === true ),
-					allRunsSelectedExpectedBackend: runs.every( run => run.selectedBackend === expectedBackend ),
-					fallbackReasons: Array.from( new Set( runs.map( run => run.computeProjectionFallbackReason ).filter( Boolean ) ) )
+					selectedBackends: Array.from( new Set( selectedBackends ) ),
+					measuredRunCount: projectionMsSamples.length,
+					projectionMs: summarizeMetric( projectionMsSamples ),
+					projectionTimingSources: Array.from( new Set( projectionTimingSources ) ),
+					deterministicTimerDetected,
+					allRunsSelectedExpectedBackend: selectedBackends.every( backend => backend === expectedBackend ),
+					fallbackReasons: Array.from( fallbackReasons )
 				};
 
 			} finally {
@@ -1015,21 +972,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			compute.projectionMs.median !== null &&
 			fragment.projectionMs.median > 0 &&
 			compute.projectionMs.median > 0;
-		const hasTotalTiming = fragment.totalBakeMs.median !== null &&
-			compute.totalBakeMs.median !== null &&
-			fragment.totalBakeMs.median > 0 &&
-			compute.totalBakeMs.median > 0;
 		const projectionMedianSpeedupRatio = hasProjectionTiming ?
 			roundMetric( fragment.projectionMs.median / compute.projectionMs.median ) :
 			null;
 		const projectionMedianReductionPercent = hasProjectionTiming ?
 			roundMetric( ( 1 - compute.projectionMs.median / fragment.projectionMs.median ) * 100 ) :
-			null;
-		const totalBakeMedianSpeedupRatio = hasTotalTiming ?
-			roundMetric( fragment.totalBakeMs.median / compute.totalBakeMs.median ) :
-			null;
-		const totalBakeMedianReductionPercent = hasTotalTiming ?
-			roundMetric( ( 1 - compute.totalBakeMs.median / fragment.totalBakeMs.median ) * 100 ) :
 			null;
 		const selectedExpectedBackends = fragment.allRunsSelectedExpectedBackend && compute.allRunsSelectedExpectedBackend;
 		const projectionTimingSources = Array.from( new Set( [
@@ -1063,9 +1010,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			fragment,
 			compute,
 			projectionMedianSpeedupRatio,
-			projectionMedianReductionPercent,
-			totalBakeMedianSpeedupRatio,
-			totalBakeMedianReductionPercent
+			projectionMedianReductionPercent
 		};
 
 	};

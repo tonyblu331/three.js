@@ -275,11 +275,11 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 	'compute projection profiling: expected forced fragment/compute profiling selectors to choose the requested private backends without fallback.' );
 	assert( Number.isFinite( computeProjectionProfiling.fragment.projectionMs.median ) &&
 		Number.isFinite( computeProjectionProfiling.compute.projectionMs.median ) &&
-		Array.isArray( computeProjectionProfiling.fragment.measuredRuns ) &&
-		computeProjectionProfiling.fragment.measuredRuns.length === computeProjectionProfiling.measuredRuns &&
-		Array.isArray( computeProjectionProfiling.compute.measuredRuns ) &&
-		computeProjectionProfiling.compute.measuredRuns.length === computeProjectionProfiling.measuredRuns,
-	'compute projection profiling: expected finite projection timing medians and recorded measured runs for both backends.' );
+		computeProjectionProfiling.fragment.measuredRunCount === computeProjectionProfiling.measuredRuns &&
+		computeProjectionProfiling.compute.measuredRunCount === computeProjectionProfiling.measuredRuns &&
+		!( 'measuredRuns' in computeProjectionProfiling.fragment ) &&
+		!( 'measuredRuns' in computeProjectionProfiling.compute ),
+	'compute projection profiling: expected finite projection timing medians and compact measured run counts for both backends.' );
 	results.push( { step: 'compute projection profiling', computeProjectionProfiling } );
 
 
