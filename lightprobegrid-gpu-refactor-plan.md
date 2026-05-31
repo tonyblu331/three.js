@@ -21,7 +21,7 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | File | Lines | Role | Status |
 | --- | ---: | --- | --- |
 | `examples/jsm/lighting/LightProbeGridGPU.js` | 1262 | Runtime facade | GPU-resident; no CPU readback matches. |
-| `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2289 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, profiling, leak-proof row, and visibility-moment payload duplication. |
+| `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2285 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, profiling, leak-proof row, visibility-moment, and runtime-smoke payload duplication. |
 | `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 601 | CPU/proof visibility weighting study | Trimmed unconsumed row variance/hit-confidence summaries and unused contribution ratios. |
 | `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | 188 | SH pressure diagnostics | Currently compact enough; avoid further splitting unless overlap appears. |
 | `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 139 | Receiver/surface diagnostics | Currently compact enough. |
@@ -35,9 +35,9 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 | `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js` | 113 | Bake state/result helpers | Cohesive runtime helper. |
 | `test/e2e/lightprobegrid-gpu-artifacts.js` | 97 | Compact artifact contract | Healthy after earlier report deletion. |
 | `test/e2e/lightprobegrid-gpu-proof-gates.js` | 264 | Proof gate derivation/assertions | Sealed-wall thresholds are data-driven; watch for future status drift. |
-| `test/e2e/lightprobegrid-gpu-runner-*.js` | 677 | Smoke assertion runners | Mostly reasonable; matrix/visibility assertions now target compact contracts instead of raw rows. |
+| `test/e2e/lightprobegrid-gpu-runner-*.js` | 679 | Smoke assertion runners | Mostly reasonable; matrix/visibility/runtime assertions now target compact contracts instead of raw rows. |
 
-Tracked LightProbeGridGPU feature/proof set: about 6,561 LOC, excluding this plan.
+Tracked LightProbeGridGPU feature/proof set: about 6,559 LOC, excluding this plan.
 
 ## Dependency rules
 
@@ -76,6 +76,7 @@ Reports / e2e
 - Leak-proof rows now share top-level proof settings and sampling instead of repeating frozen fixture controls per row.
 - Visibility weighting summaries no longer carry unused variance, hit-confidence, min/max visibility-mass, or mirrored correct-side contribution ratios.
 - Visibility moment inspection reports compact counters/ranges instead of raw readback sample arrays and deferred sweep-plan narrative.
+- Runtime smoke diagnostics now keep benchmark, bake coalescing, and leak-mode comparison payloads to asserted fields only.
 
 ## Current hotspots
 

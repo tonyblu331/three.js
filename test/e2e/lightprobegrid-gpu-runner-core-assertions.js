@@ -52,17 +52,13 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 	results.push( { step: 'sampling controls', samplingControls } );
 
 	const leakReductionComparison = await call( 'compareLeakReductionModes' );
-	assert( leakReductionComparison.off.sampling.weightedProbeSampling === false,
+	assert( leakReductionComparison.off.weightedProbeSampling === false,
 		'leak comparison: expected off mode to use unweighted sampling.' );
-	assert( leakReductionComparison.normal.sampling.weightedProbeSampling === true,
+	assert( leakReductionComparison.normal.weightedProbeSampling === true,
 		'leak comparison: expected normal mode to use weighted sampling.' );
-	assert( leakReductionComparison.off.colorSanity.center.r +
-		leakReductionComparison.off.colorSanity.center.g +
-		leakReductionComparison.off.colorSanity.center.b > 18,
+	assert( leakReductionComparison.off.centerEnergy > 18,
 	'leak comparison: expected off mode to remain visible.' );
-	assert( leakReductionComparison.normal.colorSanity.center.r +
-		leakReductionComparison.normal.colorSanity.center.g +
-		leakReductionComparison.normal.colorSanity.center.b > 18,
+	assert( leakReductionComparison.normal.centerEnergy > 18,
 	'leak comparison: expected normal mode to remain visible.' );
 	results.push( { step: 'leak reduction comparison', leakReductionComparison } );
 

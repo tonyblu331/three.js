@@ -20,7 +20,8 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 
 	const bakeCoalescing = await call( 'testBakeCoalescing' );
 	assert( bakeCoalescing.samePromise === true, 'bake contract: expected overlapping bake calls to share the same promise.' );
-	assert( Number.isFinite( bakeCoalescing.timings.totalBakeMs ), 'bake contract: expected finite coalesced bake timing.' );
+	assert( Number.isFinite( bakeCoalescing.totalBakeMs ), 'bake contract: expected finite coalesced bake timing.' );
+	assert( bakeCoalescing.timings === undefined, 'bake contract: expected compact bake timing payload.' );
 	results.push( { step: 'bake coalescing', bakeCoalescing } );
 
 	const benchmark = await call( 'runBenchmarkCase', {
@@ -40,6 +41,8 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 	assert( benchmark.estimatedGpuBytes.coefficientBytes > 0, 'benchmark: expected coefficient memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.atlasBytes > 0, 'benchmark: expected atlas memory estimate.' );
 	assert( benchmark.estimatedGpuBytes.probeValidityBytes > 0, 'benchmark: expected probe validity memory estimate.' );
+	assert( benchmark.estimatedGpuBytes.backend === undefined,
+		'benchmark: expected compact memory estimate without duplicated backend metadata.' );
 	assert( benchmark.visibilityDepth?.available === true &&
 		benchmark.visibilityDepth?.mode === 'moments' &&
 		benchmark.visibilityDepth?.bytes > 0,
@@ -67,6 +70,9 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 		benchmark.timingBuckets.verifierReadbackTimingSource === 'unavailable',
 	'benchmark: expected honest proof-only timing buckets with readback/runtime timing marked unavailable.' );
 	assert( Number.isFinite( benchmark.frameMs ), 'benchmark: expected finite frame timing.' );
+	assert( benchmark.wallClockTotalBakeMs === undefined &&
+		benchmark.deterministicTimerDetected === undefined,
+	'benchmark: expected compact timing payload without exploratory runtime timing fields.' );
 	results.push( { step: 'benchmark case', benchmark } );
 
 	const failedBenchmarkBake = await callRejects( 'runBenchmarkCase', {

@@ -2108,41 +2108,40 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
-	const createBenchmarkResult = ( nextTimings ) => ( {
-		resolution: _lightProbeContext.params.resolution,
-		probes: _lightProbeContext.probeGrid.totalProbes,
-		cubemapSize: _lightProbeContext.params.cubemapSize,
-		precision: _lightProbeContext.probeGrid.getPrecisionInfo( _lightProbeContext.renderer ),
-		backend: _lightProbeContext.probeGrid.getMemoryInfo().backend,
-		estimatedGpuBytes: _lightProbeContext.probeGrid.getMemoryInfo(),
-		visibilityDepth: readVisibilityDepthInfo(),
-		sceneUpdateMs: nextTimings.sceneUpdateMs,
-		cubemapMs: nextTimings.cubemapMs,
-		radianceCubemapCaptureMs: nextTimings.radianceCubemapCaptureMs,
-		projectionMs: nextTimings.projectionMs,
-		computeShProjectionMs: nextTimings.computeShProjectionMs,
-		copyMs: nextTimings.copyMs,
-		atlasRepackMs: nextTimings.atlasRepackMs,
-		visibilityCubemapMs: nextTimings.visibilityCubemapMs,
-		distanceCubemapCaptureMs: nextTimings.distanceCubemapCaptureMs,
-		visibilityRepackMs: nextTimings.visibilityRepackMs,
-		verifierReadbackMs: nextTimings.verifierReadbackMs,
-		visibilityDepthMode: nextTimings.visibilityDepthMode,
-		projectionBackendRequest: nextTimings.projectionBackendRequest,
-		projectionBackend: nextTimings.projectionBackend,
-		projectionBackendForced: nextTimings.projectionBackendForced,
-		projectionCubemapSweepsPerProbe: nextTimings.projectionCubemapSweepsPerProbe,
-		projectionTexelVisits: nextTimings.projectionTexelVisits,
-		projectionTexelVisitReductionRatio: nextTimings.projectionTexelVisitReductionRatio,
-		totalBakeMs: nextTimings.totalBakeMs,
-		wallClockTotalBakeMs: nextTimings.wallClockTotalBakeMs,
-		timingSource: nextTimings.timingSource,
-		timingSourceKind: nextTimings.timingSourceKind,
-		gpuTimestampStatus: nextTimings.gpuTimestampStatus,
-		timingBuckets: nextTimings.timingBuckets,
-		deterministicTimerDetected: nextTimings.deterministicTimerDetected,
-		frameMs: _lightProbeContext.timings.frameMs
-	} );
+	const pickFields = ( source, keys ) => Object.fromEntries( keys.map( key => [ key, source[ key ] ] ) );
+
+	const createBenchmarkResult = ( nextTimings ) => {
+
+		const memory = _lightProbeContext.probeGrid.getMemoryInfo();
+
+		return {
+			probes: _lightProbeContext.probeGrid.totalProbes,
+			precision: pickFields( _lightProbeContext.probeGrid.getPrecisionInfo( _lightProbeContext.renderer ), [ 'requestedPrecision' ] ),
+			backend: memory.backend,
+			estimatedGpuBytes: pickFields( memory, [ 'total', 'cubemapBytes', 'coefficientBytes', 'atlasBytes', 'probeValidityBytes' ] ),
+			visibilityDepth: readVisibilityDepthInfo(),
+			cubemapMs: nextTimings.cubemapMs,
+			projectionMs: nextTimings.projectionMs,
+			copyMs: nextTimings.copyMs,
+			projectionBackend: nextTimings.projectionBackend,
+			totalBakeMs: nextTimings.totalBakeMs,
+			timingSource: nextTimings.timingSource,
+			timingSourceKind: nextTimings.timingSourceKind,
+			gpuTimestampStatus: nextTimings.gpuTimestampStatus,
+			timingBuckets: pickFields( nextTimings.timingBuckets, [
+				'source',
+				'sceneUpdateMs',
+				'radianceCubemapCaptureMs',
+				'distanceCubemapCaptureMs',
+				'computeShProjectionMs',
+				'visibilityRepackMs',
+				'atlasRepackMs',
+				'verifierReadbackTimingSource'
+			] ),
+			frameMs: _lightProbeContext.timings.frameMs
+		};
+
+	};
 
 	const inspectVisibilityWeightingAtLeakReceivers = createLightProbeGridGPUVisibilityWeightingStudy( {
 		_lightProbeContext,
@@ -2698,6 +2697,17 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			const previousLeakReductionMode = _lightProbeContext.params.leakReductionMode;
 			let offResult = null;
 			let normalResult = null;
+			const captureLeakModeComparison = async () => {
+
+				const sampling = _lightProbeContext.probeGrid.getSamplingInfo();
+				const colorSanity = await captureColorSanity();
+
+				return {
+					weightedProbeSampling: sampling.weightedProbeSampling,
+					centerEnergy: roundMetric( colorSanity.center.r + colorSanity.center.g + colorSanity.center.b )
+				};
+
+			};
 
 			try {
 
@@ -2705,19 +2715,13 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				await _lightProbeContext.recreateAndBakeRequired( 'leak reduction off' );
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
-				offResult = {
-					sampling: _lightProbeContext.probeGrid.getSamplingInfo(),
-					colorSanity: await captureColorSanity()
-				};
+				offResult = await captureLeakModeComparison();
 
 				_lightProbeContext.params.leakReductionMode = 'normal';
 				await _lightProbeContext.recreateAndBakeRequired( 'leak reduction normal' );
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
-				normalResult = {
-					sampling: _lightProbeContext.probeGrid.getSamplingInfo(),
-					colorSanity: await captureColorSanity()
-				};
+				normalResult = await captureLeakModeComparison();
 
 			} finally {
 
@@ -2750,8 +2754,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				result = {
 					samePromise,
-					timings: nextTimings,
-					precision: _lightProbeContext.probeGrid.getPrecisionInfo( _lightProbeContext.renderer )
+					totalBakeMs: nextTimings.totalBakeMs
 				};
 
 				return nextTimings;
