@@ -2263,13 +2263,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				visible: metric.luminance.mean > 32,
-				color: {
-					r: roundMetric( color.r ),
-					g: roundMetric( color.g ),
-					b: roundMetric( color.b )
-				},
-				expectedCpuColor: expectedCpu,
-				expectedInvertedCpuColor: expectedInverted,
 				cpuColorDistance: roundMetric( cpuDistance ),
 				invertedColorDistance: roundMetric( invertedDistance ),
 				closestNormalConvention: cpuDistance <= invertedDistance ? 'cpu-normal' : 'inverted-cpu-normal'
@@ -2300,33 +2293,24 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			const intersections = raycaster.intersectObject( mesh, false );
 			let actualRenderedSide = 'culled-or-missed';
-			let raycastFaceNormal = null;
-			let rayDotFaceNormal = null;
 
 			if ( intersections.length > 0 && intersections[ 0 ].face !== null ) {
 
 				worldFaceNormal.copy( intersections[ 0 ].face.normal ).transformDirection( mesh.matrixWorld ).normalize();
-				rayDotFaceNormal = raycaster.ray.direction.dot( worldFaceNormal );
+				const rayDotFaceNormal = raycaster.ray.direction.dot( worldFaceNormal );
 				actualRenderedSide = rayDotFaceNormal < 0 ? 'front-face' : 'back-face';
-				raycastFaceNormal = roundVector( worldFaceNormal );
 
 			}
 
+			const cameraDotCpuNormal = cameraDirection.dot( cpuNormal );
+
 			return {
 				label,
-				materialSide: materialSideLabel( mesh.material.side ),
-				receiverPosition: roundVector( receiverPosition ),
 				cpuNormal: roundVector( cpuNormal ),
 				invertedCpuNormal: roundVector( cpuNormal.clone().multiplyScalar( - 1 ) ),
-				expectedShaderNormalWorld: roundVector( cpuNormal ),
-				cameraDirection: roundVector( cameraDirection ),
-				cameraDotCpuNormal: roundMetric( cameraDirection.dot( cpuNormal ) ),
-				expectedVisibleFaceFromCpuNormal: cameraDirection.dot( cpuNormal ) >= 0 ? 'front-face' : 'back-face',
+				cameraDotCpuNormal: roundMetric( cameraDotCpuNormal ),
+				expectedVisibleFaceFromCpuNormal: cameraDotCpuNormal >= 0 ? 'front-face' : 'back-face',
 				actualRenderedSide,
-				raycastHit: intersections.length > 0,
-				raycastFaceNormal,
-				rayDotFaceNormal: rayDotFaceNormal === null ? null : roundMetric( rayDotFaceNormal ),
-				centerRegion: createObjectCenterScreenRegion( mesh ),
 				surfaceRegion: createObjectSurfaceScreenRegion( mesh )
 			};
 
@@ -2402,10 +2386,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				frontSideSample.rightReceiverSurface.visible === true &&
 				frontSideSample.leftReceiverSurface.closestNormalConvention === 'cpu-normal' &&
 				frontSideSample.rightReceiverSurface.closestNormalConvention === 'cpu-normal';
-			const backSideCulled = shaderNormalSamples
-				.find( sample => sample.label === 'back-side-normalWorld' );
-			const backSideCullSupported = backSideCulled.leftReceiverSurface.visible === false &&
-				backSideCulled.rightReceiverSurface.visible === false;
 
 			return {
 				status: frontFaceAgreement === true && shaderNormalAgreement === true ?
@@ -2418,8 +2398,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				summary: {
 					frontFaceAgreement,
 					shaderNormalAgreement,
-					backSideCullSupported,
-					expectedShaderNormalWorldSource: 'flat PlaneGeometry local +Z transformed by world quaternion; no normal map in diagnostic receiver material',
 					diagnosticConclusion: frontFaceAgreement === true && shaderNormalAgreement === true ?
 						'CPU receiver normal convention matches the visible front face and normalWorld diagnostic sample; prefer investigating render-region contamination or baked SH/color contamination before runtime threshold tuning.' :
 						'CPU receiver normal convention does not fully match the rendered front/back side or normalWorld sample; fix verifier/render normal convention before any DDGI-lite threshold tuning.'
