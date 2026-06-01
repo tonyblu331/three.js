@@ -1,0 +1,27 @@
+schema: spec-driven
+
+context: |
+  Project: three.js fork.
+  Focus: LightProbeGridGPU proof/eval cleanup.
+  Runtime constraint: keep examples/jsm/lighting/LightProbeGridGPU.js GPU-resident.
+  Verification: no full build for this refactor stream; use node --check, source invariants, and git diff --check.
+
+rules:
+  proposal:
+    - Keep scope explicit and rollback simple.
+  specs:
+    - Use Given/When/Then scenarios.
+    - Use RFC 2119 requirement keywords.
+  design:
+    - Preserve runtime/proof boundaries.
+    - Do not introduce thin pass-through modules.
+  tasks:
+    - Use small, contract-first tasks.
+    - Include review workload forecast.
+  apply:
+    tdd: false
+    test_command: "node --check examples/jsm/lighting/LightProbeGridGPUTestHarness.js && node --check examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js && node --check test/e2e/lightprobegrid-gpu-proof-gates.js && node --input-type=module -e \"import { checkSmokeSourceInvariants } from './test/e2e/lightprobegrid-gpu-source-invariants.js'; import { smokeHarnesses } from './test/e2e/lightprobegrid-gpu-smoke-config.js'; await checkSmokeSourceInvariants('webgpu_lightprobes_cornell', smokeHarnesses.webgpu_lightprobes_cornell);\" && git diff --check"
+  verify:
+    test_command: "node --check examples/jsm/lighting/LightProbeGridGPUTestHarness.js && node --check examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js && node --check test/e2e/lightprobegrid-gpu-proof-gates.js && node --input-type=module -e \"import { checkSmokeSourceInvariants } from './test/e2e/lightprobegrid-gpu-source-invariants.js'; import { smokeHarnesses } from './test/e2e/lightprobegrid-gpu-smoke-config.js'; await checkSmokeSourceInvariants('webgpu_lightprobes_cornell', smokeHarnesses.webgpu_lightprobes_cornell);\" && git diff --check"
+    build_command: ""
+    coverage_threshold: 0

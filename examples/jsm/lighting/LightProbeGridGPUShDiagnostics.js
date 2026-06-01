@@ -81,7 +81,7 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 	};
 
-	const analyzeShContributionDiagnostics = async ( leftReceiver, rightReceiver, escapeSummary, weightingSummary ) => {
+	const analyzeShContributionDiagnostics = async ( leftReceiver, rightReceiver ) => {
 
 		const receiverDiagnostics = [
 			await analyzeReceiverShContributions( leftReceiver ),
@@ -173,28 +173,13 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 				0
 			) / Math.max( probeContentReceivers.length, 1 )
 		);
-		const aggregateMixedColorSuspected = Math.max( visibilityWrongRatioMean, runtimeWrongRatioMean ) >= 0.25;
-		const correctSideMixedColorRowPressure = correctSideMixedColorRows.length > 0;
-		const bakedShMixedColorSuspected = escapeSummary.wrongSideEscapedCount === 0 &&
-					weightingSummary.directionalSuppressionSupported === true &&
-					correctSideMixedColorRowPressure === true &&
-					aggregateMixedColorSuspected === true;
-
 		return {
-			status: bakedShMixedColorSuspected ?
-				'OPEN-BAKED-SH-MIXED-COLOR-SUSPECTED' :
-				correctSideMixedColorRowPressure ?
-					'OPEN-CORRECT-PROBE-ROW-MIXED-COLOR-PRESSURE' :
-					'OPEN-SH-CONTRIBUTION-NEEDS-MORE-EVIDENCE',
-			proofBoundary: 'Readback-only packed SH atlas coefficient contribution mirror for receiver neighbors; diagnostic only, not a public API.',
-			suspectedFailureDomain: bakedShMixedColorSuspected ?
-				'BAKED-SH-MIXED-COLOR-CONTAMINATION' :
-				'RUNTIME-SH-EVAL-OR-RENDER-METRIC',
 			summary: {
 				scalarWrongRatioMean,
 				visibilityWrongRatioMean,
 				runtimeWrongRatioMean,
 				invertedNormalRuntimeWrongRatioMean,
+				correctSideMixedColorRowCount: correctSideMixedColorRows.length,
 				maxCorrectSideChromaPressure,
 				maxRuntimeFinalChromaPressure,
 				weightedCorrectSideChromaPressureMean,

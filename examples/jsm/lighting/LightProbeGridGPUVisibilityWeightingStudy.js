@@ -478,12 +478,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				const wrongSideRows = rows.filter( row => row.relationToReceiver === 'wrong-side' && row.baseWeight > 0.0001 );
 				const escapedRows = wrongSideRows.filter( row => row.escaped === true );
-				const escapeReasons = escapedRows.reduce( ( reasons, row ) => {
-
-					reasons[ row.escapeReason ] = ( reasons[ row.escapeReason ] ?? 0 ) + 1;
-					return reasons;
-
-				}, {} );
 
 				const sum = ( relation, key ) => rows
 					.filter( row => row.relationToReceiver === relation )
@@ -522,14 +516,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					},
 					escapeSummary: {
 						wrongSideProbeCount: wrongSideRows.length,
-						wrongSideEscapedCount: escapedRows.length,
-						crossingWrongSideEscapedCount: escapedRows.filter( row => row.crossesDivider === true ).length,
-						lowHitConfidenceEscapeCount: escapedRows.filter( row => row.escapeReason === 'below-hit-threshold' ).length,
-						receiverBeforeMeanEscapeCount: escapedRows.filter( row => row.escapeReason === 'receiver-before-mean' ).length,
-						highChebyshevEscapeCount: escapedRows.filter( row => row.escapeReason === 'high-chebyshev-visibility' ).length,
-						visibilityBypassEscapeCount: escapedRows.filter( row => row.escapeReason === 'visibility-bias-bypasses-divider' ).length,
-						frontEdgeBypassEscapeCount: escapedRows.filter( row => row.escapeReason === 'front-edge-bypass' ).length,
-						escapeReasons,
 						escapedProbes: escapedRows.map( row => ( {
 							probeIndex: row.probeIndex,
 							escapeReason: row.escapeReason,
@@ -589,16 +575,14 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					return reasons;
 
 				}, {} );
+				const countEscapes = reason => escapedProbes.filter( row => row.escapeReason === reason ).length;
 
 				return {
 					wrongSideProbeCount: receivers.reduce( ( total, receiver ) => total + receiver.escapeSummary.wrongSideProbeCount, 0 ),
 					wrongSideEscapedCount: escapedProbes.length,
-					crossingWrongSideEscapedCount: escapedProbes.filter( row => row.crossesDivider === true ).length,
-					visibilityBypassEscapeCount: escapedProbes.filter( row => row.escapeReason === 'visibility-bias-bypasses-divider' ).length,
-					frontEdgeBypassEscapeCount: escapedProbes.filter( row => row.escapeReason === 'front-edge-bypass' ).length,
-					lowHitConfidenceEscapeCount: escapedProbes.filter( row => row.escapeReason === 'below-hit-threshold' ).length,
-					receiverBeforeMeanEscapeCount: escapedProbes.filter( row => row.escapeReason === 'receiver-before-mean' ).length,
-					highChebyshevEscapeCount: escapedProbes.filter( row => row.escapeReason === 'high-chebyshev-visibility' ).length,
+					visibilityBypassEscapeCount: countEscapes( 'visibility-bias-bypasses-divider' ),
+					frontEdgeBypassEscapeCount: countEscapes( 'front-edge-bypass' ),
+					lowHitConfidenceEscapeCount: countEscapes( 'below-hit-threshold' ),
 					escapeReasons,
 					escapedProbes
 				};
@@ -681,7 +665,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 
 			const escapeClassification = combineEscapeSummary( [ left, right ] );
-			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right, escapeClassification, summary );
+			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right );
 			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic();
 			const receiverGpuDebugDiagnostic = await captureReceiverGpuDebugDiagnostics( receiverSurfaceQuadratureDiagnostic );
 			const compactReceiver = receiver => ( {
@@ -698,24 +682,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					escapeReason: row.escapeReason
 				} ) )
 			} );
-			const dominantEscapeReason = Object.entries( escapeClassification.escapeReasons )
-				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
-				.at( 0 ) ?? [ 'none', 0 ];
-			const interrogationFinding = escapeClassification.frontEdgeBypassEscapeCount > 0 ?
-				'GEOMETRY-FRONT-EDGE-BYPASS' :
-				escapeClassification.visibilityBypassEscapeCount > 0 ?
-					'VISIBILITY-BIAS-BYPASS' :
-					escapeClassification.lowHitConfidenceEscapeCount > 0 ?
-						'HIT-CONFIDENCE-THRESHOLD-BYPASS' :
-						summary.wrongMinusCorrectSuppression > 0 ?
-							'WEIGHTING-SUPPRESSES-CORRECT-MORE-THAN-WRONG' :
-							'CPU-DIRECTIONAL-SUPPRESSION-SUPPORTED';
 			return {
-				status: summary.directionalSuppressionSupported ? 'SUPPORTED-DIRECTIONAL-SUPPRESSION' : 'OPEN-CORRECT-SIDE-SUPPRESSED',
 				fixtureMode,
-				proofBoundary: fixtureMode === 'thin-wall' ?
-					'CPU mirror of current shader weighting for thin-wall receiver centers; diagnostic only, not a public API.' :
-					'CPU mirror of current shader weighting for sealed-wall receiver centers; diagnostic only, not a public API.',
+				diagnosticScope: fixtureMode === 'thin-wall' ? 'thin-wall-receiver-centers' : 'sealed-wall-receiver-centers',
 				visibilityDepth: typeof _lightProbeContext.probeGrid.getVisibilityDepthInfo === 'function' ? _lightProbeContext.probeGrid.getVisibilityDepthInfo() : { available: false, mode: 'unavailable-proof-6-runtime-removed', resolution: 0, bytes: 0 },
 				left: compactReceiver( left ),
 				right: compactReceiver( right ),
@@ -723,12 +692,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				escapeClassification,
 				shContributionDiagnostic,
 				receiverSurfaceQuadratureDiagnostic,
-				receiverGpuDebugDiagnostic,
-				interrogationFinding,
-				dominantEscapeReason: {
-					reason: dominantEscapeReason[ 0 ],
-					count: dominantEscapeReason[ 1 ]
-				}
+				receiverGpuDebugDiagnostic
 			};
 
 		} finally {

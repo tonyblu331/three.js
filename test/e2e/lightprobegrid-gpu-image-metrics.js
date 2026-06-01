@@ -167,8 +167,7 @@ export function createLightProbeImageArtifactPressure( regions ) {
 		objectDarkTailRatio: roundLightProbeMetric( maxDarkPixelRatio ),
 		objectBlackTailRatio: roundLightProbeMetric( maxBlackPixelRatio ),
 		luminanceFloor: roundLightProbeMetric( luminanceFloor ),
-		cellEdgeContrast: roundLightProbeMetric( maxCellEdgeContrast ),
-		status: maxBlackPixelRatio > 0.15 || luminanceFloor < 24 ? 'PRESSURE' : 'bounded'
+		cellEdgeContrast: roundLightProbeMetric( maxCellEdgeContrast )
 	};
 
 }

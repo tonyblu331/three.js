@@ -101,17 +101,10 @@ ${ runnerRuntimeAssertionsSource }`;
 	requireSource(
 		invalidMomentFixtures.every( fixture =>
 			isMomentBackedVisibility( fixture ) === false &&
-			deriveVisibilityProofStatus( fixture, 'SUPPORTED' ).visibilityLabel !== 'visibility-moments' &&
-			deriveVisibilityProofStatus( fixture, 'SUPPORTED' ).ddgiStatus !== 'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS'
-		) &&
-			deriveVisibilityProofStatus( {
-				available: true,
-				mode: 'moments',
-				texture: {},
-				bytes: 128,
-				stats: { finiteSampleCount: 1, hitSampleCount: 1 }
-			}, 'OPEN' ).ddgiStatus !== 'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS',
-		'Moment-backed visibility gate must reject available=false, bytes=0, texture=null, and raw OPEN evidence.'
+			deriveVisibilityProofStatus( fixture ).visibilityLabel !== 'visibility-moments' &&
+			deriveVisibilityProofStatus( fixture ).ddgiStatus !== 'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS'
+		),
+		'Moment-backed visibility gate must reject available=false, bytes=0, and texture=null evidence.'
 	);
 
 	const requireSourceContract = ( message, checks ) => {
@@ -349,20 +342,17 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'compute-probe-reduction' ) &&
 			exampleSource.includes( 'fragment-coefficient-projection' ) &&
 			exampleSource.includes( 'requiredPromotionEvidence' ) &&
-			exampleSource.includes( 'REQUIRED-BEFORE-FULL-PARITY-PROMOTION' ) &&
-			exampleSource.includes( 'status: \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' ) &&
-			exampleSource.includes( 'previousStatus: \'PARITY-CANDIDATE-NOT-RUNTIME\'' ) &&
 			exampleSource.includes( 'candidatePlanningAllowed: true' ) &&
 			exampleSource.includes( 'runtimeMarkersAllowed: true' ) &&
-			exampleSource.includes( 'PENDING-BROWSER-E2E' ) &&
-			exampleSource.includes( 'PARITY-CANDIDATE-NOT-RUNTIME' ) &&
-			exampleSource.includes( 'IMPLEMENTED-WITH-PARITY-EVIDENCE' ),
+			exampleSource.includes( 'runtimeGuardedImplementationPresent' ) &&
+			exampleSource.includes( 'maxCandidateToFragmentDelta' ) &&
+			exampleSource.includes( 'maxPackedReadbackDelta' ),
 		'Cornell harness must include a synthetic cubemap projection parity fixture and a guarded runtime compute projection parity contract with fragment fallback.'
 	);
 
 	const computeProjectionRuntimeMarkersAllowed =
 		exampleSource.includes( 'runtimeMarkersAllowed: true' ) &&
-		exampleSource.includes( 'status: \'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY\'' );
+		exampleSource.includes( 'runtimePathIntroduced: true' );
 	const computeProjectionRuntimeMarkers = [
 		'_createComputeProjection',
 		'computeProjectionPipeline',
@@ -424,7 +414,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'variance' ) &&
 			proofReadbackSource.includes( 'readLightProbeGridGPUVisibilityMomentPixel' ) &&
 			proofReadbackSource.includes( 'decodeLightProbeGridGPUVisibilityMoment' ) &&
-			exampleSource.includes( 'readback-only verifier for private DDGI-lite visibility/depth moments' ),
+			exampleSource.includes( 'activeRepackMode: \'five-tap-octa-neighborhood\'' ),
 		'Cornell harness must directly inspect the private visibilityDepthTarget and call probeGrid.getVisibilityDepthInfo() for moment-backed proof gates.'
 	);
 
@@ -448,7 +438,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofGatesSource.includes( 'info.stats.finiteSampleCount > 0' ) &&
 			proofGatesSource.includes( 'info.stats.hitSampleCount > 0' ) &&
 			proofGatesSource.includes( 'visibilityLabel: momentBacked ? \'visibility-moments\' : \'visibility-scaffold-disabled\'' ) &&
-			proofGatesSource.includes( 'ddgiStatus: momentBacked && rawOpen === false ?' ) &&
+			proofGatesSource.includes( 'ddgiStatus: momentBacked ?' ) &&
 			e2eSource.includes( 'buildExecuted: false' ) &&
 			e2eSource.includes( 'OPEN-COLOR-MAPPING' ),
 		'Proof helpers must gate visibility-moments and IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS on strict moment-backed evidence, and report open color mapping honestly.'
@@ -474,27 +464,21 @@ ${ runnerRuntimeAssertionsSource }`;
 				sourceText: exampleSource,
 				tokens: [
 					'inspectVisibilityWeightingAtLeakReceivers',
-					'CPU mirror of current shader weighting for thin-wall receiver centers',
-					'CPU mirror of current shader weighting for sealed-wall receiver centers',
+					'thin-wall-receiver-centers',
+					'sealed-wall-receiver-centers',
 					'currentVisibilityBiasScale = 1',
 					'hitConfidenceThreshold = 0.5',
-					'OPEN-CORRECT-SIDE-SUPPRESSED',
-					'interrogationFinding',
-					'dominantEscapeReason',
+					'directionalSuppressionSupported',
 					'shContributionDiagnostic',
-					'Readback-only packed SH atlas coefficient contribution mirror',
 					'runtime-final-mixed-coefficients-inverted-normal',
-					'BAKED-SH-MIXED-COLOR-CONTAMINATION',
+					'correctSideMixedColorRowCount',
 					'readProbeCoefficients',
 					'receiverSurfaceQuadratureDiagnostic',
 					'tensor-product-gauss-legendre-3x3-over-receiver-plane',
-					'Proof-only receiver-surface quadrature over PlaneGeometry samples',
 					'receiverGpuDebugDiagnostic',
 					'runtimeDebugUnavailable',
 					'gpuDebugSweepExecuted: false',
 					'surfaceCpuRenderDelta',
-					'linearIrradianceAgreementGate',
-					'weightTermAgreementGate',
 					'surfaceRuntimeWrongRatioMax',
 					'surfaceCpuRenderDeltaMax',
 					'cpuRenderAgreementAggregation',
@@ -509,10 +493,76 @@ ${ runnerRuntimeAssertionsSource }`;
 					'front-edge-bypass',
 					'inspectLeakReceiverNormalConvention',
 					'normalWorld.normalize().mul( 0.5 ).add( 0.5 )',
-					'OPEN-NORMAL-CONVENTION-MISMATCH'
+					'frontFaceAgreement',
+					'shaderNormalAgreement'
+				]
+			},
+			{
+				sourceText: proofGatesSource,
+				tokens: [
+					'sealed visibility weighting diagnostic',
+					'visibilityWeighting.directionalSuppression',
+					'sealed receiver normal convention diagnostic',
+					'receiverNormal.frontFaceShaderAgreement',
+					'receiverSurface.cpuRenderAgreement',
+					'shContribution.noBakedMixedColorRisk'
 				]
 			}
 		]
+	);
+
+	requireSource(
+		! exampleSource.includes( 'OPEN-NORMAL-CONVENTION-MISMATCH' ) &&
+			! exampleSource.includes( 'SUPPORTED-CPU-NORMAL-MATCHES-FRONT-FACE-SHADER' ) &&
+			! exampleSource.includes( 'diagnosticConclusion' ) &&
+			! exampleSource.includes( 'SUPPORTED-DIRECTIONAL-SUPPRESSION' ) &&
+			! exampleSource.includes( 'OPEN-CORRECT-SIDE-SUPPRESSED' ) &&
+			! exampleSource.includes( 'interrogationFinding' ) &&
+			! exampleSource.includes( 'dominantEscapeReason' ) &&
+			! exampleSource.includes( 'SUPPORTED-SURFACE-CPU-RENDER-AGREEMENT' ) &&
+			! exampleSource.includes( 'OPEN-SURFACE-CPU-RENDER-MISMATCH' ) &&
+			! exampleSource.includes( 'cpuRenderAgreementGate' ) &&
+			! exampleSource.includes( 'OPEN-BAKED-SH-MIXED-COLOR-SUSPECTED' ) &&
+			! exampleSource.includes( 'OPEN-CORRECT-PROBE-ROW-MIXED-COLOR-PRESSURE' ) &&
+			! exampleSource.includes( 'OPEN-SH-CONTRIBUTION-NEEDS-MORE-EVIDENCE' ) &&
+			! exampleSource.includes( 'BAKED-SH-MIXED-COLOR-CONTAMINATION' ) &&
+			! exampleSource.includes( 'RUNTIME-SH-EVAL-OR-RENDER-METRIC' ) &&
+			! exampleSource.includes( 'suspectedFailureDomain' ) &&
+			! exampleSource.includes( 'OPEN-GPU-DEBUG-CPU-SURFACE-MISMATCH' ) &&
+			! exampleSource.includes( 'linearIrradianceAgreementGate' ) &&
+			! exampleSource.includes( 'weightTermAgreementGate' ) &&
+			! exampleSource.includes( 'old proof-lab variant sweep' ) &&
+			! exampleSource.includes( 'CAPTURED-RADIAL-MOMENT-READBACK' ) &&
+			! exampleSource.includes( 'OPEN-NO-MOMENT-READBACK' ) &&
+			! exampleSource.includes( 'readback-only verifier for private DDGI-lite visibility/depth moments' ) &&
+			! exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PROFILE-CAPTURED' ) &&
+			! exampleSource.includes( 'OPEN-PROJECTION-PROFILE-BACKEND-FALLBACK' ) &&
+			! exampleSource.includes( 'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' ) &&
+			! exampleSource.includes( 'DIAGNOSTIC-WALL-CLOCK-NOT-GATED' ) &&
+			! exampleSource.includes( 'CAPTURED-NON-DETERMINISTIC-PERFORMANCE-NOW' ) &&
+			! exampleSource.includes( 'UNAVAILABLE-DETERMINISTIC-TIMER-ZERO' ) &&
+			! exampleSource.includes( 'RUNTIME-PARITY-READBACK-PASSING' ) &&
+			! exampleSource.includes( 'OPEN-RUNTIME-PARITY-DELTA' ) &&
+			! exampleSource.includes( 'OPEN-RUNTIME-COMPUTE-FALLBACK' ) &&
+			! exampleSource.includes( 'RUNTIME-GUARDED-ADAPTER-FALLBACK-SPEC-PASSING' ) &&
+			! exampleSource.includes( 'OPEN-PROOF-ONLY-ADAPTER-FALLBACK-DELTA' ) &&
+			! exampleSource.includes( 'PROOF-ONLY-MOCK-PARITY-PASSING' ) &&
+			! exampleSource.includes( 'OPEN-PROOF-ONLY-MOCK-PARITY-DELTA' ) &&
+			! exampleSource.includes( 'PROOF-ONLY-ATLAS-REPACK-PARITY-PASSING' ) &&
+			! exampleSource.includes( 'OPEN-PROOF-ONLY-ATLAS-REPACK-PARITY-DELTA' ) &&
+			! exampleSource.includes( 'REQUIRED-BEFORE-FULL-PARITY-PROMOTION' ) &&
+			! exampleSource.includes( 'PARITY-CANDIDATE-NOT-RUNTIME' ) &&
+			! exampleSource.includes( 'PENDING-BROWSER-E2E' ) &&
+			! exampleSource.includes( 'evidenceStatus' ) &&
+			! exampleSource.includes( 'status: maxBlackPixelRatio > 0.15' ) &&
+			! imageMetricsSource.includes( 'status: maxBlackPixelRatio > 0.15' ) &&
+			! proofValidationSource.includes( 'artifactPressure.status === \'PRESSURE\'' ) &&
+			! proofValidationSource.includes( 'artifactPressure.status === \'bounded\'' ) &&
+			! exampleSource.includes( 'referenceBoundary' ) &&
+			! artifactSource.includes( 'referenceBoundary' ) &&
+			! exampleSource.includes( 'action:' ) &&
+			! exampleSource.includes( 'reason: computeRuntimeAllowed' ),
+		'Receiver normal, receiver-surface, visibility weighting, SH contribution, GPU-debug, moment, projection profiling, projection oracle, runtime parity, artifact pressure, and artifact snapshot diagnostics must emit raw facts; proof gates/assertions own their verdicts.'
 	);
 
 	requireSource(
@@ -541,9 +591,7 @@ ${ runnerRuntimeAssertionsSource }`;
 					'captureLeakProofFacts',
 					'sealed-wall-validity-weighted',
 					'sealed-wall-visibility-moments',
-					'Compact sealed-wall leak proof facts for default verifier gates',
 					'pre-tone-linear-output-masked-visible-pixels',
-					'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE',
 					'correctBounceRatio',
 					'applyGroundingParitySnapshot',
 					'restoreGroundingParitySnapshot'
@@ -563,6 +611,13 @@ ${ runnerRuntimeAssertionsSource }`;
 				]
 			}
 		]
+	);
+
+	requireSource(
+		! exampleSource.includes( 'Compact sealed-wall leak proof facts for default verifier gates' ) &&
+			! exampleSource.includes( 'SUPPORTED-BY-SEALED-FIXTURE' ) &&
+			! exampleSource.includes( 'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' ),
+		'Leak proof facts must keep promotion verdicts out of the harness; sealed-wall gates own support thresholds.'
 	);
 
 	requireSource(

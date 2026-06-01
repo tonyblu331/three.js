@@ -1,4 +1,4 @@
-const MAX_PROOF_GATE_COUNT = 12;
+const MAX_PROOF_GATE_COUNT = 16;
 const MAX_PROOF_SUMMARY_BYTES = 6000;
 
 export function isMomentBackedVisibility( info ) {
@@ -14,16 +14,15 @@ export function isMomentBackedVisibility( info ) {
 
 }
 
-export function deriveVisibilityProofStatus( info, rawEvidenceStatus = 'OPEN' ) {
+export function deriveVisibilityProofStatus( info ) {
 
 	const momentBacked = isMomentBackedVisibility( info );
-	const rawOpen = rawEvidenceStatus === 'OPEN' || String( rawEvidenceStatus ).startsWith( 'OPEN' );
 
 	return {
 		momentBacked,
 		visibilityLabel: momentBacked ? 'visibility-moments' : 'visibility-scaffold-disabled',
-		visibilityStatus: momentBacked && rawOpen === false ? 'SUPPORTED' : 'OPEN',
-		ddgiStatus: momentBacked && rawOpen === false ?
+		visibilityStatus: momentBacked ? 'SUPPORTED' : 'OPEN',
+		ddgiStatus: momentBacked ?
 			'IMPLEMENTED-PRIVATE-DDGI-LITE-MOMENTS' :
 			'OPEN-VISIBILITY-MOMENTS-SCAFFOLD-DISABLED'
 	};
@@ -93,7 +92,12 @@ export function createLightProbeProofFacts( results ) {
 	const initial = getResult( results, 'initial' ).metrics;
 	const computeProjectionRuntimeParity = getResult( results, 'compute projection runtime parity' ).computeProjectionRuntimeParity;
 	const visibilityMomentInspection = getResult( results, 'visibility moment inspection' ).visibilityMomentInspection;
+	const sealedVisibilityWeightingDiagnostic = getResult( results, 'sealed visibility weighting diagnostic' ).sealedVisibilityWeightingDiagnostic;
 	const leakProofFacts = getResult( results, 'leak proof facts' ).leakProofFacts;
+	const sealedReceiverNormalDiagnostic = getResult( results, 'sealed receiver normal convention diagnostic' ).sealedReceiverNormalDiagnostic;
+	const receiverSurfaceQuadratureDiagnostic = sealedVisibilityWeightingDiagnostic.receiverSurfaceQuadratureDiagnostic;
+	const shContributionDiagnostic = sealedVisibilityWeightingDiagnostic.shContributionDiagnostic;
+	const receiverNormalSummary = sealedReceiverNormalDiagnostic.summary ?? {};
 	const sealedWall = leakProofFacts.sealedWall;
 	const sealedVisibility = sealedWall.visibility;
 
@@ -105,7 +109,6 @@ export function createLightProbeProofFacts( results ) {
 			hasBoundingBox: initial.hasBoundingBox === true
 		},
 		projection: {
-			status: computeProjectionRuntimeParity.status,
 			coefficientMaxDelta: finiteOrNull( computeProjectionRuntimeParity.coefficientMaxDelta ),
 			coefficientTolerance: computeProjectionRuntimeParity.coefficientTolerance,
 			atlasMaxDelta: finiteOrNull( computeProjectionRuntimeParity.atlasMaxDelta ),
@@ -113,15 +116,35 @@ export function createLightProbeProofFacts( results ) {
 			tolerancePass: computeProjectionRuntimeParity.tolerancePass === true
 		},
 		visibilityMoments: {
-			evidenceStatus: visibilityMomentInspection.evidenceStatus,
+			available: visibilityMomentInspection.available === true,
 			mode: visibilityMomentInspection.mode,
 			bytes: visibilityMomentInspection.bytes,
 			finiteSampleCount: visibilityMomentInspection.stats.finiteSampleCount,
 			hitSampleCount: visibilityMomentInspection.stats.hitSampleCount
 		},
+		visibilityWeighting: {
+			diagnosticScope: sealedVisibilityWeightingDiagnostic.diagnosticScope,
+			wrongSideEscapedCount: sealedVisibilityWeightingDiagnostic.escapeClassification.wrongSideEscapedCount,
+			wrongMinusCorrectSuppression: finiteOrNull( sealedVisibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ),
+			directionalSuppressionSupported: sealedVisibilityWeightingDiagnostic.summary.directionalSuppressionSupported === true
+		},
+		shContribution: {
+			correctSideMixedColorRowCount: shContributionDiagnostic.summary.correctSideMixedColorRowCount,
+			visibilityWrongRatioMean: finiteOrNull( shContributionDiagnostic.summary.visibilityWrongRatioMean ),
+			runtimeWrongRatioMean: finiteOrNull( shContributionDiagnostic.summary.runtimeWrongRatioMean )
+		},
+		receiverNormal: {
+			available: sealedReceiverNormalDiagnostic.available === true,
+			frontFaceAgreement: receiverNormalSummary.frontFaceAgreement === true,
+			shaderNormalAgreement: receiverNormalSummary.shaderNormalAgreement === true
+		},
+		receiverSurface: {
+			fixtureMode: receiverSurfaceQuadratureDiagnostic.fixtureMode,
+			quadratureRule: receiverSurfaceQuadratureDiagnostic.quadratureRule,
+			sampleCountPerReceiver: receiverSurfaceQuadratureDiagnostic.sampleCountPerReceiver,
+			surfaceCpuRenderDelta: finiteOrNull( receiverSurfaceQuadratureDiagnostic.summary.surfaceCpuRenderDelta )
+		},
 		sealedWall: {
-			status: sealedWall.status,
-			linearPromotionStatus: sealedWall.linearPromotionStatus,
 			wrongSideImprovement: sealedVisibility.wrongSide.improvement,
 			maskedWrongSideImprovement: sealedVisibility.maskedWrongSide.improvement,
 			preToneMaskedWrongSideImprovement: sealedVisibility.preToneMaskedWrongSide.improvement,
@@ -133,6 +156,15 @@ export function createLightProbeProofFacts( results ) {
 }
 
 export function evaluateLightProbeProofGates( facts ) {
+
+	const shWrongRatioMax = Math.max(
+		facts.shContribution.visibilityWrongRatioMean ?? 0,
+		facts.shContribution.runtimeWrongRatioMean ?? 0
+	);
+	const bakedShMixedColorRisk = facts.visibilityWeighting.wrongSideEscapedCount === 0 &&
+		facts.visibilityWeighting.directionalSuppressionSupported === true &&
+		facts.shContribution.correctSideMixedColorRowCount > 0 &&
+		shWrongRatioMax >= 0.25;
 
 	return [
 		createGate( {
@@ -165,9 +197,9 @@ export function evaluateLightProbeProofGates( facts ) {
 		createGate( {
 			id: 'projection.runtimeParity',
 			subject: 'projection',
-			metric: 'status',
-			actual: facts.projection.status,
-			expected: 'RUNTIME-PARITY-READBACK-PASSING',
+			metric: 'tolerancePass',
+			actual: facts.projection.tolerancePass,
+			expected: true,
 			pass: facts.projection.tolerancePass === true,
 			reason: 'Compute projection remains an explicit gate instead of a narrative status string.',
 			evidenceRef: 'compute projection runtime parity'
@@ -197,16 +229,68 @@ export function evaluateLightProbeProofGates( facts ) {
 		createGate( {
 			id: 'visibility.momentReadback',
 			subject: 'visibility',
-			metric: 'evidenceStatus',
-			actual: facts.visibilityMoments.evidenceStatus,
-			expected: 'SUPPORTED',
-			pass: facts.visibilityMoments.evidenceStatus === 'SUPPORTED' &&
+			metric: 'finiteHitReadback',
+			actual: facts.visibilityMoments.available === true &&
+				facts.visibilityMoments.mode === 'moments' &&
+				facts.visibilityMoments.bytes > 0 &&
+				facts.visibilityMoments.finiteSampleCount > 0 &&
+				facts.visibilityMoments.hitSampleCount > 0,
+			expected: true,
+			pass: facts.visibilityMoments.available === true &&
 				facts.visibilityMoments.mode === 'moments' &&
 				facts.visibilityMoments.bytes > 0 &&
 				facts.visibilityMoments.finiteSampleCount > 0 &&
 				facts.visibilityMoments.hitSampleCount > 0,
 			reason: 'Private visibility moments must have direct readback evidence before leak gates are interpreted.',
 			evidenceRef: 'visibility moment inspection'
+		} ),
+		createGate( {
+			id: 'receiverNormal.frontFaceShaderAgreement',
+			subject: 'receiverNormal',
+			metric: 'frontFaceShaderAgreement',
+			actual: facts.receiverNormal.frontFaceAgreement === true &&
+				facts.receiverNormal.shaderNormalAgreement === true,
+			expected: true,
+			pass: facts.receiverNormal.available === true &&
+				facts.receiverNormal.frontFaceAgreement === true &&
+				facts.receiverNormal.shaderNormalAgreement === true,
+			reason: 'Receiver CPU normals must match rendered front faces and front-side normalWorld samples before visibility thresholds are trusted.',
+			evidenceRef: 'sealed receiver normal convention diagnostic'
+		} ),
+		createGate( {
+			id: 'visibilityWeighting.directionalSuppression',
+			subject: 'visibilityWeighting',
+			metric: 'wrongMinusCorrectSuppression',
+			actual: facts.visibilityWeighting.wrongMinusCorrectSuppression,
+			expected: '<= 0',
+			pass: facts.visibilityWeighting.diagnosticScope === 'sealed-wall-receiver-centers' &&
+				facts.visibilityWeighting.directionalSuppressionSupported === true,
+			reason: 'Sealed-wall CPU visibility weighting must not suppress correct-side contribution more than wrong-side contribution.',
+			evidenceRef: 'sealed visibility weighting diagnostic'
+		} ),
+		createGate( {
+			id: 'receiverSurface.cpuRenderAgreement',
+			subject: 'receiverSurface',
+			metric: 'surfaceCpuRenderDelta',
+			actual: facts.receiverSurface.surfaceCpuRenderDelta,
+			expected: '<= 0.15',
+			pass: facts.receiverSurface.fixtureMode === 'sealed-wall' &&
+				facts.receiverSurface.quadratureRule === 'tensor-product-gauss-legendre-3x3-over-receiver-plane' &&
+				facts.receiverSurface.sampleCountPerReceiver === 9 &&
+				facts.receiverSurface.surfaceCpuRenderDelta !== null &&
+				facts.receiverSurface.surfaceCpuRenderDelta <= 0.15,
+			reason: 'Receiver-surface CPU quadrature should agree with rendered sealed-wall surface color within diagnostic tolerance.',
+			evidenceRef: 'sealed visibility weighting diagnostic'
+		} ),
+		createGate( {
+			id: 'shContribution.noBakedMixedColorRisk',
+			subject: 'shContribution',
+			metric: 'bakedShMixedColorRisk',
+			actual: bakedShMixedColorRisk,
+			expected: false,
+			pass: bakedShMixedColorRisk === false,
+			reason: 'Packed SH contribution evidence must not indicate mixed-color risk after escape and directional-suppression gates pass.',
+			evidenceRef: 'sealed visibility weighting diagnostic'
 		} ),
 		...SEALED_WALL_GATE_DEFINITIONS.map( ( { metric, threshold, reason } ) => createGate( {
 			id: `sealedWall.${ metric }`,
@@ -252,6 +336,10 @@ export function assertLightProbeProofSummary( summary, assert ) {
 		'projection.runtimeParity',
 		'projection.coefficientDelta',
 		'projection.atlasDelta',
+		'visibilityWeighting.directionalSuppression',
+		'receiverNormal.frontFaceShaderAgreement',
+		'receiverSurface.cpuRenderAgreement',
+		'shContribution.noBakedMixedColorRisk',
 		'sealedWall.wrongSideImprovement',
 		'sealedWall.maskedWrongSideImprovement',
 		'sealedWall.preToneMaskedWrongSideImprovement'
@@ -263,7 +351,7 @@ export function assertLightProbeProofSummary( summary, assert ) {
 	assert( gateIds.size === summary.gates.length,
 		'compact proof gates: expected unique gate ids.' );
 	assert( requiredGateIds.every( id => gateIds.has( id ) ),
-		'compact proof gates: expected required runtime, projection, visibility, and sealed-wall gate ids.' );
+		'compact proof gates: expected required runtime, projection, visibility, receiver-normal, and sealed-wall gate ids.' );
 	assert( summary.gates.every( gate =>
 		typeof gate.id === 'string' &&
 		typeof gate.subject === 'string' &&

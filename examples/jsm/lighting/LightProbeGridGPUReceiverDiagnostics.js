@@ -122,11 +122,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		const surfaceCpuRenderDelta = bestRenderAgreement.delta;
 
 		return {
-			status: surfaceCpuRenderDelta <= agreementTolerance ?
-				'SUPPORTED-SURFACE-CPU-RENDER-AGREEMENT' :
-				'OPEN-SURFACE-CPU-RENDER-MISMATCH',
 			fixtureMode,
-			proofBoundary: 'Proof-only receiver-surface quadrature over PlaneGeometry samples using packed SH/visibility readbacks; diagnostic mirror only, not runtime CPU readback or public API.',
 			quadratureRule: 'tensor-product-gauss-legendre-3x3-over-receiver-plane',
 			sampleCountPerReceiver: leftSurface.sampleCount,
 			summary: {
@@ -135,8 +131,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 				surfaceCpuRenderDelta,
 				surfaceCpuRenderDeltaMean,
 				surfaceCpuRenderDeltaMax,
-				cpuRenderAgreementAggregation,
-				cpuRenderAgreementGate: surfaceCpuRenderDelta <= agreementTolerance ? 'SUPPORTED' : 'OPEN'
+				cpuRenderAgreementAggregation
 			}
 		};
 
@@ -148,18 +143,13 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		const surfaceCpuRenderDelta = surfaceQuadratureDiagnostic.summary.surfaceCpuRenderDelta ?? 0;
 
 		return {
-			status: 'OPEN-GPU-DEBUG-CPU-SURFACE-MISMATCH',
 			fixtureMode,
-			proofBoundary: 'Compact GPU debug summary: the old proof-lab variant sweep is removed; keep this readback-only diagnostic open unless a focused runtime debug gate is reintroduced.',
 			runtimeDebugUnavailable: true,
-			reason: 'GPU debug variant sweeps were prototype proof-lab payloads and are no longer part of the compact sealed-wall verifier.',
 			summary: {
 				surfaceCpuRatioMax,
 				surfaceCpuRenderDelta,
 				gpuDebugSweepExecuted: false,
-				agreementMode: 'surface-quadrature-summary-only',
-				linearIrradianceAgreementGate: 'OPEN',
-				weightTermAgreementGate: 'OPEN'
+				agreementMode: 'surface-quadrature-summary-only'
 			}
 		};
 

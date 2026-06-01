@@ -121,7 +121,6 @@ async function captureLightProbeWebGLReference( page, options = {} ) {
 		return {
 			label: lightProbeWebGLReferenceLabel,
 			proofRole: 'same-class-webgl-reference',
-			referenceBoundary: 'WebGL LightProbeGrid same-class reference at 6^3 / 32px, captured as secondary screenshot-space evidence; not a production DDGI target and not a substitute for WebGPU e2e gates.',
 			metrics,
 			regions,
 			artifactPressure: createLightProbeImageArtifactPressure( regions ),

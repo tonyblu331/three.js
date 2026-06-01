@@ -73,31 +73,29 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 		'projection parity: expected WebGPU shader mapping to match CubeTexture convention for synthetic face data.' );
 	assert( projectionParity.maxShaderToWebGLGridDelta > 1e-3,
 		'projection parity: expected asymmetric fixture to prove WebGPU and WebGL render-target conventions are not directly interchangeable.' );
-	assert( projectionParity.computeProjectionParityContract?.status === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' &&
-		projectionParity.computeProjectionParityContract.previousStatus === 'PARITY-CANDIDATE-NOT-RUNTIME' &&
+	assert( projectionParity.computeProjectionParityContract?.status === undefined &&
+		projectionParity.computeProjectionParityContract.previousStatus === undefined &&
+		projectionParity.computeProjectionParityContract.runtimeStatusRequired === undefined &&
+		projectionParity.computeProjectionParityContract.runtimeParityReadbackStatus === undefined &&
 		projectionParity.computeProjectionParityContract.currentPath === 'fragment-coefficient-projection' &&
 		projectionParity.computeProjectionParityContract.proposedPath === 'compute-probe-reduction' &&
 		projectionParity.computeProjectionParityContract.candidatePlanningAllowed === true &&
 		projectionParity.computeProjectionParityContract.runtimePathIntroduced === true &&
 		projectionParity.computeProjectionParityContract.runtimeMarkersAllowed === true &&
 		projectionParity.computeProjectionParityContract.publicApiChangeAllowed === false &&
-		projectionParity.computeProjectionParityContract.runtimeStatusRequired === 'IMPLEMENTED-WITH-PARITY-EVIDENCE' &&
-		projectionParity.computeProjectionParityContract.runtimeParityReadbackStatus === 'PENDING-BROWSER-E2E' &&
 		projectionParity.computeProjectionParityContract.currentCubemapSweepsPerProbe === 9 &&
 		projectionParity.computeProjectionParityContract.proposedCubemapSweepsPerProbe === 1 &&
 		projectionParity.computeProjectionParityContract.fallbackPath === 'fragment-coefficient-projection' &&
 		projectionParity.computeProjectionParityContract.requiredGates.length >= 3 &&
-		projectionParity.computeProjectionParityContract.requiredPromotionEvidence?.status === 'REQUIRED-BEFORE-FULL-PARITY-PROMOTION' &&
+		projectionParity.computeProjectionParityContract.requiredPromotionEvidence?.status === undefined &&
+		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.statusTransition === undefined &&
 		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.syntheticFixtureParity.baseline === 'fragment-coefficient-projection' &&
 		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.syntheticFixtureParity.candidate === 'compute-probe-reduction' &&
 		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.syntheticFixtureParity.maxCoefficientDelta === 0.0001 &&
 		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.atlasRepackParity.baseline === 'inspectAtlasPacking' &&
-		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.adapterFallbackEvidence.unsupportedAdapterPath === 'fragment-coefficient-projection' &&
-		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.statusTransition.previous === 'PARITY-CANDIDATE-NOT-RUNTIME' &&
-		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.statusTransition.current === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' &&
-		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.statusTransition.promoted === 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
-	'projection parity: expected compute projection runtime to be implemented behind guards while full parity readback remains pending.' );
-	assert( projectionParity.computeProjectionCandidateOracle?.status === 'PROOF-ONLY-MOCK-PARITY-PASSING' &&
+		projectionParity.computeProjectionParityContract.requiredPromotionEvidence.adapterFallbackEvidence.unsupportedAdapterPath === 'fragment-coefficient-projection',
+	'projection parity: expected compute projection runtime contract to expose raw guard and promotion evidence without local status payload.' );
+	assert( projectionParity.computeProjectionCandidateOracle?.status === undefined &&
 		projectionParity.computeProjectionCandidateOracle.runtimePathIntroduced === false &&
 		projectionParity.computeProjectionCandidateOracle.baselinePath === 'fragment-coefficient-projection' &&
 		projectionParity.computeProjectionCandidateOracle.candidatePath === 'compute-probe-reduction' &&
@@ -106,15 +104,15 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 		projectionParity.computeProjectionCandidateOracle.maxCandidateToFragmentDelta <= projectionParity.computeProjectionCandidateOracle.tolerance &&
 		projectionParity.computeProjectionCandidateOracle.fixtures.length >= 3 &&
 		projectionParity.computeProjectionCandidateOracle.fixtures.every( fixture => fixture.candidateToFragmentDelta <= projectionParity.computeProjectionCandidateOracle.tolerance ),
-	'projection parity: expected proof-only compute candidate oracle to match fragment coefficient projection without introducing runtime.' );
-	assert( projectionParity.computeProjectionAdapterFallbackOracle?.status === 'RUNTIME-GUARDED-ADAPTER-FALLBACK-SPEC-PASSING' &&
+	'projection parity: expected proof-only compute candidate facts to match fragment coefficient projection without introducing runtime.' );
+	assert( projectionParity.computeProjectionAdapterFallbackOracle?.status === undefined &&
 		projectionParity.computeProjectionAdapterFallbackOracle.runtimePathIntroduced === true &&
 		projectionParity.computeProjectionAdapterFallbackOracle.publicApiChanged === false &&
 		projectionParity.computeProjectionAdapterFallbackOracle.defaultPath === 'fragment-coefficient-projection' &&
 		projectionParity.computeProjectionAdapterFallbackOracle.candidatePath === 'compute-probe-reduction' &&
 		projectionParity.computeProjectionAdapterFallbackOracle.scenarios.some( scenario =>
 			scenario.label === 'runtime-implemented-adapter-supported' &&
-			scenario.contractStatus === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' &&
+			scenario.runtimeGuardedImplementationPresent === true &&
 			scenario.selectedPath === 'compute-probe-reduction' &&
 			scenario.fallbackUsed === false
 		) &&
@@ -133,7 +131,7 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 			scenario.selectedPath === 'compute-probe-reduction' &&
 			scenario.fallbackUsed === false
 		),
-	'projection parity: expected adapter fallback oracle to select compute only for implemented runtime with capabilities, otherwise fragment fallback.' );
+	'projection parity: expected adapter fallback facts to select compute only for implemented runtime with capabilities, otherwise fragment fallback.' );
 	results.push( { step: 'projection parity', projectionParity } );
 
 	const shMathContract = await call( 'inspectSHMathContract' );
@@ -195,7 +193,7 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 	'atlas packing: expected native texture y=3 to contain grid y=3.' );
 	assert( atlasPacking.maxReadbackDelta < 0.008,
 		`atlas packing: expected synthetic render-path readback to match packed SH layout, got ${ atlasPacking.maxReadbackDelta }.` );
-	assert( atlasPacking.computeProjectionAtlasRepackOracle?.status === 'PROOF-ONLY-ATLAS-REPACK-PARITY-PASSING' &&
+	assert( atlasPacking.computeProjectionAtlasRepackOracle?.status === undefined &&
 		atlasPacking.computeProjectionAtlasRepackOracle.runtimePathIntroduced === false &&
 		atlasPacking.computeProjectionAtlasRepackOracle.sourcePath === 'compute-written coefficientTarget-compatible rows' &&
 		atlasPacking.computeProjectionAtlasRepackOracle.repackPath === '_repackAtlas' &&
@@ -209,15 +207,16 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 	results.push( { step: 'atlas packing', atlasPacking } );
 
 	const computeProjectionRuntimeParity = await call( 'inspectComputeProjectionRuntimeParity' );
-	assert( [ 'RUNTIME-PARITY-READBACK-PASSING', 'OPEN-RUNTIME-PARITY-DELTA', 'OPEN-RUNTIME-COMPUTE-FALLBACK' ].includes( computeProjectionRuntimeParity.status ) &&
+	assert( computeProjectionRuntimeParity.status === undefined &&
+		computeProjectionRuntimeParity.statusTransition === undefined &&
 		computeProjectionRuntimeParity.runtimePathIntroduced === true &&
 		computeProjectionRuntimeParity.baselinePath === 'fragment-coefficient-projection' &&
 		computeProjectionRuntimeParity.candidatePath === 'compute-probe-reduction' &&
 		computeProjectionRuntimeParity.fragmentBackend === 'fragment-coefficient-projection',
-	'compute projection runtime parity: expected guarded runtime parity evidence to report fragment baseline and compute candidate paths.' );
+	'compute projection runtime parity: expected raw guarded runtime parity evidence without local status payload.' );
 	assert( computeProjectionRuntimeParity.computeFallbackReason !== "Cannot read properties of null (reading 'environment')",
 	'compute projection runtime parity: compute candidate must not regress to the null scene/material environment fallback.' );
-	if ( computeProjectionRuntimeParity.status === 'RUNTIME-PARITY-READBACK-PASSING' ) {
+	if ( computeProjectionRuntimeParity.tolerancePass === true ) {
 
 		assert( computeProjectionRuntimeParity.computeBackend === 'compute-probe-reduction' &&
 			computeProjectionRuntimeParity.computeFallbackReason === null,
@@ -232,30 +231,26 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 			computeProjectionRuntimeParity.atlasChecks.length >= 7 &&
 			computeProjectionRuntimeParity.atlasChecks.every( check => check.pass === true ),
 		`compute projection runtime parity: expected compute atlas repack to match fragment atlas within tolerance, got ${ computeProjectionRuntimeParity.atlasMaxDelta }.` );
-		assert( computeProjectionRuntimeParity.tolerancePass === true &&
-			computeProjectionRuntimeParity.statusTransition.previous === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY' &&
-			computeProjectionRuntimeParity.statusTransition.current === 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
-		'compute projection runtime parity: expected tolerance validation to authorize the full parity evidence status.' );
+		assert( computeProjectionRuntimeParity.tolerancePass === true,
+		'compute projection runtime parity: expected tolerance validation to authorize gate support.' );
 
 	} else {
 
 		assert( computeProjectionRuntimeParity.computeBackend === 'fragment-coefficient-projection' ||
 			computeProjectionRuntimeParity.tolerancePass === false,
 		'compute projection runtime parity: expected open evidence to keep full parity promotion blocked.' );
-		assert( computeProjectionRuntimeParity.statusTransition.current === 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
-			'compute projection runtime parity: open runtime evidence must keep the guarded-pending contract state.' );
 
 	}
 	results.push( { step: 'compute projection runtime parity', computeProjectionRuntimeParity } );
 
 	const computeProjectionProfiling = await call( 'inspectComputeProjectionProfiling' );
-	assert( computeProjectionProfiling.status === 'DIAGNOSTIC-PROJECTION-PROFILE-CAPTURED' &&
-		computeProjectionProfiling.timingPolicy === 'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' &&
-		computeProjectionProfiling.timingGated === false &&
-		computeProjectionProfiling.gpuTimerQueryStatus === 'NOT-CAPTURED' &&
-		computeProjectionProfiling.projectionPhaseTimingStatus === 'CAPTURED-NON-DETERMINISTIC-PERFORMANCE-NOW' &&
+	assert( computeProjectionProfiling.status === undefined &&
+		computeProjectionProfiling.timingPolicy === undefined &&
+		computeProjectionProfiling.timingGated === undefined &&
+		computeProjectionProfiling.gpuTimerQueryStatus === undefined &&
+		computeProjectionProfiling.projectionPhaseTimingStatus === undefined &&
 		computeProjectionProfiling.projectionTimingSources.includes( 'non-deterministic-performance-now' ),
-	'compute projection profiling: expected diagnostic non-deterministic projection phase timing while explicitly preserving the no gated GPU timer claim.' );
+	'compute projection profiling: expected raw projection timing sources without diagnostic status/policy payload.' );
 	assert( computeProjectionProfiling.staticWork.fragmentCubemapSweepsPerProbe === 9 &&
 		computeProjectionProfiling.staticWork.computeCubemapSweepsPerProbe === 1 &&
 		computeProjectionProfiling.staticWork.fragmentTexelVisits === 6912 &&

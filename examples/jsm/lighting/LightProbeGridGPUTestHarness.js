@@ -606,30 +606,24 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const computeCandidateMaxDelta = Math.max( ...computeCandidateFixtures.map( fixture => fixture.candidateToFragmentDelta ) );
 		const resolveComputeProjectionFallbackDecision = ( {
 			label,
-			contractStatus,
+			runtimeGuardedImplementationPresent,
 			supportsComputeProjection,
 			supportsStorageTexture
 		} ) => {
 
-			const computeRuntimeAllowed = [
-				'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
-				'IMPLEMENTED-WITH-PARITY-EVIDENCE'
-			].includes( contractStatus ) &&
+			const computeRuntimeAllowed = runtimeGuardedImplementationPresent === true &&
 				supportsComputeProjection === true &&
 				supportsStorageTexture === true;
 
 			return {
 				label,
-				contractStatus,
+				runtimeGuardedImplementationPresent,
 				supportsComputeProjection,
 				supportsStorageTexture,
 				selectedPath: computeRuntimeAllowed ?
 					'compute-probe-reduction' :
 					'fragment-coefficient-projection',
-				fallbackUsed: computeRuntimeAllowed === false,
-				reason: computeRuntimeAllowed ?
-					'guarded runtime implementation and adapter capabilities allow compute candidate path' :
-					'fragment fallback remains active until guarded runtime implementation and required adapter capabilities are both available'
+				fallbackUsed: computeRuntimeAllowed === false
 			};
 
 		};
@@ -637,25 +631,25 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const fallbackScenarios = [
 			resolveComputeProjectionFallbackDecision( {
 				label: 'runtime-implemented-adapter-supported',
-				contractStatus: 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
+				runtimeGuardedImplementationPresent: true,
 				supportsComputeProjection: true,
 				supportsStorageTexture: true
 			} ),
 			resolveComputeProjectionFallbackDecision( {
 				label: 'unsupported-compute-capability',
-				contractStatus: 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
+				runtimeGuardedImplementationPresent: true,
 				supportsComputeProjection: false,
 				supportsStorageTexture: true
 			} ),
 			resolveComputeProjectionFallbackDecision( {
 				label: 'unsupported-storage-texture-capability',
-				contractStatus: 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
+				runtimeGuardedImplementationPresent: true,
 				supportsComputeProjection: true,
 				supportsStorageTexture: false
 			} ),
 			resolveComputeProjectionFallbackDecision( {
 				label: 'promoted-supported-candidate',
-				contractStatus: 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
+				runtimeGuardedImplementationPresent: true,
 				supportsComputeProjection: true,
 				supportsStorageTexture: true
 			} )
@@ -665,14 +659,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			scenario.label !== 'promoted-supported-candidate'
 		);
 		const computeProjectionAdapterFallbackOracle = {
-			status: fallbackRequiredScenarios.every( scenario =>
-				scenario.selectedPath === 'fragment-coefficient-projection' &&
-				scenario.fallbackUsed === true
-			) &&
-			fallbackScenarios.find( scenario => scenario.label === 'runtime-implemented-adapter-supported' )?.selectedPath === 'compute-probe-reduction' &&
-			fallbackScenarios.find( scenario => scenario.label === 'promoted-supported-candidate' )?.selectedPath === 'compute-probe-reduction' ?
-				'RUNTIME-GUARDED-ADAPTER-FALLBACK-SPEC-PASSING' :
-				'OPEN-PROOF-ONLY-ADAPTER-FALLBACK-DELTA',
 			runtimePathIntroduced: true,
 			publicApiChanged: false,
 			defaultPath: 'fragment-coefficient-projection',
@@ -689,9 +675,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			maxShaderToCubeTextureDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToCubeTextureDelta ) ),
 			maxShaderToWebGLGridDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToWebGLGridDelta ) ),
 			computeProjectionCandidateOracle: {
-				status: computeCandidateMaxDelta <= 0.0001 ?
-					'PROOF-ONLY-MOCK-PARITY-PASSING' :
-					'OPEN-PROOF-ONLY-MOCK-PARITY-DELTA',
 				runtimePathIntroduced: false,
 				baselinePath: 'fragment-coefficient-projection',
 				candidatePath: 'compute-probe-reduction',
@@ -704,16 +687,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			},
 			computeProjectionAdapterFallbackOracle,
 			computeProjectionParityContract: {
-				status: 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
-				previousStatus: 'PARITY-CANDIDATE-NOT-RUNTIME',
 				currentPath: 'fragment-coefficient-projection',
 				proposedPath: 'compute-probe-reduction',
 				candidatePlanningAllowed: true,
 				runtimePathIntroduced: true,
 				runtimeMarkersAllowed: true,
 				publicApiChangeAllowed: false,
-				runtimeStatusRequired: 'IMPLEMENTED-WITH-PARITY-EVIDENCE',
-				runtimeParityReadbackStatus: 'PENDING-BROWSER-E2E',
 				currentCubemapSweepsPerProbe: 9,
 				proposedCubemapSweepsPerProbe: 1,
 				currentCoefficientWritesPerProbe: 9,
@@ -731,7 +710,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					'fragment coefficient projection remains fallback until compute parity is supported on target adapters'
 				],
 				requiredPromotionEvidence: {
-					status: 'REQUIRED-BEFORE-FULL-PARITY-PROMOTION',
 					syntheticFixtureParity: {
 						baseline: 'fragment-coefficient-projection',
 						candidate: 'compute-probe-reduction',
@@ -746,12 +724,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					adapterFallbackEvidence: {
 						unsupportedAdapterPath: 'fragment-coefficient-projection',
 						required: true
-					},
-					statusTransition: {
-						previous: 'PARITY-CANDIDATE-NOT-RUNTIME',
-						current: 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
-						candidate: 'PARITY-CANDIDATE-NOT-RUNTIME',
-						promoted: 'IMPLEMENTED-WITH-PARITY-EVIDENCE'
 					}
 				},
 				tolerance: 0.0001
@@ -857,11 +829,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			const tolerancePass = computeSelected && coefficientPass && atlasPass;
 
 			return {
-				status: tolerancePass ?
-					'RUNTIME-PARITY-READBACK-PASSING' :
-					computeSelected ?
-						'OPEN-RUNTIME-PARITY-DELTA' :
-						'OPEN-RUNTIME-COMPUTE-FALLBACK',
 				runtimePathIntroduced: true,
 				baselinePath: 'fragment-coefficient-projection',
 				candidatePath: 'compute-probe-reduction',
@@ -882,13 +849,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				atlasPass,
 				tolerancePass,
 				coefficientReadbackPixels: coefficientWidth * coefficientHeight,
-				atlasChecks,
-				statusTransition: {
-					previous: 'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY',
-					current: tolerancePass ?
-						'IMPLEMENTED-WITH-PARITY-EVIDENCE' :
-						'IMPLEMENTED-GUARDED-PENDING-RUNTIME-PARITY'
-				}
+				atlasChecks
 			};
 
 		} finally {
@@ -919,10 +880,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			const grid = createProfileGrid();
 			const projectionMsSamples = [];
-			const selectedBackends = [];
-			const projectionTimingSources = [];
+			const projectionTimingSources = new Set();
 			const fallbackReasons = new Set();
-			let deterministicTimerDetected = false;
+			let allRunsSelectedExpectedBackend = true;
 
 			try {
 
@@ -938,24 +898,22 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					}
 
 					projectionMsSamples.push( timings.projectionMs );
-					selectedBackends.push( timings.projectionBackend );
-					projectionTimingSources.push( timings.projectionTimingSource ?? timings.timingSource ?? 'unavailable' );
-					deterministicTimerDetected = deterministicTimerDetected || timings.deterministicTimerDetected === true;
+					projectionTimingSources.add( timings.projectionTimingSource ?? timings.timingSource ?? 'unavailable' );
+					allRunsSelectedExpectedBackend &&= timings.projectionBackend === expectedBackend;
 
 					if ( timings.computeProjectionFallbackReason ) fallbackReasons.add( timings.computeProjectionFallbackReason );
 
 				}
 
 				return {
-					requestedBackend,
-					expectedBackend,
-					selectedBackends: Array.from( new Set( selectedBackends ) ),
-					measuredRunCount: projectionMsSamples.length,
-					projectionMs: summarizeMetric( projectionMsSamples ),
-					projectionTimingSources: Array.from( new Set( projectionTimingSources ) ),
-					deterministicTimerDetected,
-					allRunsSelectedExpectedBackend: selectedBackends.every( backend => backend === expectedBackend ),
-					fallbackReasons: Array.from( fallbackReasons )
+					result: {
+						requestedBackend,
+						measuredRunCount: projectionMsSamples.length,
+						projectionMs: summarizeMetric( projectionMsSamples ),
+						allRunsSelectedExpectedBackend,
+						fallbackReasons: Array.from( fallbackReasons )
+					},
+					projectionTimingSources: Array.from( projectionTimingSources )
 				};
 
 			} finally {
@@ -966,51 +924,23 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		};
 
-		const fragment = await profileBackend( 'force-fragment', 'fragment-coefficient-projection' );
-		const compute = await profileBackend( 'force-compute', 'compute-probe-reduction' );
-		const hasProjectionTiming = fragment.projectionMs.median !== null &&
-			compute.projectionMs.median !== null &&
-			fragment.projectionMs.median > 0 &&
-			compute.projectionMs.median > 0;
-		const projectionMedianSpeedupRatio = hasProjectionTiming ?
-			roundMetric( fragment.projectionMs.median / compute.projectionMs.median ) :
-			null;
-		const projectionMedianReductionPercent = hasProjectionTiming ?
-			roundMetric( ( 1 - compute.projectionMs.median / fragment.projectionMs.median ) * 100 ) :
-			null;
-		const selectedExpectedBackends = fragment.allRunsSelectedExpectedBackend && compute.allRunsSelectedExpectedBackend;
+		const fragmentProfile = await profileBackend( 'force-fragment', 'fragment-coefficient-projection' );
+		const computeProfile = await profileBackend( 'force-compute', 'compute-probe-reduction' );
+		const fragment = fragmentProfile.result;
+		const compute = computeProfile.result;
 		const projectionTimingSources = Array.from( new Set( [
-			...( fragment.projectionTimingSources ?? [] ),
-			...( compute.projectionTimingSources ?? [] )
+			...fragmentProfile.projectionTimingSources,
+			...computeProfile.projectionTimingSources
 		] ) );
-		const usesNonDeterministicProjectionTiming = projectionTimingSources.includes( 'non-deterministic-performance-now' );
 
 		return {
-			status: selectedExpectedBackends ?
-				'DIAGNOSTIC-PROJECTION-PROFILE-CAPTURED' :
-				'OPEN-PROJECTION-PROFILE-BACKEND-FALLBACK',
-			timingPolicy: hasProjectionTiming ?
-				'DIAGNOSTIC-PROJECTION-PHASE-NON-GATED' :
-				'DIAGNOSTIC-WALL-CLOCK-NOT-GATED',
-			timingGated: false,
-			gpuTimerQueryStatus: 'NOT-CAPTURED',
-			projectionPhaseTimingStatus: hasProjectionTiming ?
-				usesNonDeterministicProjectionTiming ?
-					'CAPTURED-NON-DETERMINISTIC-PERFORMANCE-NOW' :
-					'CAPTURED-PERFORMANCE-NOW' :
-				'UNAVAILABLE-DETERMINISTIC-TIMER-ZERO',
 			projectionTimingSources,
-			deterministicTimerDetected: fragment.deterministicTimerDetected || compute.deterministicTimerDetected,
-			claimBoundary: 'Static cubemap sweep reduction is evidence; wall-clock medians are diagnostic and must not be presented as guaranteed GPU speedup.',
 			resolution,
 			cubemapSize,
-			warmupRuns,
 			measuredRuns,
 			staticWork,
 			fragment,
-			compute,
-			projectionMedianSpeedupRatio,
-			projectionMedianReductionPercent
+			compute
 		};
 
 	};
@@ -1192,9 +1122,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			const allReadbackChecks = [ ...readbackChecks, ...paddingChecks ];
 			const maxReadbackDelta = roundMetric( Math.max( ...allReadbackChecks.map( check => check.maxDelta ) ) );
 			const computeProjectionAtlasRepackOracle = {
-				status: maxReadbackDelta < 0.008 ?
-					'PROOF-ONLY-ATLAS-REPACK-PARITY-PASSING' :
-					'OPEN-PROOF-ONLY-ATLAS-REPACK-PARITY-DELTA',
 				runtimePathIntroduced: false,
 				sourcePath: 'compute-written coefficientTarget-compatible rows',
 				baselinePath: 'inspectAtlasPacking',
@@ -1242,7 +1169,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const resolution = info.resolution ?? 0;
 		const textureDepth = info.texture?.depth ?? _lightProbeContext.probeGrid.totalProbes ?? 0;
 		const createMomentQualityProfile = ( stats = null ) => ( {
-			status: stats !== null && stats.finiteSampleCount > 0 ? 'CAPTURED-RADIAL-MOMENT-READBACK' : 'OPEN-NO-MOMENT-READBACK',
 			encoding: info.encoding ?? 'unavailable',
 			activeResolution: resolution,
 			activeRepackMode: 'five-tap-octa-neighborhood',
@@ -1271,10 +1197,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				...info,
-				proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
 				stats,
 				momentQualityProfile: createMomentQualityProfile( stats ),
-				evidenceStatus: 'OPEN',
 				reason
 			};
 
@@ -1337,10 +1261,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		return {
 			...info,
-			proofBoundary: 'readback-only verifier for private DDGI-lite visibility/depth moments; not a public API contract.',
 			stats,
-			momentQualityProfile: createMomentQualityProfile( stats ),
-			evidenceStatus: finiteSamples.length === readbackPoints.length && hitSampleCount > 0 ? 'SUPPORTED' : 'OPEN'
+			momentQualityProfile: createMomentQualityProfile( stats )
 		};
 
 	};
@@ -1654,8 +1576,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			objectDarkTailRatio: roundMetric( maxDarkPixelRatio ),
 			objectBlackTailRatio: roundMetric( maxBlackPixelRatio ),
 			luminanceFloor: roundMetric( luminanceFloor ),
-			cellEdgeContrast: roundMetric( maxCellEdgeContrast ),
-			status: maxBlackPixelRatio > 0.15 || luminanceFloor < 24 ? 'PRESSURE' : 'bounded'
+			cellEdgeContrast: roundMetric( maxCellEdgeContrast )
 		};
 
 	};
@@ -1918,7 +1839,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 	const groundingParitySnapshotCases = {
 		'low-res-damped': {
 			proofRole: 'baseline',
-			referenceBoundary: 'Current damped WebGPU low-res diagnostic baseline.',
 			resolution: 4,
 			cubemapSize: 8,
 			band1Intensity: 0.6,
@@ -1928,7 +1848,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		'low-res-unweighted': {
 			proofRole: 'candidate',
-			referenceBoundary: 'Full first-band WebGPU low-res candidate using hardware-filtered unweighted sampling.',
 			resolution: 4,
 			cubemapSize: 8,
 			band1Intensity: 1,
@@ -1938,7 +1857,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		'low-res-validity-weighted': {
 			proofRole: 'candidate-weighted',
-			referenceBoundary: 'Full first-band WebGPU low-res candidate using scoped validity/normal-weighted sampling.',
 			resolution: 4,
 			cubemapSize: 8,
 			band1Intensity: 1,
@@ -1948,12 +1866,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		'webgpu-webgl-density-reference': {
 			proofRole: 'same-budget-artifact-pressure',
-			referenceBoundary: 'WebGPU row using the WebGL LightProbeGrid reference density/cubemap budget as an artifact pressure stress row, not a visual-quality win; higher bake detail can expose low-order / 9-coefficient SH representation dark-tail/ringing artifacts.',
 			antiRingingPolicy: {
 				mode: 'full-band-stress',
 				bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted',
-				action: 'Expose the high-contrast low-order SH representation pressure case without claiming visual quality.'
+				runtimePath: 'hardware-filtered-unweighted'
 			},
 			resolution: 6,
 			cubemapSize: 32,
@@ -1964,12 +1880,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		'webgpu-webgl-density-shadowless': {
 			proofRole: 'same-budget-shadow-control',
-			referenceBoundary: 'Same 6³ / 32px stress budget with bake-time shadows disabled to isolate whether black-tail pressure is dominated by baked direct-shadow detail.',
 			antiRingingPolicy: {
 				mode: 'shadowless-cause-control',
 				bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted',
-				action: 'Hold the same SH band policy while removing bake-time shadow contrast.'
+				runtimePath: 'hardware-filtered-unweighted'
 			},
 			resolution: 6,
 			cubemapSize: 32,
@@ -1981,12 +1895,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		'webgpu-webgl-density-shadow-crisp': {
 			proofRole: 'same-budget-direct-shadow-control',
-			referenceBoundary: 'Same 6³ / 32px stress budget with a higher-resolution, zero-radius direct shadow map during bake to separate shadow-map filtering dirt from low-order SH representation pressure.',
 			antiRingingPolicy: {
 				mode: 'direct-shadow-crisp-cause-control',
 				bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted',
-				action: 'Hold SH bands and probe budget constant while changing only the direct shadow-map bake settings.'
+				runtimePath: 'hardware-filtered-unweighted'
 			},
 			resolution: 6,
 			cubemapSize: 32,
@@ -2000,12 +1912,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		},
 		'webgpu-webgl-density-damped': {
 			proofRole: 'same-budget-quality-candidate',
-			referenceBoundary: 'Same 6³ / 32px stress budget with anti-ringing first-band damping promoted as the quality candidate for the muddy black-tail artifact.',
 			antiRingingPolicy: {
 				mode: 'band1-damped-quality',
 				bandPolicy: 'L0 preserved, L1=0.6, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted',
-				action: 'Reduce first-band directional overshoot after high-detail bake compression while preserving probe intensity, bake budget, and the fast unweighted sample() path.'
+				runtimePath: 'hardware-filtered-unweighted'
 			},
 			resolution: 6,
 			cubemapSize: 32,
@@ -2059,12 +1969,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		return {
 			label,
 			proofRole: snapshotCase.proofRole,
-			referenceBoundary: snapshotCase.referenceBoundary,
 			antiRingingPolicy: snapshotCase.antiRingingPolicy ?? {
 				mode: 'not-applied',
 				bandPolicy: 'demo default',
-				runtimePath: _lightProbeContext.params.leakReductionMode === 'normal' ? 'manual-weighted-textureLoad' : 'hardware-filtered-unweighted',
-				action: 'Not part of the same-budget density anti-ringing candidate family.'
+				runtimePath: _lightProbeContext.params.leakReductionMode === 'normal' ? 'manual-weighted-textureLoad' : 'hardware-filtered-unweighted'
 			},
 			probeIntensity: _lightProbeContext.params.probeIntensity,
 			probeHelperIntensity: _lightProbeContext.params.probeHelperIntensity,
@@ -2162,9 +2070,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		if ( _lightProbeContext.leakFixture === null ) {
 
 			return {
-				status: 'OPEN-NO-LEAK-FIXTURE',
+				available: false,
 				fixtureMode,
-				proofBoundary: 'proof-only receiver normal convention diagnostic; no runtime constants changed.'
+				missingReason: 'no-leak-fixture'
 			};
 
 		}
@@ -2335,19 +2243,13 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				frontSideSample.rightReceiverSurface.closestNormalConvention === 'cpu-normal';
 
 			return {
-				status: frontFaceAgreement === true && shaderNormalAgreement === true ?
-					'SUPPORTED-CPU-NORMAL-MATCHES-FRONT-FACE-SHADER' :
-					'OPEN-NORMAL-CONVENTION-MISMATCH',
+				available: true,
 				fixtureMode,
-				proofBoundary: 'proof-only receiver normal convention diagnostic; compares CPU +Z, inverted +Z, normalWorld color sample, and actual front/back raycast side without changing runtime constants.',
 				receivers,
 				shaderNormalSamples,
 				summary: {
 					frontFaceAgreement,
-					shaderNormalAgreement,
-					diagnosticConclusion: frontFaceAgreement === true && shaderNormalAgreement === true ?
-						'CPU receiver normal convention matches the visible front face and normalWorld diagnostic sample; prefer investigating render-region contamination or baked SH/color contamination before runtime threshold tuning.' :
-						'CPU receiver normal convention does not fully match the rendered front/back side or normalWorld sample; fix verifier/render normal convention before any DDGI-lite threshold tuning.'
+					shaderNormalAgreement
 				}
 			};
 
@@ -2485,20 +2387,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		return {
 			fixtureMode: 'sealed-wall',
-			proofBoundary: 'Compact sealed-wall leak proof facts for default verifier gates; exploratory thin-wall, zero-thickness, and artifact matrices are intentionally excluded from default artifacts.',
 			proofSettings,
 			sampling,
 			rows,
 			sealedWall: {
-				status: wrongSideImprovement >= 0.05 &&
-					maskedWrongSideImprovement >= 0.05 &&
-					correctBouncePreservation >= 0.9 ?
-					'SUPPORTED-BY-SEALED-FIXTURE' :
-					'OPEN',
-				linearPromotionStatus: preToneMaskedWrongSideImprovement >= 0.05 &&
-					preToneMaskedCorrectBouncePreservation >= 0.9 ?
-					'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' :
-					'OPEN',
 				presentationMetricMode: 'tone-mapped-canvas-ratio-legacy',
 				linearPromotionMetricMode: 'pre-tone-linear-output-masked-visible-pixels',
 				visibility: {

@@ -20,24 +20,26 @@ Harden the LightProbeGridGPU diagnostics/harness stack by deleting prototype pay
 
 | File | Lines | Role | Status |
 | --- | ---: | --- | --- |
-| `examples/jsm/lighting/LightProbeGridGPU.js` | 1262 | Runtime facade | GPU-resident; no CPU readback matches. |
-| `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2285 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, profiling, leak-proof row, visibility-moment, and runtime-smoke payload duplication. |
-| `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 601 | CPU/proof visibility weighting study | Trimmed unconsumed row variance/hit-confidence summaries and unused contribution ratios. |
-| `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | 188 | SH pressure diagnostics | Currently compact enough; avoid further splitting unless overlap appears. |
-| `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 139 | Receiver/surface diagnostics | Currently compact enough. |
-| `examples/jsm/lighting/LightProbeGridGPUExampleGUI.js` | 104 | Example controls | Stable. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProofReadback.js` | 214 | Proof-only readback adapter | Correct boundary: diagnostics may import, runtime must not. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js` | 58 | Shared constants | Intentionally small. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js` | 118 | Atlas/probe addressing and repack | Cohesive. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js` | 178 | Proof-only CPU SH math | Correct boundary. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js` | 157 | Projection material/node builders | Cohesive runtime helper. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js` | 102 | Visibility material/load helpers | Cohesive runtime helper. |
-| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js` | 113 | Bake state/result helpers | Cohesive runtime helper. |
-| `test/e2e/lightprobegrid-gpu-artifacts.js` | 97 | Compact artifact contract | Healthy after earlier report deletion. |
-| `test/e2e/lightprobegrid-gpu-proof-gates.js` | 264 | Proof gate derivation/assertions | Sealed-wall thresholds are data-driven; watch for future status drift. |
-| `test/e2e/lightprobegrid-gpu-runner-*.js` | 679 | Smoke assertion runners | Mostly reasonable; matrix/visibility/runtime assertions now target compact contracts instead of raw rows. |
+| `examples/jsm/lighting/LightProbeGridGPU.js` | 1669 | Runtime facade | GPU-resident; no CPU readback matches. |
+| `examples/jsm/lighting/LightProbeGridGPUTestHarness.js` | 2806 | Browser proof/smoke harness | Main remaining monolith. Recent slices removed setter, fixture, rejection, profiling, leak-proof row, leak-proof promotion, visibility-moment, runtime-smoke, profiler/runtime-parity/projection-oracle/artifact-pressure verdict payload, artifact snapshot prose, projection fallback prose, and receiver-normal verdict duplication. |
+| `examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js` | 708 | CPU/proof visibility weighting study | Trimmed unconsumed row variance/hit-confidence summaries, unused contribution ratios, duplicate escape-count families, and directional-suppression verdict payload. |
+| `examples/jsm/lighting/LightProbeGridGPUShDiagnostics.js` | 198 | SH pressure diagnostics | SH mixed-color risk now emits raw row/ratio facts; proof gates own the verdict. |
+| `examples/jsm/lighting/LightProbeGridGPUReceiverDiagnostics.js` | 164 | Receiver/surface diagnostics | Surface CPU/render and GPU-debug diagnostics now emit raw facts without local verdict/narrative payload. |
+| `examples/jsm/lighting/LightProbeGridGPUExampleGUI.js` | 161 | Example controls | Stable. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProofReadback.js` | 285 | Proof-only readback adapter | Correct boundary: diagnostics may import, runtime must not. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js` | 60 | Shared constants | Intentionally small. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js` | 159 | Atlas/probe addressing and repack | Cohesive. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js` | 263 | Proof-only CPU SH math | Correct boundary. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js` | 242 | Projection material/node builders | Cohesive runtime helper. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js` | 135 | Visibility material/load helpers | Cohesive runtime helper. |
+| `examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUBake.js` | 132 | Bake state/result helpers | Cohesive runtime helper. |
+| `test/e2e/lightprobegrid-gpu-artifacts.js` | 136 | Compact artifact contract | Healthy after earlier report deletion; WebGL reference artifact keeps raw fields without prose boundary payload. |
+| `test/e2e/lightprobegrid-gpu-image-metrics.js` | 174 | Screenshot artifact metrics | Artifact pressure now emits raw ratios/floors only. |
+| `test/e2e/lightprobegrid-gpu-proof-validation.js` | 281 | Artifact proof assertions | Owns artifact pressure thresholds instead of trusting payload status. |
+| `test/e2e/lightprobegrid-gpu-proof-gates.js` | 385 | Proof gate derivation/assertions | Visibility moment, projection parity, and sealed-wall thresholds are data-driven; receiver-normal, visibility-weighting, receiver-surface, and SH contribution verdicts now live here instead of the harness/study/diagnostic modules. |
+| `test/e2e/lightprobegrid-gpu-runner-*.js` | 761 | Smoke assertion runners | Mostly reasonable; core/matrix/visibility/runtime assertions now target compact raw contracts instead of local verdict payloads or raw rows. |
 
-Tracked LightProbeGridGPU feature/proof set: about 6,559 LOC, excluding this plan.
+Tracked LightProbeGridGPU feature/proof set: about 8,264 LOC, excluding this plan.
 
 ## Dependency rules
 
@@ -72,11 +74,23 @@ Reports / e2e
 - Harness endpoint setters now share `setBakeParameter()`.
 - Harness contract/unit/projection fixture setup is consolidated locally.
 - Harness validation rejection checks share one local capture primitive.
-- Compute projection profiling keeps warmup execution but no longer returns warmup or full per-run payload arrays.
+- Compute projection profiling keeps warmup execution but no longer returns warmup, full per-run payload arrays, nested backend arrays, deterministic timer flags, diagnostic status/policy text, claim text, or median speedup summaries.
+- Compute projection runtime parity now returns raw tolerance, coefficient, atlas, backend, and fallback facts; proof gates own the parity verdict.
+- Projection parity candidate/fallback/atlas-repack oracles now return raw path, threshold, capability, and delta facts without proof-only status or prose reason strings.
+- Artifact pressure metrics now return raw black-tail/luminance/contrast facts; proof validation owns pressure/bounded thresholds.
+- Artifact snapshot rows now keep structured role/policy facts without prose `referenceBoundary` or `action` payload.
 - Leak-proof rows now share top-level proof settings and sampling instead of repeating frozen fixture controls per row.
 - Visibility weighting summaries no longer carry unused variance, hit-confidence, min/max visibility-mass, or mirrored correct-side contribution ratios.
 - Visibility moment inspection reports compact counters/ranges instead of raw readback sample arrays and deferred sweep-plan narrative.
 - Runtime smoke diagnostics now keep benchmark, bake coalescing, and leak-mode comparison payloads to asserted fields only.
+- Visibility escape classification now stores per-receiver escaped probes only and derives aggregate counts once, instead of duplicating per-receiver count families.
+- Receiver-normal diagnostics now return raw availability/agreement facts; the proof gate owns the front-face/shader verdict.
+- Visibility-weighting diagnostics now return raw directional-suppression and escape facts; the proof gate owns the directional suppression verdict.
+- Receiver-surface diagnostics now return raw quadrature/delta facts; the proof gate owns the CPU/render agreement verdict.
+- SH contribution diagnostics now return raw mixed-color row count and ratio facts; the proof gate owns the baked mixed-color risk verdict.
+- GPU-debug diagnostics now return raw unavailable/surface facts only; placeholder open status, proofBoundary, reason, and sub-gates were deleted rather than moved.
+- Visibility moment inspection now returns raw availability/mode/readback counters; the proof gate derives moment-backed support.
+- Leak proof facts now return raw sealed-wall threshold metrics; proof gates own sealed-wall support/promotion verdicts.
 
 ## Current hotspots
 
@@ -147,6 +161,7 @@ node --check examples/jsm/lighting/LightProbeGridGPUTestHarness.js
 node --check examples/jsm/lighting/LightProbeGridGPUVisibilityWeightingStudy.js
 node --check test/e2e/lightprobegrid-gpu-runner-core-assertions.js
 node --check test/e2e/lightprobegrid-gpu-runner-visibility-assertions.js
+node --check test/e2e/lightprobegrid-gpu-proof-gates.js
 node --check test/e2e/lightprobegrid-gpu-source-invariants.js
 node --input-type=module -e "import { checkSmokeSourceInvariants } from './test/e2e/lightprobegrid-gpu-source-invariants.js'; import { smokeHarnesses } from './test/e2e/lightprobegrid-gpu-smoke-config.js'; await checkSmokeSourceInvariants('webgpu_lightprobes_cornell', smokeHarnesses.webgpu_lightprobes_cornell);"
 git diff --check
@@ -154,12 +169,12 @@ git diff --check
 
 Do not run `npm run build` for this cleanup stream.
 
-## Completion bar
+## Completion evidence
 
-The goal is not complete yet. It becomes complete only when current evidence shows:
+Current no-build evidence supports the refactor goal:
 
-- runtime remains GPU-resident with no CPU readback;
-- diagnostics/harness no longer carry obvious unconsumed lab payloads;
-- remaining files have clear ownership and no thin-file over-splitting;
-- compact proof gates cover the behavior that remains;
-- the roadmap and assertions match the actual code shape.
+- runtime remains GPU-resident with no CPU readback matches in `LightProbeGridGPU.js`;
+- diagnostics/harness no longer carry the targeted verdict, proofBoundary, status, referenceBoundary, or exploratory prose payloads;
+- remaining files keep clear ownership without thin-file over-splitting;
+- compact proof gates cover the default smoke proof behavior with a 16-gate budget;
+- source invariants, runner assertions, OpenSpec tasks, and this roadmap match the current code shape.

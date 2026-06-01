@@ -28,7 +28,8 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 	assert( visibilityMomentInspection.mode === 'moments' &&
 		visibilityMomentInspection.available === true &&
 		visibilityMomentInspection.bytes > 0 &&
-		visibilityMomentInspection.evidenceStatus === 'SUPPORTED',
+		visibilityMomentInspection.evidenceStatus === undefined &&
+		visibilityMomentInspection.proofBoundary === undefined,
 	'visibility moment inspection: expected private moment-backed visibilityDepthTarget with non-zero memory.' );
 	assert( visibilityMomentInspection.samples === undefined &&
 		visibilityMomentInspection.stats.sampleCount > 0 &&
@@ -46,13 +47,17 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 		Number.isFinite( visibilityMomentInspection.stats.hitConfidenceRange.max ),
 	'visibility moment inspection: expected compact radial moment ranges and byte accounting.' );
 	assert( visibilityMomentInspection.momentQualityProfile?.varianceMetric?.includes( 'radial-distance variance' ) &&
-		visibilityMomentInspection.momentQualityProfile?.activeRepackMode === 'five-tap-octa-neighborhood',
+		visibilityMomentInspection.momentQualityProfile?.activeRepackMode === 'five-tap-octa-neighborhood' &&
+		visibilityMomentInspection.momentQualityProfile?.status === undefined,
 	'visibility moment inspection: expected honest private moment-quality profile.' );
 	results.push( { step: 'visibility moment inspection', visibilityMomentInspection } );
 
 	const visibilityWeightingDiagnostic = await call( 'inspectVisibilityWeightingAtLeakReceivers' );
-	assert( [ 'SUPPORTED-DIRECTIONAL-SUPPRESSION', 'OPEN-CORRECT-SIDE-SUPPRESSED' ].includes( visibilityWeightingDiagnostic.status ),
-		'visibility weighting diagnostic: expected explicit supported/open receiver-level status.' );
+	assert( visibilityWeightingDiagnostic.fixtureMode === 'thin-wall' &&
+		visibilityWeightingDiagnostic.diagnosticScope === 'thin-wall-receiver-centers' &&
+		visibilityWeightingDiagnostic.status === undefined &&
+		visibilityWeightingDiagnostic.proofBoundary === undefined,
+	'visibility weighting diagnostic: expected raw receiver-level facts without proof status.' );
 	assert( visibilityWeightingDiagnostic.visibilityDepth?.available === true &&
 		visibilityWeightingDiagnostic.visibilityDepth?.mode === 'moments' &&
 		visibilityWeightingDiagnostic.visibilityDepth?.bytes > 0,
@@ -100,10 +105,11 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 	results.push( { step: 'visibility weighting diagnostic', visibilityWeightingDiagnostic } );
 
 	const sealedVisibilityWeightingDiagnostic = await call( 'inspectVisibilityWeightingAtLeakReceivers', 'sealed-wall' );
-	assert( [ 'SUPPORTED-DIRECTIONAL-SUPPRESSION', 'OPEN-CORRECT-SIDE-SUPPRESSED' ].includes( sealedVisibilityWeightingDiagnostic.status ) &&
-		sealedVisibilityWeightingDiagnostic.fixtureMode === 'sealed-wall' &&
-		sealedVisibilityWeightingDiagnostic.proofBoundary.includes( 'sealed-wall receiver centers' ),
-	'sealed visibility weighting diagnostic: expected explicit sealed-wall receiver-level status.' );
+	assert( sealedVisibilityWeightingDiagnostic.fixtureMode === 'sealed-wall' &&
+		sealedVisibilityWeightingDiagnostic.diagnosticScope === 'sealed-wall-receiver-centers' &&
+		sealedVisibilityWeightingDiagnostic.status === undefined &&
+		sealedVisibilityWeightingDiagnostic.proofBoundary === undefined,
+	'sealed visibility weighting diagnostic: expected raw sealed-wall receiver-level facts.' );
 	assert( sealedVisibilityWeightingDiagnostic.visibilityDepth?.available === true &&
 		sealedVisibilityWeightingDiagnostic.visibilityDepth?.mode === 'moments' &&
 		sealedVisibilityWeightingDiagnostic.visibilityDepth?.bytes > 0,
@@ -112,30 +118,31 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 		sealedVisibilityWeightingDiagnostic.right.rows.length === 8 &&
 		sealedVisibilityWeightingDiagnostic.summary.comparableReceiverCount > 0,
 	'sealed visibility weighting diagnostic: expected eight trilinear neighbor probes per receiver.' );
-	assert( typeof sealedVisibilityWeightingDiagnostic.interrogationFinding === 'string' &&
-		typeof sealedVisibilityWeightingDiagnostic.dominantEscapeReason.reason === 'string' &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.dominantEscapeReason.count ) &&
-		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ) &&
+	assert( Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.wrongMinusCorrectSuppression ) &&
+		typeof sealedVisibilityWeightingDiagnostic.summary.directionalSuppressionSupported === 'boolean' &&
+		typeof sealedVisibilityWeightingDiagnostic.escapeClassification.escapeReasons === 'object' &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.visibilityMassMean ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.summary.visibleWrongContributionRatioMean ),
-	'sealed visibility weighting diagnostic: expected explicit failure hypothesis fields and visibilityMass contribution ratios.' );
+	'sealed visibility weighting diagnostic: expected raw suppression, escape, and visibilityMass contribution facts.' );
 	assert( sealedVisibilityWeightingDiagnostic.escapeClassification.frontEdgeBypassEscapeCount === 0,
 		'sealed visibility weighting diagnostic: sealed wall must remove the finite-wall front-edge bypass from this diagnostic.' );
 	assert( sealedVisibilityWeightingDiagnostic.escapeClassification.wrongSideProbeCount > 0 &&
 		Array.isArray( sealedVisibilityWeightingDiagnostic.escapeClassification.escapedProbes ),
 	'sealed visibility weighting diagnostic: expected aggregate wrong-side escape classification.' );
 	assert( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic !== undefined &&
-		sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.proofBoundary.includes( 'packed SH atlas coefficient contribution mirror' ) &&
-		typeof sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.suspectedFailureDomain === 'string' &&
+		sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.status === undefined &&
+		sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.proofBoundary === undefined &&
+		sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.suspectedFailureDomain === undefined &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.scalarWrongRatioMean ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.visibilityWrongRatioMean ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.runtimeWrongRatioMean ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.invertedNormalRuntimeWrongRatioMean ) &&
+		Number.isInteger( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.correctSideMixedColorRowCount ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.maxCorrectSideChromaPressure ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.maxRuntimeFinalChromaPressure ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.weightedCorrectSideChromaPressureMean ) &&
 		Number.isFinite( sealedVisibilityWeightingDiagnostic.shContributionDiagnostic.summary.weightedCorrectSideWrongOverCorrectMean ),
-	'sealed visibility weighting diagnostic: expected packed SH contribution failure-domain interrogation.' );
+	'sealed visibility weighting diagnostic: expected raw packed SH contribution facts.' );
 
 	return sealedVisibilityWeightingDiagnostic;
 
@@ -146,9 +153,9 @@ function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 	const { assert, results, sealedVisibilityWeightingDiagnostic } = context;
 
 	const surface = sealedVisibilityWeightingDiagnostic.receiverSurfaceQuadratureDiagnostic;
-	assert( [ 'SUPPORTED-SURFACE-CPU-RENDER-AGREEMENT', 'OPEN-SURFACE-CPU-RENDER-MISMATCH' ].includes( surface.status ) &&
-		surface.fixtureMode === 'sealed-wall' &&
-		surface.proofBoundary.includes( 'receiver-surface quadrature' ) &&
+	assert( surface.fixtureMode === 'sealed-wall' &&
+		surface.status === undefined &&
+		surface.proofBoundary === undefined &&
 		surface.quadratureRule === 'tensor-product-gauss-legendre-3x3-over-receiver-plane' &&
 		surface.sampleCountPerReceiver === 9 &&
 		Number.isFinite( surface.summary.surfaceRuntimeWrongRatioMean ) &&
@@ -156,22 +163,22 @@ function runLightProbeGridGpuVisibilityReceiverAssertions( context ) {
 		Number.isFinite( surface.summary.surfaceCpuRenderDelta ) &&
 		Number.isFinite( surface.summary.surfaceCpuRenderDeltaMean ) &&
 		Number.isFinite( surface.summary.surfaceCpuRenderDeltaMax ) &&
-		[ 'surface-region-receiver-mean', 'surface-region-receiver-max', 'masked-visible-pixels-receiver-mean', 'masked-visible-pixels-receiver-max' ].includes( surface.summary.cpuRenderAgreementAggregation ) &&
-		[ 'SUPPORTED', 'OPEN' ].includes( surface.summary.cpuRenderAgreementGate ),
-	'sealed visibility weighting diagnostic: expected compact receiver-surface CPU/render agreement summary.' );
+		[ 'surface-region-receiver-mean', 'surface-region-receiver-max', 'masked-visible-pixels-receiver-mean', 'masked-visible-pixels-receiver-max' ].includes( surface.summary.cpuRenderAgreementAggregation ),
+	'sealed visibility weighting diagnostic: expected raw receiver-surface CPU/render agreement facts.' );
 
 	const gpuDebug = sealedVisibilityWeightingDiagnostic.receiverGpuDebugDiagnostic;
-	assert( gpuDebug.status === 'OPEN-GPU-DEBUG-CPU-SURFACE-MISMATCH' &&
+	assert( gpuDebug.status === undefined &&
 		gpuDebug.fixtureMode === 'sealed-wall' &&
-		gpuDebug.proofBoundary.includes( 'GPU debug' ) &&
+		gpuDebug.proofBoundary === undefined &&
+		gpuDebug.reason === undefined &&
 		gpuDebug.runtimeDebugUnavailable === true &&
 		Number.isFinite( gpuDebug.summary.surfaceCpuRatioMax ) &&
 		Number.isFinite( gpuDebug.summary.surfaceCpuRenderDelta ) &&
 		gpuDebug.summary.gpuDebugSweepExecuted === false &&
 		gpuDebug.summary.agreementMode === 'surface-quadrature-summary-only' &&
-		gpuDebug.summary.linearIrradianceAgreementGate === 'OPEN' &&
-		gpuDebug.summary.weightTermAgreementGate === 'OPEN',
-	'sealed visibility weighting diagnostic: expected compact GPU debug agreement summary.' );
+		gpuDebug.summary.linearIrradianceAgreementGate === undefined &&
+		gpuDebug.summary.weightTermAgreementGate === undefined,
+	'sealed visibility weighting diagnostic: expected raw GPU-debug availability and surface facts.' );
 
 	results.push( { step: 'sealed visibility weighting diagnostic', sealedVisibilityWeightingDiagnostic } );
 
@@ -182,10 +189,11 @@ async function runLightProbeGridGpuVisibilityNormalAssertions( context ) {
 	const { call, assert, results } = context;
 
 	const sealedReceiverNormalDiagnostic = await call( 'inspectLeakReceiverNormalConvention', 'sealed-wall' );
-	assert( [ 'SUPPORTED-CPU-NORMAL-MATCHES-FRONT-FACE-SHADER', 'OPEN-NORMAL-CONVENTION-MISMATCH' ].includes( sealedReceiverNormalDiagnostic.status ) &&
+	assert( sealedReceiverNormalDiagnostic.available === true &&
 		sealedReceiverNormalDiagnostic.fixtureMode === 'sealed-wall' &&
-		sealedReceiverNormalDiagnostic.proofBoundary.includes( 'normal convention diagnostic' ),
-	'sealed receiver normal diagnostic: expected explicit proof-only normal convention status.' );
+		sealedReceiverNormalDiagnostic.status === undefined &&
+		sealedReceiverNormalDiagnostic.proofBoundary === undefined,
+	'sealed receiver normal diagnostic: expected raw normal convention facts without proof status.' );
 	assert( Array.isArray( sealedReceiverNormalDiagnostic.receivers ) &&
 		sealedReceiverNormalDiagnostic.receivers.length === 2 &&
 		sealedReceiverNormalDiagnostic.receivers.every( receiver =>
@@ -209,8 +217,7 @@ async function runLightProbeGridGpuVisibilityNormalAssertions( context ) {
 			Number.isFinite( sample.rightReceiverSurface.invertedColorDistance ) ),
 	'sealed receiver normal diagnostic: expected shader normalWorld front/back/double-side samples.' );
 	assert( typeof sealedReceiverNormalDiagnostic.summary.frontFaceAgreement === 'boolean' &&
-		typeof sealedReceiverNormalDiagnostic.summary.shaderNormalAgreement === 'boolean' &&
-		typeof sealedReceiverNormalDiagnostic.summary.diagnosticConclusion === 'string',
+		typeof sealedReceiverNormalDiagnostic.summary.shaderNormalAgreement === 'boolean',
 	'sealed receiver normal diagnostic: expected summary agreement fields.' );
 	results.push( { step: 'sealed receiver normal convention diagnostic', sealedReceiverNormalDiagnostic } );
 

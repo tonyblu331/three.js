@@ -1,0 +1,12 @@
+change: lightprobegridgpu-research-proof-evals
+status: verified
+mode: openspec
+created: 2026-06-01
+goal: Refactor LightProbeGridGPU diagnostics/evals into research-proof falsifiable gates.
+current_phase: complete
+verification:
+  build: forbidden-for-this-stream
+  allowed:
+    - node --check
+    - checkSmokeSourceInvariants
+    - git diff --check

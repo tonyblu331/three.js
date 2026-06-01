@@ -85,8 +85,7 @@ export function validateLightProbeParitySnapshot( file, snapshot ) {
 
 	if ( snapshot.label === 'webgpu-webgl-density-reference' ) {
 
-		assertLightProbeProof( file, snapshot.proofRole === 'same-budget-artifact-pressure' &&
-			/artifact pressure/.test( snapshot.referenceBoundary ),
+		assertLightProbeProof( file, snapshot.proofRole === 'same-budget-artifact-pressure',
 		'grounding parity artifact: WebGPU density reference must be labelled as a same-budget artifact pressure row.' );
 		assertLightProbeProof( file, snapshot.antiRingingPolicy?.mode === 'full-band-stress' &&
 			snapshot.antiRingingPolicy.runtimePath === 'hardware-filtered-unweighted',
@@ -130,8 +129,9 @@ export function validateLightProbeParitySnapshot( file, snapshot ) {
 		Number.isFinite( snapshot.artifactPressure.objectBlackTailRatio ) &&
 		Number.isFinite( snapshot.artifactPressure.objectDarkTailRatio ) &&
 		Number.isFinite( snapshot.artifactPressure.luminanceFloor ) &&
-		Number.isFinite( snapshot.artifactPressure.cellEdgeContrast ),
-	`grounding parity artifact ${ snapshot.label }: expected object-level artifact pressure metrics.` );
+		Number.isFinite( snapshot.artifactPressure.cellEdgeContrast ) &&
+		snapshot.artifactPressure.status === undefined,
+	`grounding parity artifact ${ snapshot.label }: expected raw object-level artifact pressure metrics without a local verdict status.` );
 	assertLightProbeProof( file, snapshot.bakeTexelBudget !== undefined &&
 		Number.isFinite( snapshot.bakeTexelBudget.cubemapTexels ) &&
 		Number.isFinite( snapshot.bakeTexelBudget.relativeToLowRes ),
@@ -219,16 +219,15 @@ export function validateLightProbeParitySnapshots( file, snapshots ) {
 	assertLightProbeProof( file, densityReference.bakeTexelBudget.cubemapTexels === 1327104 &&
 		densityReference.bakeTexelBudget.relativeToLowRes === 54,
 	'grounding parity artifact: WebGPU density stress row must report the 54x cubemap texel work budget.' );
-	assertLightProbeProof( file, densityReference.artifactPressure.status === 'PRESSURE' ||
-		densityReference.artifactPressure.objectBlackTailRatio <= 0.15,
-	'grounding parity artifact: WebGPU density stress row must mark visible black-tail artifacts as pressure.' );
+	assertLightProbeProof( file, densityReference.artifactPressure.objectBlackTailRatio > 0.15 ||
+		densityReference.artifactPressure.luminanceFloor < 24,
+	'grounding parity artifact: WebGPU density stress row must expose raw black-tail or luminance pressure.' );
 	assertLightProbeProof( file, densityShadowless.artifactPressure.objectBlackTailRatio <=
 		densityReference.artifactPressure.objectBlackTailRatio + 0.02,
 	'grounding parity artifact: shadowless density control must not worsen object black-tail pressure.' );
-	assertLightProbeProof( file, densityDamped.artifactPressure.status === 'bounded' &&
-		densityDamped.artifactPressure.objectBlackTailRatio <= 0.08 &&
+	assertLightProbeProof( file, densityDamped.artifactPressure.objectBlackTailRatio <= 0.08 &&
 		densityDamped.artifactPressure.luminanceFloor >= 24,
-	'grounding parity artifact: same-budget quality candidate must address muddy object black-tail pressure.' );
+	'grounding parity artifact: same-budget quality candidate must satisfy raw black-tail and luminance pressure thresholds.' );
 	assertLightProbeProof( file, densityDamped.artifactPressure.objectBlackTailRatio <=
 		densityReference.artifactPressure.objectBlackTailRatio - 0.25,
 	'grounding parity artifact: same-budget quality candidate must materially reduce black-tail pressure.' );
@@ -274,8 +273,9 @@ export function validateLightProbeWebGLReference( file, reference ) {
 		'WebGL reference artifact: expected positive sphere green bounce signal.' );
 	assertLightProbeProof( file, reference.artifactPressure !== undefined &&
 		Number.isFinite( reference.artifactPressure.objectBlackTailRatio ) &&
-		Number.isFinite( reference.artifactPressure.luminanceFloor ),
-	'WebGL reference artifact: expected object-level artifact pressure metrics.' );
+		Number.isFinite( reference.artifactPressure.luminanceFloor ) &&
+		reference.artifactPressure.status === undefined,
+	'WebGL reference artifact: expected raw object-level artifact pressure metrics without a local verdict status.' );
 
 }
 

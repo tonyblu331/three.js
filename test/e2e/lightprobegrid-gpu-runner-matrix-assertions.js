@@ -68,9 +68,10 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 
 	}
 
-	assert( [ 'OPEN', 'SUPPORTED-BY-SEALED-FIXTURE' ].includes( leakProofFacts.sealedWall.status ) &&
-		[ 'OPEN', 'SUPPORTED-BY-PRE-TONE-MASKED-FIXTURE' ].includes( leakProofFacts.sealedWall.linearPromotionStatus ),
-	'leak proof facts: expected explicit sealed-wall promotion statuses.' );
+	assert( leakProofFacts.proofBoundary === undefined &&
+		leakProofFacts.sealedWall.status === undefined &&
+		leakProofFacts.sealedWall.linearPromotionStatus === undefined,
+	'leak proof facts: expected raw sealed-wall metrics without promotion verdict payload.' );
 	assert( Number.isFinite( leakProofFacts.sealedWall.visibility.wrongSide.improvement ) &&
 		Number.isFinite( leakProofFacts.sealedWall.visibility.maskedWrongSide.improvement ) &&
 		Number.isFinite( leakProofFacts.sealedWall.visibility.preToneMaskedWrongSide.improvement ) &&
