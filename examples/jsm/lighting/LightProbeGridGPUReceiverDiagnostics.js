@@ -7,9 +7,6 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		analyzeReceiver,
 		analyzeReceiverShContributions,
 		captureLeakRegionMetrics,
-		currentHitConfidencePolicy,
-		currentVisibilityBiasScale,
-		fixtureMode,
 		roundMetric
 	} = dependencies;
 
@@ -26,16 +23,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 			for ( let xIndex = 0; xIndex < nodes.length; xIndex ++ ) {
 
-				const u = ( nodes[ xIndex ] + 1 ) * 0.5;
-				const v = ( nodes[ yIndex ] + 1 ) * 0.5;
-
 				samples.push( {
-					sampleKind: 'receiver-surface-gauss-legendre',
-					sampleLabel: `gauss3x3-${ xIndex }-${ yIndex }`,
-					uv: {
-						u: roundMetric( u ),
-						v: roundMetric( v )
-					},
 					localPosition: new THREE.Vector3(
 						nodes[ xIndex ] * width * 0.5,
 						nodes[ yIndex ] * height * 0.5,
@@ -54,111 +42,50 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 	const createReceiverSurfaceQuadratureDiagnostic = async () => {
 
-		const summarizeReceiverSurface = async ( label, mesh, correctSide ) => {
+		const summarizeReceiverSurface = async ( mesh, correctSide ) => {
 
-			let runtimeWrongOverCorrect = 0;
+			let runtimeWrongRatio = 0;
 			let totalQuadratureWeight = 0;
-			let sampleCount = 0;
 			const sampleDescriptors = createGaussLegendreReceiverSamples( mesh );
 
 			for ( const sampleDescriptor of sampleDescriptors ) {
 
 				const receiver = await analyzeReceiver(
-					label,
 					mesh,
 					correctSide,
-					currentVisibilityBiasScale,
-					currentHitConfidencePolicy,
 					sampleDescriptor
 				);
 				const contribution = await analyzeReceiverShContributions( receiver );
-				const weight = receiver.quadratureWeight;
+				const weight = sampleDescriptor.quadratureWeight;
 
 				totalQuadratureWeight += weight;
-				sampleCount ++;
-				runtimeWrongOverCorrect += contribution.aggregates.runtimeFinal.colorBias.wrongOverCorrect * weight;
+				runtimeWrongRatio += contribution.runtimeWrongRatio * weight;
 
 			}
 
 			return {
-				sampleCount,
-				runtimeWrongOverCorrect: roundMetric( runtimeWrongOverCorrect / Math.max( totalQuadratureWeight, 0.0001 ) )
+				sampleCount: sampleDescriptors.length,
+				runtimeWrongRatio: roundMetric( runtimeWrongRatio / Math.max( totalQuadratureWeight, 0.0001 ) )
 			};
 
 		};
 
 		const renderMetrics = captureLeakRegionMetrics();
-		const leftSurface = await summarizeReceiverSurface( 'leftReceiver', _lightProbeContext.leakFixture.leftReceiver, 'left' );
-		const rightSurface = await summarizeReceiverSurface( 'rightReceiver', _lightProbeContext.leakFixture.rightReceiver, 'right' );
-		const surfaceRuntimeWrongRatioMean = roundMetric( ( leftSurface.runtimeWrongOverCorrect + rightSurface.runtimeWrongOverCorrect ) * 0.5 );
-		const surfaceRuntimeWrongRatioMax = roundMetric( Math.max( leftSurface.runtimeWrongOverCorrect, rightSurface.runtimeWrongOverCorrect ) );
+		const leftSurface = await summarizeReceiverSurface( _lightProbeContext.leakFixture.leftReceiver, 'left' );
+		const rightSurface = await summarizeReceiverSurface( _lightProbeContext.leakFixture.rightReceiver, 'right' );
+		const surfaceRuntimeWrongRatioMax = roundMetric( Math.max( leftSurface.runtimeWrongRatio, rightSurface.runtimeWrongRatio ) );
 		const renderSurfaceWrongRatio = renderMetrics.surfaceWrongSideColorRatio;
-		const renderMaskedWrongRatio = renderMetrics.maskedWrongSideColorRatio;
-		const agreementTolerance = 0.15;
-		const surfaceCpuRenderDeltaMean = roundMetric( Math.abs( renderSurfaceWrongRatio - surfaceRuntimeWrongRatioMean ) );
-		const surfaceCpuRenderDeltaMax = roundMetric( Math.abs( renderSurfaceWrongRatio - surfaceRuntimeWrongRatioMax ) );
-		const maskedCpuRenderDeltaMean = renderMaskedWrongRatio === null ? null :
-			roundMetric( Math.abs( renderMaskedWrongRatio - surfaceRuntimeWrongRatioMean ) );
-		const maskedCpuRenderDeltaMax = renderMaskedWrongRatio === null ? null :
-			roundMetric( Math.abs( renderMaskedWrongRatio - surfaceRuntimeWrongRatioMax ) );
-		const renderAgreementCandidates = [
-			{ aggregation: 'surface-region-receiver-mean', delta: surfaceCpuRenderDeltaMean },
-			{ aggregation: 'surface-region-receiver-max', delta: surfaceCpuRenderDeltaMax }
-		];
-
-		if ( maskedCpuRenderDeltaMean !== null ) {
-
-			renderAgreementCandidates.push(
-				{ aggregation: 'masked-visible-pixels-receiver-mean', delta: maskedCpuRenderDeltaMean },
-				{ aggregation: 'masked-visible-pixels-receiver-max', delta: maskedCpuRenderDeltaMax }
-			);
-
-		}
-
-		renderAgreementCandidates.sort( ( a, b ) => a.delta - b.delta );
-
-		const bestRenderAgreement = renderAgreementCandidates[ 0 ];
-		const cpuRenderAgreementAggregation = bestRenderAgreement.aggregation;
-		const surfaceCpuRenderDelta = bestRenderAgreement.delta;
 
 		return {
-			fixtureMode,
-			quadratureRule: 'tensor-product-gauss-legendre-3x3-over-receiver-plane',
 			sampleCountPerReceiver: leftSurface.sampleCount,
-			summary: {
-				surfaceRuntimeWrongRatioMean,
-				surfaceRuntimeWrongRatioMax,
-				surfaceCpuRenderDelta,
-				surfaceCpuRenderDeltaMean,
-				surfaceCpuRenderDeltaMax,
-				cpuRenderAgreementAggregation
-			}
-		};
-
-	};
-
-	const captureReceiverGpuDebugDiagnostics = async ( surfaceQuadratureDiagnostic ) => {
-
-		const surfaceCpuRatioMax = surfaceQuadratureDiagnostic.summary.surfaceRuntimeWrongRatioMax ?? 0;
-		const surfaceCpuRenderDelta = surfaceQuadratureDiagnostic.summary.surfaceCpuRenderDelta ?? 0;
-
-		return {
-			fixtureMode,
-			runtimeDebugUnavailable: true,
-			summary: {
-				surfaceCpuRatioMax,
-				surfaceCpuRenderDelta,
-				gpuDebugSweepExecuted: false,
-				agreementMode: 'surface-quadrature-summary-only'
-			}
+			surfaceRuntimeWrongRatioMax,
+			renderSurfaceWrongRatio
 		};
 
 	};
 
 	return {
-		createGaussLegendreReceiverSamples,
-		createReceiverSurfaceQuadratureDiagnostic,
-		captureReceiverGpuDebugDiagnostics
+		createReceiverSurfaceQuadratureDiagnostic
 	};
 
 }

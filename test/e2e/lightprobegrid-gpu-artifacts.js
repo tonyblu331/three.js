@@ -23,6 +23,72 @@ const getSmokeResult = ( smokeResults, step ) => {
 
 };
 
+const createLeakProofArtifact = leakProofFacts => ( {
+	fixtureMode: leakProofFacts.fixtureMode,
+	proofSettings: leakProofFacts.proofSettings,
+	sampling: {
+		weightedProbeSampling: leakProofFacts.sampling.weightedProbeSampling,
+		probeValidityMode: leakProofFacts.sampling.probeValidityMode
+	},
+	rows: leakProofFacts.rows.map( row => ( {
+		label: row.label,
+		guardedVisibilityProofMode: row.guardedVisibilityProofMode,
+		wrongSideColorRatio: row.wrongSideColorRatio,
+		maskedWrongSideColorRatio: row.maskedWrongSideColorRatio,
+		correctBounceRatio: row.correctBounceRatio,
+		preToneMaskedWrongSideColorRatio: row.preToneMaskedWrongSideColorRatio,
+		preToneMaskedCorrectBounceRatio: row.preToneMaskedCorrectBounceRatio
+	} ) )
+} );
+
+const validateLeakProofArtifact = ( file, artifact ) => {
+
+	const rows = Array.isArray( artifact.rows ) ? artifact.rows : [];
+	const rowLabels = new Set( rows.map( row => row.label ) );
+	const baseline = rows.find( row => row.label === 'sealed-wall-validity-weighted' );
+	const candidate = rows.find( row => row.label === 'sealed-wall-visibility-moments' );
+	const proofSettings = artifact.proofSettings || {};
+	const sampling = artifact.sampling || {};
+	const samplingKeys = Object.keys( sampling );
+
+	assertLightProbeProof( file,
+		artifact.fixtureMode === 'sealed-wall' &&
+		Array.isArray( artifact.rows ) &&
+		rows.length === 2 &&
+		proofSettings.resolution === 4 &&
+		proofSettings.cubemapSize === 8 &&
+		proofSettings.band1Intensity === 1 &&
+		proofSettings.band2Intensity === 0.55 &&
+		proofSettings.normalBias === 0.5 &&
+		proofSettings.viewBias === 0 &&
+		proofSettings.lightingMode === 'probes only' &&
+		proofSettings.materialType === 'standard' &&
+		samplingKeys.length === 2 &&
+		sampling.weightedProbeSampling === true &&
+		sampling.probeValidityMode === 'custom' &&
+		rowLabels.has( 'sealed-wall-validity-weighted' ) &&
+		rowLabels.has( 'sealed-wall-visibility-moments' ),
+		'leak proof artifact: expected compact sealed-wall baseline and visibility-moment rows.' );
+
+	assertLightProbeProof( file,
+		baseline.guardedVisibilityProofMode === 'off' &&
+		candidate.guardedVisibilityProofMode === 'guarded',
+		'leak proof artifact: expected scalar-validity baseline and guarded visibility-moment candidate rows.' );
+
+	for ( const row of rows ) {
+
+		assertLightProbeProof( file,
+			Number.isFinite( row.wrongSideColorRatio ) &&
+			Number.isFinite( row.maskedWrongSideColorRatio ) &&
+			Number.isFinite( row.correctBounceRatio ) &&
+			Number.isFinite( row.preToneMaskedWrongSideColorRatio ) &&
+			Number.isFinite( row.preToneMaskedCorrectBounceRatio ),
+			`leak proof artifact ${ row.label }: expected finite raw leak and bounce metrics.` );
+
+	}
+
+};
+
 export async function writeLightProbeGroundingParityArtifacts( page, file, smokeHarness, smokeResults, options = {} ) {
 
 	if ( file !== 'webgpu_lightprobes_cornell' ) return;
@@ -74,12 +140,16 @@ export async function writeLightProbeGroundingParityArtifacts( page, file, smoke
 	validateLightProbeWebGLReference( file, webglReference );
 
 	const proofSummary = getSmokeResult( smokeResults, 'compact proof gates' ).proofSummary;
+	const leakProofArtifact = createLeakProofArtifact( getSmokeResult( smokeResults, 'leak proof facts' ).leakProofFacts );
 
 	assertLightProbeProofSummary( proofSummary, ( condition, message ) => assertLightProbeProof( file, condition, message ) );
+	validateLeakProofArtifact( file, leakProofArtifact );
 
 	const summaryPath = path.join( lightProbeParityArtifactDir, 'proof-summary.json' );
+	const leakProofPath = path.join( lightProbeParityArtifactDir, 'leak-proof-facts.json' );
 
-	await fs.writeFile( summaryPath, `${ JSON.stringify( proofSummary, null, '\t' ) }\n` );
+	await fs.writeFile( summaryPath, `${ JSON.stringify( proofSummary ) }\n` );
+	await fs.writeFile( leakProofPath, `${ JSON.stringify( leakProofArtifact ) }\n` );
 
 	console.green( `Grounding parity artifacts written: ${ lightProbeParityArtifactDir }` );
 

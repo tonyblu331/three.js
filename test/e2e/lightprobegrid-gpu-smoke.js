@@ -140,6 +140,11 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 
 		assert( metrics.status === 'ready', `${ step }: expected ready status.` );
 		assert( Number.isFinite( metrics.timings.totalBakeMs ), `${ step }: expected finite bake timing.` );
+		assert( metrics.timings.cubemapMs === undefined &&
+			metrics.timings.projectionMs === undefined &&
+			metrics.timings.copyMs === undefined &&
+			metrics.timings.timingBuckets === undefined,
+		`${ step }: expected compact getMetrics timing facts.` );
 		assert( metrics.isLightProbeGrid === true, `${ step }: expected Object3D light probe grid flag.` );
 		assert( metrics.hasTexture === true, `${ step }: expected public atlas texture reference.` );
 		assert( metrics.hasBoundingBox === true, `${ step }: expected public bounding box.` );

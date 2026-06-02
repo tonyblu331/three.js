@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { Fn, normalWorld, uniform, uv, vec4 } from 'three/tsl';
+import { floor, Fn, normalWorld, uniform, uv, vec4 } from 'three/tsl';
 
 import { LightProbeGridGPU } from './LightProbeGridGPU.js';
 import { createLightProbeGridGPUVisibilityWeightingStudy } from './LightProbeGridGPUVisibilityWeightingStudy.js';
@@ -120,16 +120,16 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		assert( right.g > right.r * 1.25, 'probes only: expected green wall on the right side.' );
 		assert( center.r + center.g + center.b > 18, 'probes only: expected visible probe-lit geometry.' );
 
-		return { left, right, center };
+		return {
+			leftRedOverGreen: roundMetric( left.r / Math.max( left.g, 0.0001 ) ),
+			rightGreenOverRed: roundMetric( right.g / Math.max( right.r, 0.0001 ) ),
+			centerEnergy: roundMetric( center.r + center.g + center.b )
+		};
 
 	};
 
 	const createArtifactColor = ( color ) => ( {
-		r: color.r,
-		g: color.g,
-		b: color.b,
-		luminance: color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722,
-		chromaSpread: Math.max( color.r, color.g, color.b ) - Math.min( color.r, color.g, color.b )
+		luminance: color.r * 0.2126 + color.g * 0.7152 + color.b * 0.0722
 	} );
 
 	const roundMetric = ( value ) => Number( value.toFixed( 4 ) );
@@ -141,12 +141,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		if ( finiteValues.length === 0 ) {
 
 			return {
-				samples: [],
-				min: null,
-				median: null,
-				average: null,
-				p95: null,
-				max: null
+				median: null
 			};
 
 		}
@@ -155,16 +150,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const median = finiteValues.length % 2 === 1 ?
 			finiteValues[ middle ] :
 			( finiteValues[ middle - 1 ] + finiteValues[ middle ] ) / 2;
-		const p95 = finiteValues[ Math.min( finiteValues.length - 1, Math.ceil( finiteValues.length * 0.95 ) - 1 ) ];
-		const average = finiteValues.reduce( ( sum, value ) => sum + value, 0 ) / finiteValues.length;
 
 		return {
-			samples: finiteValues.map( roundTimingMetric ),
-			min: roundTimingMetric( finiteValues[ 0 ] ),
-			median: roundTimingMetric( median ),
-			average: roundTimingMetric( average ),
-			p95: roundTimingMetric( p95 ),
-			max: roundTimingMetric( finiteValues[ finiteValues.length - 1 ] )
+			median: roundTimingMetric( median )
 		};
 
 	};
@@ -491,21 +479,17 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		};
 		const constantCoefficients = projectSyntheticCube( 'shader-webgpu', 'constant', 8 );
 		const directionCoefficients = projectSyntheticCube( 'shader-webgpu', 'direction-rgb', 16 );
-		const constantSamples = Object.entries( normals ).map( ( [ name, normal ] ) => {
+		let constantMaxDelta = 0;
+
+		for ( const normal of Object.values( normals ) ) {
 
 			const irradiance = evaluateIrradianceContract( constantCoefficients, normal, { clampNegative: true } );
+			const delta = colorMaxDelta( irradiance, expectedConstantIrradiance );
 
-			return {
-				name,
-				irradiance: {
-					r: roundContractMetric( irradiance.r ),
-					g: roundContractMetric( irradiance.g ),
-					b: roundContractMetric( irradiance.b )
-				},
-				delta: roundContractMetric( colorMaxDelta( irradiance, expectedConstantIrradiance ) )
-			};
+			constantMaxDelta = Math.max( constantMaxDelta, delta );
 
-		} );
+		}
+
 		const axisResponse = Object.fromEntries( Object.entries( normals ).map( ( [ name, normal ] ) => {
 
 			const irradiance = evaluateIrradianceContract( directionCoefficients, normal, { clampNegative: true } );
@@ -517,7 +501,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			} ];
 
 		} ) );
-		let threeJsIrradianceParity = { supported: false, maxDelta: null };
+		let threeJsIrradianceParity = { available: false, maxDelta: null };
 
 		if ( typeof THREE.SphericalHarmonics3 === 'function' ) {
 
@@ -543,28 +527,18 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			}
 
-			threeJsIrradianceParity = { supported: true, maxDelta: roundContractMetric( maxDelta ) };
+			threeJsIrradianceParity = { available: true, maxDelta: roundContractMetric( maxDelta ) };
 
 		}
 
 		return {
-			basis: [ 'Y00', 'Y1-1:y', 'Y10:z', 'Y11:x', 'Y2-2:xy', 'Y2-1:yz', 'Y20:3z^2-1', 'Y21:xz', 'Y22:x^2-y^2' ],
-			projectionNormalization: 'radianceCoefficients = sum( radiance * Y_lm(direction) * solidAngleWeight ) * ( 4pi / sumWeights )',
-			irradianceConvolution: 'E(n) = L0 * 0.886227 + L1 * 2 * 0.511664 * n + L2 * {0.429043,0.743125,0.247708}; runtime clamps only after all bands are summed.',
 			constantRadiance: {
-				expected: {
-					r: roundContractMetric( expectedConstantIrradiance.r ),
-					g: roundContractMetric( expectedConstantIrradiance.g ),
-					b: roundContractMetric( expectedConstantIrradiance.b )
-				},
-				samples: constantSamples,
-				maxDelta: Math.max( ...constantSamples.map( sample => sample.delta ) )
+				maxDelta: roundContractMetric( constantMaxDelta )
 			},
-			axisResponse,
-			axisDominance: {
-				positiveXRedBeatsNegativeX: axisResponse.positiveX.r > axisResponse.negativeX.r,
-				positiveYGreenBeatsNegativeY: axisResponse.positiveY.g > axisResponse.negativeY.g,
-				positiveZBlueBeatsNegativeZ: axisResponse.positiveZ.b > axisResponse.negativeZ.b
+			axisDeltas: {
+				positiveXRedMinusNegativeX: roundContractMetric( axisResponse.positiveX.r - axisResponse.negativeX.r ),
+				positiveYGreenMinusNegativeY: roundContractMetric( axisResponse.positiveY.g - axisResponse.negativeY.g ),
+				positiveZBlueMinusNegativeZ: roundContractMetric( axisResponse.positiveZ.b - axisResponse.negativeZ.b )
 			},
 			threeJsIrradianceParity
 		};
@@ -590,142 +564,79 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			};
 
 		} );
+		const projectionFixtureCount = fixtures.length;
 		const computeCandidateFixtures = [ 'constant', 'face-asymmetric', 'axis-dominance' ].map( ( fixture ) => {
 
 			const fragmentCoefficientProjection = projectSyntheticCubeFragmentCoefficientPath( 'shader-webgpu', fixture );
 			const computeProbeReduction = projectSyntheticCube( 'shader-webgpu', fixture );
 
 			return {
-				fixture,
-				fragmentCoefficientProjectionSweepsPerProbe: 9,
-				computeProbeReductionSweepsPerProbe: 1,
 				candidateToFragmentDelta: maxCoefficientDelta( computeProbeReduction, fragmentCoefficientProjection )
 			};
 
 		} );
 		const computeCandidateMaxDelta = Math.max( ...computeCandidateFixtures.map( fixture => fixture.candidateToFragmentDelta ) );
-		const resolveComputeProjectionFallbackDecision = ( {
-			label,
-			runtimeGuardedImplementationPresent,
-			supportsComputeProjection,
-			supportsStorageTexture
-		} ) => {
-
-			const computeRuntimeAllowed = runtimeGuardedImplementationPresent === true &&
-				supportsComputeProjection === true &&
-				supportsStorageTexture === true;
-
-			return {
-				label,
-				runtimeGuardedImplementationPresent,
-				supportsComputeProjection,
-				supportsStorageTexture,
-				selectedPath: computeRuntimeAllowed ?
-					'compute-probe-reduction' :
-					'fragment-coefficient-projection',
-				fallbackUsed: computeRuntimeAllowed === false
-			};
-
-		};
-
+		const computeCandidateTolerance = 0.0001;
+		const computeCandidateFailedFixtureCount = computeCandidateFixtures.filter( fixture =>
+			fixture.candidateToFragmentDelta > computeCandidateTolerance
+		).length;
 		const fallbackScenarios = [
-			resolveComputeProjectionFallbackDecision( {
-				label: 'runtime-implemented-adapter-supported',
-				runtimeGuardedImplementationPresent: true,
+			{
 				supportsComputeProjection: true,
 				supportsStorageTexture: true
-			} ),
-			resolveComputeProjectionFallbackDecision( {
-				label: 'unsupported-compute-capability',
-				runtimeGuardedImplementationPresent: true,
+			},
+			{
 				supportsComputeProjection: false,
 				supportsStorageTexture: true
-			} ),
-			resolveComputeProjectionFallbackDecision( {
-				label: 'unsupported-storage-texture-capability',
-				runtimeGuardedImplementationPresent: true,
+			},
+			{
 				supportsComputeProjection: true,
 				supportsStorageTexture: false
-			} ),
-			resolveComputeProjectionFallbackDecision( {
-				label: 'promoted-supported-candidate',
-				runtimeGuardedImplementationPresent: true,
-				supportsComputeProjection: true,
-				supportsStorageTexture: true
-			} )
+			}
 		];
-		const fallbackRequiredScenarios = fallbackScenarios.filter( scenario =>
-			scenario.label !== 'runtime-implemented-adapter-supported' &&
-			scenario.label !== 'promoted-supported-candidate'
-		);
+		const computeSelectedScenarioCount = fallbackScenarios.filter( scenario =>
+			scenario.supportsComputeProjection === true &&
+			scenario.supportsStorageTexture === true
+		).length;
+		const fallbackScenarioCount = fallbackScenarios.filter( scenario =>
+			scenario.supportsComputeProjection === false ||
+			scenario.supportsStorageTexture === false
+		).length;
+		const unsupportedComputeFallbackCount = fallbackScenarios.filter( scenario =>
+			scenario.supportsComputeProjection === false
+		).length;
+		const unsupportedStorageTextureFallbackCount = fallbackScenarios.filter( scenario =>
+			scenario.supportsStorageTexture === false
+		).length;
 		const computeProjectionAdapterFallbackOracle = {
-			runtimePathIntroduced: true,
-			publicApiChanged: false,
-			defaultPath: 'fragment-coefficient-projection',
-			candidatePath: 'compute-probe-reduction',
-			requiredCapabilities: [ 'compute projection implementation', 'storage texture support' ],
-			scenarios: fallbackScenarios,
-			promotionEffect: 'runtime-path-introduced-full-parity-promotion-pending'
+			scenarioCount: fallbackScenarios.length,
+			computeSelectedScenarioCount,
+			fallbackScenarioCount,
+			unsupportedComputeFallbackCount,
+			unsupportedStorageTextureFallbackCount
 		};
 
 		return {
-			fixtures,
+			fixtureCount: projectionFixtureCount,
 			maxShaderToGeneratorDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToGeneratorDelta ) ),
 			maxWebGLGridToGeneratorDelta: Math.max( ...fixtures.map( fixture => fixture.webglGridToGeneratorDelta ) ),
 			maxShaderToCubeTextureDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToCubeTextureDelta ) ),
 			maxShaderToWebGLGridDelta: Math.max( ...fixtures.map( fixture => fixture.shaderToWebGLGridDelta ) ),
 			computeProjectionCandidateOracle: {
-				runtimePathIntroduced: false,
-				baselinePath: 'fragment-coefficient-projection',
-				candidatePath: 'compute-probe-reduction',
 				baselineCubemapSweepsPerProbe: 9,
 				candidateCubemapSweepsPerProbe: 1,
-				promotionEffect: 'does-not-promote-runtime',
-				fixtures: computeCandidateFixtures,
+				fixtureCount: computeCandidateFixtures.length,
+				failedFixtureCount: computeCandidateFailedFixtureCount,
 				maxCandidateToFragmentDelta: computeCandidateMaxDelta,
-				tolerance: 0.0001
+				tolerance: computeCandidateTolerance
 			},
 			computeProjectionAdapterFallbackOracle,
 			computeProjectionParityContract: {
 				currentPath: 'fragment-coefficient-projection',
 				proposedPath: 'compute-probe-reduction',
-				candidatePlanningAllowed: true,
-				runtimePathIntroduced: true,
-				runtimeMarkersAllowed: true,
-				publicApiChangeAllowed: false,
 				currentCubemapSweepsPerProbe: 9,
 				proposedCubemapSweepsPerProbe: 1,
-				currentCoefficientWritesPerProbe: 9,
-				proposedCoefficientWritesPerProbe: 9,
 				fallbackPath: 'fragment-coefficient-projection',
-				requiredParitySources: [
-					'shader-webgpu',
-					'generator-render-target-webgpu',
-					'cube-texture',
-					'webgl-light-probe-grid'
-				],
-				requiredGates: [
-					'compute c0..c8 must match fragment projection within tolerance for every synthetic fixture',
-					'compute output must pack through the existing atlas repack contract before replacing the runtime path',
-					'fragment coefficient projection remains fallback until compute parity is supported on target adapters'
-				],
-				requiredPromotionEvidence: {
-					syntheticFixtureParity: {
-						baseline: 'fragment-coefficient-projection',
-						candidate: 'compute-probe-reduction',
-						fixtures: [ 'constant', 'face-asymmetric', 'axis-dominance' ],
-						maxCoefficientDelta: 0.0001
-					},
-					atlasRepackParity: {
-						baseline: 'inspectAtlasPacking',
-						required: true,
-						maxPackedReadbackDelta: 0.008
-					},
-					adapterFallbackEvidence: {
-						unsupportedAdapterPath: 'fragment-coefficient-projection',
-						required: true
-					}
-				},
 				tolerance: 0.0001
 			}
 		};
@@ -744,7 +655,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const coefficientTolerance = 0.035;
 		const atlasTolerance = 0.035;
 		const probeValidity = new Float32Array( totalProbes ).fill( 1 );
-		const staticWork = createProjectionStaticWork( resolution, cubemapSize );
 
 		probeValidity[ totalProbes - 1 ] = 0;
 
@@ -809,11 +719,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					const maxDelta = maxRgbaDelta( fragment, compute );
 
 					atlasChecks.push( {
-						...sample,
-						fragment,
-						compute,
-						maxDelta,
-						pass: maxDelta <= atlasTolerance
+						maxDelta
 					} );
 
 				}
@@ -823,15 +729,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			const atlasMaxDelta = computeSelected && atlasChecks.length > 0 ?
 				roundMetric( Math.max( ...atlasChecks.map( check => check.maxDelta ) ) ) :
 				Number.POSITIVE_INFINITY;
-			const coefficientPass = coefficientMaxDelta <= coefficientTolerance;
-			const atlasPass = atlasMaxDelta <= atlasTolerance &&
-				atlasChecks.every( check => check.pass );
-			const tolerancePass = computeSelected && coefficientPass && atlasPass;
+			const atlasFailedCheckCount = atlasChecks.filter( check => check.maxDelta > atlasTolerance ).length;
 
 			return {
-				runtimePathIntroduced: true,
-				baselinePath: 'fragment-coefficient-projection',
-				candidatePath: 'compute-probe-reduction',
 				fragmentBackend: fragmentTimings.projectionBackend,
 				computeBackend: computeTimings.projectionBackend,
 				computeFallbackReason: computeTimings.computeProjectionFallbackReason ?? null,
@@ -840,16 +740,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				cubemapSize,
 				coefficientTolerance,
 				atlasTolerance,
-				staticWork,
-				fragmentTimings,
-				computeTimings,
 				coefficientMaxDelta,
 				atlasMaxDelta,
-				coefficientPass,
-				atlasPass,
-				tolerancePass,
 				coefficientReadbackPixels: coefficientWidth * coefficientHeight,
-				atlasChecks
+				atlasCheckCount: atlasChecks.length,
+				atlasFailedCheckCount
 			};
 
 		} finally {
@@ -876,13 +771,14 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		const createProfileGrid = () => createProjectionFixtureGrid( resolution, cubemapSize, probeValidity, renderer );
 
-		const profileBackend = async ( requestedBackend, expectedBackend ) => {
+		const profileBackend = async ( requestedBackend ) => {
 
 			const grid = createProfileGrid();
 			const projectionMsSamples = [];
 			const projectionTimingSources = new Set();
-			const fallbackReasons = new Set();
-			let allRunsSelectedExpectedBackend = true;
+			let fallbackRunCount = 0;
+			let fragmentBackendCount = 0;
+			let computeBackendCount = 0;
 
 			try {
 
@@ -899,19 +795,20 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 					projectionMsSamples.push( timings.projectionMs );
 					projectionTimingSources.add( timings.projectionTimingSource ?? timings.timingSource ?? 'unavailable' );
-					allRunsSelectedExpectedBackend &&= timings.projectionBackend === expectedBackend;
+					if ( timings.projectionBackend === 'fragment-coefficient-projection' ) fragmentBackendCount ++;
+					if ( timings.projectionBackend === 'compute-probe-reduction' ) computeBackendCount ++;
 
-					if ( timings.computeProjectionFallbackReason ) fallbackReasons.add( timings.computeProjectionFallbackReason );
+					if ( timings.computeProjectionFallbackReason ) fallbackRunCount ++;
 
 				}
 
 				return {
 					result: {
-						requestedBackend,
 						measuredRunCount: projectionMsSamples.length,
 						projectionMs: summarizeMetric( projectionMsSamples ),
-						allRunsSelectedExpectedBackend,
-						fallbackReasons: Array.from( fallbackReasons )
+						fragmentBackendCount,
+						computeBackendCount,
+						fallbackRunCount
 					},
 					projectionTimingSources: Array.from( projectionTimingSources )
 				};
@@ -924,8 +821,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		};
 
-		const fragmentProfile = await profileBackend( 'force-fragment', 'fragment-coefficient-projection' );
-		const computeProfile = await profileBackend( 'force-compute', 'compute-probe-reduction' );
+		const fragmentProfile = await profileBackend( 'force-fragment' );
+		const computeProfile = await profileBackend( 'force-compute' );
 		const fragment = fragmentProfile.result;
 		const compute = computeProfile.result;
 		const projectionTimingSources = Array.from( new Set( [
@@ -992,17 +889,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				label,
-				textureIndex,
-				layer,
-				gridZ,
-				sourceGridZ,
 				x,
 				y,
 				probeIndex,
-				actual: actual.map( roundMetric ),
-				expected: expected.map( roundMetric ),
-				deltas: deltas.map( roundMetric ),
-				maxDelta: roundMetric( Math.max( ...deltas ) )
+				maxDelta: roundMetric( Math.max( ...deltas ) ),
+				validityDelta: roundMetric( Math.abs( actual[ 3 ] - expected[ 3 ] ) )
 			};
 
 		};
@@ -1083,16 +974,15 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			await renderSyntheticCoefficientBatch();
 
 			const addressChecks = [];
+			let addressMismatchCount = 0;
+			let centerSampleZOutOfRangeCount = 0;
 
 			for ( const textureIndex of [ 0, 1, 6 ] ) {
 
 				for ( const gridZ of [ 0, resolution - 1 ] ) {
 
 					const baseLayer = getLightProbeGridGPUPackedAtlasBaseLayer( textureIndex, paddedSlices );
-
-					addressChecks.push( {
-						textureIndex,
-						gridZ,
+					const addressCheck = {
 						baseLayer,
 						methodBaseLayer: testGrid._getPackedAtlasBaseLayer( textureIndex ),
 						dataLayer: getLightProbeGridGPUPackedAtlasLayer( textureIndex, gridZ, paddedSlices ),
@@ -1102,36 +992,67 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 						trailingPaddingLayer: getLightProbeGridGPUPackedAtlasLayer( textureIndex, resolution, paddedSlices ),
 						methodTrailingPaddingLayer: testGrid._getPackedAtlasLayer( textureIndex, resolution ),
 						centerSampleZ: roundMetric( getLightProbeGridGPUPackedAtlasCenterSampleZ( textureIndex, gridZ, paddedSlices, atlasDepth ) )
-					} );
+					};
+
+					addressChecks.push( addressCheck );
+					if (
+						addressCheck.baseLayer !== addressCheck.methodBaseLayer ||
+						addressCheck.dataLayer !== addressCheck.methodDataLayer ||
+						addressCheck.leadingPaddingLayer !== addressCheck.methodLeadingPaddingLayer ||
+						addressCheck.trailingPaddingLayer !== addressCheck.methodTrailingPaddingLayer
+					) {
+
+						addressMismatchCount ++;
+
+					}
+					if ( addressCheck.centerSampleZ <= 0 || addressCheck.centerSampleZ >= 1 ) centerSampleZOutOfRangeCount ++;
 
 				}
 
 			}
 
-			const readbackChecks = [
+			const dataReadbackFacts = [
 				await createReadbackCheck( { label: 'origin-y0-z0-t0', textureIndex: 0, gridZ: 0, x: 0, y: 0 } ),
 				await createReadbackCheck( { label: 'native-y3-z0-t0', textureIndex: 0, gridZ: 0, x: 1, y: resolution - 1 } ),
 				await createReadbackCheck( { label: 'middle-z1-t2', textureIndex: 2, gridZ: 1, x: 2, y: 1 } ),
 				await createReadbackCheck( { label: 'validity-z3-t6', textureIndex: 6, gridZ: 3, x: 3, y: 2 } )
 			];
-			const paddingChecks = [
+			const paddingReadbackFacts = [
 				await createReadbackCheck( { label: 'leading-padding-z0-t0', textureIndex: 0, gridZ: - atlasPadding, sourceGridZ: 0, x: 2, y: 1 } ),
 				await createReadbackCheck( { label: 'trailing-padding-z3-t0', textureIndex: 0, gridZ: resolution, sourceGridZ: resolution - 1, x: 2, y: 1 } ),
 				await createReadbackCheck( { label: 'leading-padding-validity-t6', textureIndex: 6, gridZ: - atlasPadding, sourceGridZ: 0, x: 1, y: 2 } )
 			];
-			const allReadbackChecks = [ ...readbackChecks, ...paddingChecks ];
-			const maxReadbackDelta = roundMetric( Math.max( ...allReadbackChecks.map( check => check.maxDelta ) ) );
+			const allReadbackFacts = [ ...dataReadbackFacts, ...paddingReadbackFacts ];
+			const originReadback = dataReadbackFacts[ 0 ];
+			const nativeY3Readback = dataReadbackFacts[ 1 ];
+			const validityReadback = dataReadbackFacts[ 3 ];
+			const maxReadbackDelta = roundMetric( Math.max( ...allReadbackFacts.map( check => check.maxDelta ) ) );
+			let packedCoefficientSlots = 0;
+			let validitySlot = null;
+
+			for ( let textureIndex = 0; textureIndex < PACKED_SH_COEFFICIENT_LAYOUT.length; textureIndex ++ ) {
+
+				const row = PACKED_SH_COEFFICIENT_LAYOUT[ textureIndex ];
+
+				for ( let channelIndex = 0; channelIndex < row.length; channelIndex ++ ) {
+
+					if ( row[ channelIndex ].value === 'validity' ) {
+
+						validitySlot = { textureIndex, channelIndex };
+
+					} else {
+
+						packedCoefficientSlots ++;
+
+					}
+
+				}
+
+			}
+
 			const computeProjectionAtlasRepackOracle = {
-				runtimePathIntroduced: false,
-				sourcePath: 'compute-written coefficientTarget-compatible rows',
-				baselinePath: 'inspectAtlasPacking',
-				repackPath: '_repackAtlas',
-				requiredLayout: 'coefficientTarget row order c0..c8 plus PACKED_SH_TEXTURES atlas packing and padding layers',
 				readbackTolerance: 0.008,
-				maxReadbackDelta,
-				checkedLayers: allReadbackChecks.map( check => check.label ),
-				openEvidenceAfterPass: [ 'compute-adapter-fallback' ],
-				promotionEffect: 'does-not-promote-runtime'
+				maxReadbackDelta
 			};
 
 			return {
@@ -1142,16 +1063,21 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				atlasPadding,
 				paddedSlices,
 				atlasDepth,
-				gridProbeIndexFormula: 'x + y * resolution + z * resolution^2',
-				addressChecks,
-				coefficientPacking: PACKED_SH_COEFFICIENT_LAYOUT,
-				readbackChecks,
-				paddingChecks,
+				addressCheckCount: addressChecks.length,
+				addressMismatchCount,
+				centerSampleZOutOfRangeCount,
+				packedCoefficientSlots,
+				validitySlot,
+				readbackCheckCount: dataReadbackFacts.length,
+				paddingCheckCount: paddingReadbackFacts.length,
+				nativeYOrientation: {
+					y0ProbeIndex: originReadback.probeIndex,
+					y3ProbeIndex: nativeY3Readback.probeIndex
+				},
 				maxReadbackDelta,
 				computeProjectionAtlasRepackOracle,
-				validityProbeIndex: readbackChecks[ 3 ].probeIndex,
-				validityExpected: readbackChecks[ 3 ].expected[ 3 ],
-				validityActual: readbackChecks[ 3 ].actual[ 3 ]
+				validityProbeIndex: validityReadback.probeIndex,
+				validityDelta: validityReadback.validityDelta
 			};
 
 		} finally {
@@ -1164,49 +1090,33 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	const inspectVisibilityDepthMoments = async () => {
 
+		const probeGrid = _lightProbeContext.probeGrid;
 		const info = readVisibilityDepthInfo();
-		const target = _lightProbeContext.probeGrid.visibilityDepthTarget ?? null;
-		const resolution = info.resolution ?? 0;
-		const textureDepth = info.texture?.depth ?? _lightProbeContext.probeGrid.totalProbes ?? 0;
-		const createMomentQualityProfile = ( stats = null ) => ( {
-			encoding: info.encoding ?? 'unavailable',
-			activeResolution: resolution,
-			activeRepackMode: 'five-tap-octa-neighborhood',
-			varianceMetric: 'radial-distance variance; do not label as log variance until encoding changes'
+		const target = probeGrid.visibilityDepthTarget ?? null;
+		const resolution = probeGrid.visibilityDepthResolution ?? 0;
+		const textureDepth = probeGrid.totalProbes ?? 0;
+		const createInspection = stats => ( {
+			available: info.available === true,
+			mode: info.mode ?? 'unavailable',
+			bytes: info.bytes ?? 0,
+			stats
 		} );
-		const createStatsRange = ( values ) => values.length > 0 ? {
-			min: roundMetric( Math.min( ...values ) ),
-			max: roundMetric( Math.max( ...values ) )
-		} : {
-			min: null,
-			max: null
-		};
 
-		const unavailable = ( reason ) => {
+		const unavailable = () => {
 
 			const stats = {
 				sampleCount: 0,
 				finiteSampleCount: 0,
-				hitSampleCount: 0,
-				meanDistanceRange: createStatsRange( [] ),
-				varianceRange: createStatsRange( [] ),
-				hitConfidenceRange: createStatsRange( [] ),
-				bytes: info.bytes ?? 0,
-				encoding: info.encoding ?? 'unavailable'
+				hitSampleCount: 0
 			};
 
-			return {
-				...info,
-				stats,
-				momentQualityProfile: createMomentQualityProfile( stats ),
-				reason
-			};
+			return createInspection( stats );
 
 		};
 
 		if ( target === null || info.available !== true || info.mode !== 'moments' || resolution <= 0 || textureDepth <= 0 ) {
 
-			return unavailable( 'visibilityDepthTarget is not moment-backed yet.' );
+			return unavailable();
 
 		}
 
@@ -1224,53 +1134,40 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			{ label: 'probe-mid-down', probeIndex: midProbe, x: center, y: edge },
 			{ label: 'probe-mid-up', probeIndex: midProbe, x: center, y: oppositeEdge }
 		];
-		const finiteSamples = [];
+		let finiteSampleCount = 0;
 		let hitSampleCount = 0;
 
 		for ( const point of readbackPoints ) {
 
 			const moment = await readLightProbeGridGPUVisibilityMomentPixel( _lightProbeContext.renderer, target, point );
-			const sample = {
-				meanDistance: roundMetric( moment.meanDistance ),
-				variance: roundMetric( Math.max( moment.variance, 0 ) ),
-				hitConfidence: roundMetric( moment.hitConfidence ),
-				finite: moment.finite
-			};
 
-			if ( sample.finite === false ) continue;
+			if ( moment.finite === false ) continue;
 
-			finiteSamples.push( sample );
-			if ( sample.hitConfidence > 0 ) hitSampleCount ++;
+			finiteSampleCount ++;
+			if ( moment.hitConfidence > 0 ) hitSampleCount ++;
 
 		}
 
-		const meanDistances = finiteSamples.map( sample => sample.meanDistance );
-		const variances = finiteSamples.map( sample => sample.variance );
-		const hitConfidences = finiteSamples.map( sample => sample.hitConfidence );
-
 		const stats = {
 			sampleCount: readbackPoints.length,
-			finiteSampleCount: finiteSamples.length,
-			hitSampleCount,
-			meanDistanceRange: createStatsRange( meanDistances ),
-			varianceRange: createStatsRange( variances ),
-			hitConfidenceRange: createStatsRange( hitConfidences ),
-			bytes: info.bytes ?? 0,
-			encoding: info.encoding ?? 'unavailable'
+			finiteSampleCount,
+			hitSampleCount
 		};
 
-		return {
-			...info,
-			stats,
-			momentQualityProfile: createMomentQualityProfile( stats )
-		};
+		return createInspection( stats );
 
 	};
 
 	const inspectProbeOccupancy = () => {
 
+		const occupancy = _lightProbeContext.collectProbeOccupancy( _lightProbeContext.params.resolution );
+		const occupiedProbeMeshHitCount = occupancy.occupiedProbes.reduce( ( sum, probe ) => sum + probe.meshes.length, 0 );
+
 		return {
-			..._lightProbeContext.collectProbeOccupancy( _lightProbeContext.params.resolution ),
+			totalProbes: occupancy.totalProbes,
+			solidMeshCount: occupancy.solidMeshCount,
+			occupiedProbeCount: occupancy.occupiedProbeCount,
+			occupiedProbeMeshHitCount,
 			sampling: _lightProbeContext.probeGrid.getSamplingInfo()
 		};
 
@@ -1543,24 +1440,6 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
-	const createBakeTexelBudget = ( resolution = _lightProbeContext.params.resolution, cubemapSize = _lightProbeContext.params.cubemapSize ) => {
-
-		const probes = resolution * resolution * resolution;
-		const cubemapFaceTexels = cubemapSize * cubemapSize;
-		const cubemapTexels = probes * 6 * cubemapFaceTexels;
-		const lowResTexels = 4 * 4 * 4 * 6 * 8 * 8;
-
-		return {
-			resolution,
-			cubemapSize,
-			probes,
-			cubemapFaceTexels,
-			cubemapTexels,
-			relativeToLowRes: roundMetric( cubemapTexels / lowResTexels )
-		};
-
-	};
-
 	const createObjectArtifactPressure = ( regions ) => {
 
 		const objectRegions = [ 'sphere', 'tallBox', 'shortBox' ].map( name => regions[ name ] ).filter( Boolean );
@@ -1584,14 +1463,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 	const captureLeakRegionMetrics = () => {
 
 		const regions = captureRegionArtifactMetrics( createLeakCaptureRegions() );
-		const centerRegions = _lightProbeContext.leakFixture === null ? null : {
-			leftReceiverCenter: createObjectCenterScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
-			rightReceiverCenter: createObjectCenterScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
-		};
-		const centerSamples = centerRegions === null ? null : captureRegionArtifactMetrics( centerRegions );
 		const surfaceRegions = _lightProbeContext.leakFixture === null ? null : {
-			leftReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? centerRegions.leftReceiverCenter,
-			rightReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? centerRegions.rightReceiverCenter
+			leftReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
+			rightReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
 		};
 		const surfaceSamples = surfaceRegions === null ? null : captureRegionArtifactMetrics( surfaceRegions );
 		const maskedSamples = captureLeakReceiverMaskedMetrics();
@@ -1605,21 +1479,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			leftReceiver.colorBias.redOverGreen,
 			rightReceiver.colorBias.greenOverRed
 		);
-		const centerWrongSideColorRatio = centerSamples === null ? null : Math.max(
-			centerSamples.leftReceiverCenter.colorBias.greenOverRed,
-			centerSamples.rightReceiverCenter.colorBias.redOverGreen
-		);
-		const centerCorrectBounceRatio = centerSamples === null ? null : Math.min(
-			centerSamples.leftReceiverCenter.colorBias.redOverGreen,
-			centerSamples.rightReceiverCenter.colorBias.greenOverRed
-		);
 		const surfaceWrongSideColorRatio = surfaceSamples === null ? null : Math.max(
 			surfaceSamples.leftReceiverSurface.colorBias.greenOverRed,
 			surfaceSamples.rightReceiverSurface.colorBias.redOverGreen
-		);
-		const surfaceCorrectBounceRatio = surfaceSamples === null ? null : Math.min(
-			surfaceSamples.leftReceiverSurface.colorBias.redOverGreen,
-			surfaceSamples.rightReceiverSurface.colorBias.greenOverRed
 		);
 		const maskedWrongSideColorRatio = maskedSamples === null ? null : Math.max(
 			maskedSamples.leftReceiverMasked.colorBias.greenOverRed,
@@ -1632,15 +1494,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		return {
 			wrongSideColorRatio: roundMetric( wrongSideColorRatio ),
-			centerWrongSideColorRatio: centerWrongSideColorRatio === null ? null : roundMetric( centerWrongSideColorRatio ),
 			surfaceWrongSideColorRatio: surfaceWrongSideColorRatio === null ? null : roundMetric( surfaceWrongSideColorRatio ),
 			maskedWrongSideColorRatio: maskedWrongSideColorRatio === null ? null : roundMetric( maskedWrongSideColorRatio ),
 			correctBounceRatio: roundMetric( correctBounceRatio ),
-			centerCorrectBounceRatio: centerCorrectBounceRatio === null ? null : roundMetric( centerCorrectBounceRatio ),
-			surfaceCorrectBounceRatio: surfaceCorrectBounceRatio === null ? null : roundMetric( surfaceCorrectBounceRatio ),
-			maskedCorrectBounceRatio: maskedCorrectBounceRatio === null ? null : roundMetric( maskedCorrectBounceRatio ),
-			receiverRegionMetricMode: 'object-bounds-with-compact-center-surface-mask-ratios',
-			maskedReceiverRegionMetricMode: maskedSamples?.mode ?? 'not-captured'
+			maskedCorrectBounceRatio: maskedCorrectBounceRatio === null ? null : roundMetric( maskedCorrectBounceRatio )
 		};
 
 	};
@@ -1793,10 +1650,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const probeGrid = _lightProbeContext?.probeGrid;
 		const compactVisibilityDepthInfo = ( info ) => {
 
-			const compactInfo = { ...info };
-			delete compactInfo.samples;
-			delete compactInfo.stats;
-			return compactInfo;
+			return {
+				available: info?.available === true,
+				mode: info?.mode ?? 'unavailable',
+				bytes: info?.bytes ?? 0
+			};
 
 		};
 
@@ -1809,13 +1667,15 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		return {
 			available: false,
 			mode: 'unavailable',
-			resolution: 0,
-			moments: 0,
-			bytes: 0,
-			texture: null
+			bytes: 0
 		};
 
 	};
+
+	const readHarnessTimingFacts = () => ( {
+		totalBakeMs: _lightProbeContext.timings.totalBakeMs,
+		timingSource: _lightProbeContext.timings.timingSource
+	} );
 
 	const getProbeHarnessMetrics = () => ( {
 		resolution: _lightProbeContext.params.resolution,
@@ -1833,96 +1693,68 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		probeHelperDebugMode: _lightProbeContext.params.probeHelperDebugMode,
 		probeHelperDepthMode: _lightProbeContext.params.probeHelperDepthMode,
 		status: _lightProbeContext.params.bakeStatus,
-		timings: { ..._lightProbeContext.timings }
+		timings: readHarnessTimingFacts()
 	} );
 
+	const getGroundingParitySnapshotMetrics = () => ( {
+		resolution: _lightProbeContext.params.resolution,
+		cubemapSize: _lightProbeContext.params.cubemapSize,
+		precision: pickFields( _lightProbeContext.probeGrid.getPrecisionInfo( _lightProbeContext.renderer ), [ 'requestedPrecision' ] ),
+		sampling: _lightProbeContext.probeGrid.getSamplingInfo(),
+		materialType: _lightProbeContext.params.materialType,
+		lightingMode: _lightProbeContext.params.lightingMode,
+		status: _lightProbeContext.params.bakeStatus,
+		timings: readHarnessTimingFacts()
+	} );
+
+	const groundingParitySnapshotBand2Intensity = 0.55;
+	const groundingParitySnapshotBase = {
+		leakReductionMode: 'off',
+		useProbeValidity: true
+	};
+	const groundingParityLowResSnapshotBase = {
+		...groundingParitySnapshotBase,
+		resolution: 4,
+		cubemapSize: 8
+	};
+	const groundingParityDensitySnapshotBase = {
+		...groundingParitySnapshotBase,
+		resolution: 6,
+		cubemapSize: 32
+	};
 	const groundingParitySnapshotCases = {
 		'low-res-damped': {
-			proofRole: 'baseline',
-			resolution: 4,
-			cubemapSize: 8,
-			band1Intensity: 0.6,
-			band2Intensity: 0.55,
-			leakReductionMode: 'off',
-			useProbeValidity: true
+			...groundingParityLowResSnapshotBase,
+			band1Intensity: 0.6
 		},
 		'low-res-unweighted': {
-			proofRole: 'candidate',
-			resolution: 4,
-			cubemapSize: 8,
-			band1Intensity: 1,
-			band2Intensity: 0.55,
-			leakReductionMode: 'off',
-			useProbeValidity: true
+			...groundingParityLowResSnapshotBase,
+			band1Intensity: 1
 		},
 		'low-res-validity-weighted': {
-			proofRole: 'candidate-weighted',
-			resolution: 4,
-			cubemapSize: 8,
+			...groundingParityLowResSnapshotBase,
 			band1Intensity: 1,
-			band2Intensity: 0.55,
-			leakReductionMode: 'normal',
-			useProbeValidity: true
+			leakReductionMode: 'normal'
 		},
 		'webgpu-webgl-density-reference': {
-			proofRole: 'same-budget-artifact-pressure',
-			antiRingingPolicy: {
-				mode: 'full-band-stress',
-				bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted'
-			},
-			resolution: 6,
-			cubemapSize: 32,
-			band1Intensity: 1,
-			band2Intensity: 0.55,
-			leakReductionMode: 'off',
-			useProbeValidity: true
+			...groundingParityDensitySnapshotBase,
+			band1Intensity: 1
 		},
 		'webgpu-webgl-density-shadowless': {
-			proofRole: 'same-budget-shadow-control',
-			antiRingingPolicy: {
-				mode: 'shadowless-cause-control',
-				bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted'
-			},
-			resolution: 6,
-			cubemapSize: 32,
+			...groundingParityDensitySnapshotBase,
 			band1Intensity: 1,
-			band2Intensity: 0.55,
-			leakReductionMode: 'off',
-			useProbeValidity: true,
 			disableShadowsDuringBake: true
 		},
 		'webgpu-webgl-density-shadow-crisp': {
-			proofRole: 'same-budget-direct-shadow-control',
-			antiRingingPolicy: {
-				mode: 'direct-shadow-crisp-cause-control',
-				bandPolicy: 'L0 preserved, L1=1.0, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted'
-			},
-			resolution: 6,
-			cubemapSize: 32,
+			...groundingParityDensitySnapshotBase,
 			band1Intensity: 1,
-			band2Intensity: 0.55,
-			leakReductionMode: 'off',
-			useProbeValidity: true,
 			shadowMapSize: 1024,
 			shadowRadius: 0,
 			shadowNormalBias: 0.01
 		},
 		'webgpu-webgl-density-damped': {
-			proofRole: 'same-budget-quality-candidate',
-			antiRingingPolicy: {
-				mode: 'band1-damped-quality',
-				bandPolicy: 'L0 preserved, L1=0.6, L2=0.55',
-				runtimePath: 'hardware-filtered-unweighted'
-			},
-			resolution: 6,
-			cubemapSize: 32,
-			band1Intensity: 0.6,
-			band2Intensity: 0.55,
-			leakReductionMode: 'off',
-			useProbeValidity: true
+			...groundingParityDensitySnapshotBase,
+			band1Intensity: 0.6
 		}
 	};
 
@@ -1946,7 +1778,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		applyProofBakeSettings( {
 			band1Intensity: snapshotCase.band1Intensity,
-			band2Intensity: snapshotCase.band2Intensity,
+			band2Intensity: groundingParitySnapshotBand2Intensity,
 			cubemapSize: snapshotCase.cubemapSize,
 			leakReductionMode: snapshotCase.leakReductionMode,
 			resolution: snapshotCase.resolution,
@@ -1965,33 +1797,24 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		);
 		_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 		const regions = captureRegionArtifactMetrics();
+		const customDirectShadowControl = snapshotCase.shadowMapSize !== undefined ||
+			snapshotCase.shadowRadius !== undefined ||
+			snapshotCase.shadowNormalBias !== undefined ? {
+				mapSize: snapshotCase.shadowMapSize,
+				radius: snapshotCase.shadowRadius,
+				normalBias: snapshotCase.shadowNormalBias
+			} : undefined;
 
 		return {
 			label,
-			proofRole: snapshotCase.proofRole,
-			antiRingingPolicy: snapshotCase.antiRingingPolicy ?? {
-				mode: 'not-applied',
-				bandPolicy: 'demo default',
-				runtimePath: _lightProbeContext.params.leakReductionMode === 'normal' ? 'manual-weighted-textureLoad' : 'hardware-filtered-unweighted'
-			},
 			probeIntensity: _lightProbeContext.params.probeIntensity,
-			probeHelperIntensity: _lightProbeContext.params.probeHelperIntensity,
 			band1Intensity: _lightProbeContext.params.band1Intensity,
 			band2Intensity: _lightProbeContext.params.band2Intensity,
 			normalBias: _lightProbeContext.params.normalBias,
 			viewBias: _lightProbeContext.params.viewBias,
-			shadowsDisabledDuringBake: snapshotCase.disableShadowsDuringBake === true,
-			directShadowControl: {
-				mapSize: snapshotCase.shadowMapSize ?? _lightProbeContext.directLight.shadow.mapSize.x,
-				radius: snapshotCase.shadowRadius ?? _lightProbeContext.directLight.shadow.radius,
-				normalBias: snapshotCase.shadowNormalBias ?? _lightProbeContext.directLight.shadow.normalBias,
-				mode: snapshotCase.shadowMapSize !== undefined ||
-					snapshotCase.shadowRadius !== undefined ||
-					snapshotCase.shadowNormalBias !== undefined ?
-					'custom-bake-shadow-map' : 'default-bake-shadow-map'
-			},
-			metrics: getProbeHarnessMetrics(),
-			bakeTexelBudget: createBakeTexelBudget(),
+			...( snapshotCase.disableShadowsDuringBake === true ? { shadowsDisabledDuringBake: true } : {} ),
+			directShadowControl: customDirectShadowControl,
+			metrics: getGroundingParitySnapshotMetrics(),
 			artifactSignature: captureArtifactSignature(),
 			regions,
 			artifactPressure: createObjectArtifactPressure( regions )
@@ -2071,8 +1894,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				available: false,
-				fixtureMode,
-				missingReason: 'no-leak-fixture'
+				fixtureMode
 			};
 
 		}
@@ -2118,9 +1940,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				visible: metric.luminance.mean > 32,
-				cpuColorDistance: roundMetric( cpuDistance ),
-				invertedColorDistance: roundMetric( invertedDistance ),
-				closestNormalConvention: cpuDistance <= invertedDistance ? 'cpu-normal' : 'inverted-cpu-normal'
+				matchesCpuNormal: cpuDistance <= invertedDistance
 			};
 
 		};
@@ -2233,24 +2053,27 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				captureShaderNormalVariant( THREE.DoubleSide, 'double-side-normalWorld' )
 			];
 			const frontSideSample = shaderNormalSamples.find( sample => sample.label === 'front-side-normalWorld' );
-			const frontFaceAgreement = receivers.every( receiver =>
+			const frontFaceReceiverCount = receivers.filter( receiver =>
 				receiver.expectedVisibleFaceFromCpuNormal === 'front-face' &&
 				receiver.actualRenderedSide === 'front-face'
-			);
-			const shaderNormalAgreement = frontSideSample.leftReceiverSurface.visible === true &&
-				frontSideSample.rightReceiverSurface.visible === true &&
-				frontSideSample.leftReceiverSurface.closestNormalConvention === 'cpu-normal' &&
-				frontSideSample.rightReceiverSurface.closestNormalConvention === 'cpu-normal';
+			).length;
+			const frontSideVisibleReceiverCount = [
+				frontSideSample.leftReceiverSurface,
+				frontSideSample.rightReceiverSurface
+			].filter( surface => surface.visible === true ).length;
+			const frontSideCpuNormalConventionCount = [
+				frontSideSample.leftReceiverSurface,
+				frontSideSample.rightReceiverSurface
+			].filter( surface => surface.matchesCpuNormal === true ).length;
 
 			return {
 				available: true,
 				fixtureMode,
-				receivers,
-				shaderNormalSamples,
-				summary: {
-					frontFaceAgreement,
-					shaderNormalAgreement
-				}
+				receiverCount: receivers.length,
+				frontFaceReceiverCount,
+				shaderNormalSampleCount: shaderNormalSamples.length,
+				frontSideVisibleReceiverCount,
+				frontSideCpuNormalConventionCount
 			};
 
 		} finally {
@@ -2264,19 +2087,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
-	const createLeakProofMetricSnapshot = ( metrics ) => ( {
+	const createLeakProofRowMetrics = ( metrics, rendererMetrics ) => ( {
 		wrongSideColorRatio: metrics.wrongSideColorRatio,
 		maskedWrongSideColorRatio: metrics.maskedWrongSideColorRatio,
 		correctBounceRatio: metrics.correctBounceRatio,
-		receiverRegionMetricMode: metrics.receiverRegionMetricMode
-	} );
-
-	const createLeakProofRendererMetricSnapshot = ( rendererMetrics ) => ( {
-		mode: rendererMetrics.mode,
-		metrics: {
-			maskedWrongSideColorRatio: rendererMetrics.metrics.maskedWrongSideColorRatio,
-			maskedCorrectBounceRatio: rendererMetrics.metrics.maskedCorrectBounceRatio
-		}
+		preToneMaskedWrongSideColorRatio: rendererMetrics.metrics.maskedWrongSideColorRatio,
+		preToneMaskedCorrectBounceRatio: rendererMetrics.metrics.maskedCorrectBounceRatio
 	} );
 
 	const createLeakProofSettingsSnapshot = () => ( {
@@ -2356,9 +2172,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				rows.push( {
 					label: proofCase.label,
 					guardedVisibilityProofMode,
-					...( guardedVisibilityProofMode === 'guarded' ? { visibilityDepth: readVisibilityDepthInfo() } : {} ),
-					leakMetrics: createLeakProofMetricSnapshot( leakMetrics ),
-					preToneLeakMetrics: createLeakProofRendererMetricSnapshot( preToneLeakMetrics )
+					...createLeakProofRowMetrics( leakMetrics, preToneLeakMetrics )
 				} );
 
 			}
@@ -2369,50 +2183,14 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		}
 
-		const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
-		const readWrongSide = row => row.leakMetrics.wrongSideColorRatio;
-		const readMaskedWrongSide = row => row.leakMetrics.maskedWrongSideColorRatio ?? readWrongSide( row );
-		const readPreToneMaskedWrongSide = row => row.preToneLeakMetrics.metrics.maskedWrongSideColorRatio ?? readMaskedWrongSide( row );
-		const readCorrectBounce = row => row.leakMetrics.correctBounceRatio;
-		const readPreToneMaskedCorrectBounce = row => row.preToneLeakMetrics.metrics.maskedCorrectBounceRatio ?? readCorrectBounce( row );
-		const ratio = ( a, b, read ) => roundMetric( read( rowMap.get( b ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
-		const improvementRatio = ( a, b, read ) => roundMetric( ( read( rowMap.get( a ) ) - read( rowMap.get( b ) ) ) / Math.max( read( rowMap.get( a ) ), 0.0001 ) );
-		const baseline = 'sealed-wall-validity-weighted';
-		const candidate = 'sealed-wall-visibility-moments';
-		const wrongSideImprovement = improvementRatio( baseline, candidate, readWrongSide );
-		const maskedWrongSideImprovement = improvementRatio( baseline, candidate, readMaskedWrongSide );
-		const preToneMaskedWrongSideImprovement = improvementRatio( baseline, candidate, readPreToneMaskedWrongSide );
-		const correctBouncePreservation = ratio( baseline, candidate, readCorrectBounce );
-		const preToneMaskedCorrectBouncePreservation = ratio( baseline, candidate, readPreToneMaskedCorrectBounce );
-
 		return {
 			fixtureMode: 'sealed-wall',
 			proofSettings,
 			sampling,
 			rows,
-			sealedWall: {
-				presentationMetricMode: 'tone-mapped-canvas-ratio-legacy',
-				linearPromotionMetricMode: 'pre-tone-linear-output-masked-visible-pixels',
-				visibility: {
-					wrongSide: {
-						improvement: wrongSideImprovement
-					},
-					maskedWrongSide: {
-						improvement: maskedWrongSideImprovement
-					},
-					preToneMaskedWrongSide: {
-						improvement: preToneMaskedWrongSideImprovement
-					},
-					correctBounce: {
-						preservation: correctBouncePreservation
-					},
-					preToneMaskedCorrectBounce: {
-						preservation: preToneMaskedCorrectBouncePreservation
-					}
-				}
-			},
 			restored: {
-				...window.__webgpuLightProbeGridCornell.getMetrics(),
+				lightingMode: _lightProbeContext.params.lightingMode,
+				leakReductionMode: _lightProbeContext.params.leakReductionMode,
 				leakFixtureVisible: _lightProbeContext.leakFixture !== null && _lightProbeContext.leakFixture.group.visible === true
 			}
 		};
@@ -2596,7 +2374,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				return {
 					weightedProbeSampling: sampling.weightedProbeSampling,
-					centerEnergy: roundMetric( colorSanity.center.r + colorSanity.center.g + colorSanity.center.b )
+					centerEnergy: colorSanity.centerEnergy
 				};
 
 			};

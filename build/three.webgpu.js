@@ -15527,8 +15527,16 @@ class CubeTextureNode extends TextureNode {
 		}
 
 		// rotate first
+		//
+		// Compute nodes are evaluated without a render object scene/material context.
+		// Keep explicit cubemap sampling compute-safe by not pulling materialEnvRotation
+		// uniforms into the compute graph.
 
-		uvNode = materialEnvRotation.mul( uvNode );
+		if ( builder.shaderStage !== 'compute' && builder.object?.isComputeNode !== true ) {
+
+			uvNode = materialEnvRotation.mul( uvNode );
+
+		}
 
 		// flip
 

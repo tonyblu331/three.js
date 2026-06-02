@@ -34,14 +34,7 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 		);
 		const probeValidityFloor = 0.05;
 		const minVariance = 0.0004;
-		const currentVisibilityBiasScale = 1;
-		const hitConfidenceThreshold = 0.5;
 		const visibilityWeightFloor = 0.0001;
-		const currentHitConfidencePolicy = {
-			label: 'continuous',
-			mode: 'continuous',
-			threshold: hitConfidenceThreshold
-		};
 		const dividerX = _lightProbeContext.leakFixture !== null ? _lightProbeContext.leakFixture.thinDivider.position.x : - 0.8667;
 		const dividerBox = new THREE.Box3();
 		const dividerRay = new THREE.Ray();
@@ -77,46 +70,12 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			g: roundMetric( color.g ),
 			b: roundMetric( color.b )
 		} );
-		const createReceiverColorBias = ( color, correctSide ) => {
+		const createReceiverWrongRatio = ( color, correctSide ) => {
 
 			const correctValue = correctSide === 'left' ? color.r : color.g;
 			const wrongValue = correctSide === 'left' ? color.g : color.r;
 
-			return {
-				correctChannel: correctSide === 'left' ? 'red' : 'green',
-				wrongChannel: correctSide === 'left' ? 'green' : 'red',
-				correctValue: roundMetric( correctValue ),
-				wrongValue: roundMetric( wrongValue ),
-				correctOverWrong: roundMetric( correctValue / Math.max( wrongValue, 0.0001 ) ),
-				wrongOverCorrect: roundMetric( wrongValue / Math.max( correctValue, 0.0001 ) )
-			};
-
-		};
-
-		const createColorChromaticity = color => {
-
-			const energy = Math.max( color.r + color.g + color.b, 0.0001 );
-
-			return {
-				r: roundMetric( color.r / energy ),
-				g: roundMetric( color.g / energy ),
-				b: roundMetric( color.b / energy )
-			};
-
-		};
-
-		const createReceiverChromaPressure = ( color, correctSide ) => {
-
-			const chromaticity = createColorChromaticity( color );
-			const correctValue = correctSide === 'left' ? chromaticity.r : chromaticity.g;
-			const wrongValue = correctSide === 'left' ? chromaticity.g : chromaticity.r;
-
-			return {
-				correctChromaticity: roundMetric( correctValue ),
-				wrongChromaticity: roundMetric( wrongValue ),
-				wrongMinusCorrect: roundMetric( wrongValue - correctValue ),
-				wrongOverCorrect: roundMetric( wrongValue / Math.max( correctValue, 0.0001 ) )
-			};
+			return roundMetric( wrongValue / Math.max( correctValue, 0.0001 ) );
 
 		};
 
@@ -145,16 +104,11 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 		};
 
-		const auditDividerSegment = ( origin, target ) => {
+		const doesDividerSegmentIntersect = ( origin, target ) => {
 
 			if ( _lightProbeContext.leakFixture === null ) {
 
-				return {
-					intersects: false,
-					distance: null,
-					point: null,
-					reason: 'no-leak-fixture'
-				};
+				return false;
 
 			}
 
@@ -165,31 +119,13 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 			if ( segmentLength <= 0.0001 ) {
 
-				return {
-					intersects: dividerBox.containsPoint( origin ),
-					distance: 0,
-					point: {
-						x: roundMetric( origin.x ),
-						y: roundMetric( origin.y ),
-						z: roundMetric( origin.z )
-					},
-					reason: 'zero-length-segment'
-				};
+				return dividerBox.containsPoint( origin );
 
 			}
 
 			if ( dividerBox.containsPoint( origin ) ) {
 
-				return {
-					intersects: true,
-					distance: 0,
-					point: {
-						x: roundMetric( origin.x ),
-						y: roundMetric( origin.y ),
-						z: roundMetric( origin.z )
-					},
-					reason: 'origin-inside-divider'
-				};
+				return true;
 
 			}
 
@@ -201,59 +137,12 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 			if ( intersection === null ) {
 
-				return {
-					intersects: false,
-					distance: null,
-					point: null,
-					reason: 'misses-divider-geometry'
-				};
+				return false;
 
 			}
 
 			const distance = intersection.distanceTo( origin );
-
-			if ( distance > segmentLength + 0.0001 ) {
-
-				return {
-					intersects: false,
-					distance: roundMetric( distance ),
-					point: {
-						x: roundMetric( intersection.x ),
-						y: roundMetric( intersection.y ),
-						z: roundMetric( intersection.z )
-					},
-					reason: 'intersection-beyond-receiver'
-				};
-
-			}
-
-			return {
-				intersects: true,
-				distance: roundMetric( distance ),
-				point: {
-					x: roundMetric( intersection.x ),
-					y: roundMetric( intersection.y ),
-					z: roundMetric( intersection.z )
-				},
-				reason: 'segment-intersects-divider'
-			};
-
-		};
-
-		const resolveHitConfidenceVisibility = ( hitConfidence, momentVisibility, policy ) => {
-
-			if ( policy.mode === 'continuous' ) {
-
-				const confidence = Math.max( 0, Math.min( hitConfidence, 1 ) );
-
-				return confidence * momentVisibility + ( 1 - confidence );
-
-			}
-
-			if ( policy.mode === 'always' ) return momentVisibility;
-			if ( policy.mode === 'ignore' ) return 1;
-
-			return hitConfidence > policy.threshold ? momentVisibility : 1;
+			return distance <= segmentLength + 0.0001;
 
 		};
 
@@ -272,6 +161,14 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				resolution
 			} );
 			await _lightProbeContext.recreateAndBakeRequired( `visibility weighting diagnostic ${ fixtureMode }` );
+
+			if ( typeof _lightProbeContext.probeGrid._setGuardedVisibilityProofMode === 'function' ) {
+
+				_lightProbeContext.probeGrid._setGuardedVisibilityProofMode( 'guarded' );
+				_lightProbeContext.syncProbeGridBindings();
+
+			}
+
 			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
 			probeValidity = _lightProbeContext.createProbeValidityData( resolution );
@@ -285,11 +182,8 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			const probeDirection = new THREE.Vector3();
 
 			const analyzeReceiver = async (
-				label,
 				mesh,
 				correctSide,
-				visibilityBiasScale = 1,
-				hitConfidencePolicy = currentHitConfidencePolicy,
 				surfaceSample = null,
 				samplingBias = null
 			) => {
@@ -320,29 +214,22 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					receiverNormal.set( 0, 0, 1 ).applyQuaternion( receiverQuaternion ).normalize();
 
 				}
+
 				viewDirection.subVectors( _lightProbeContext.camera.position, receiverPosition ).normalize();
 
 				const activeNormalBias = samplingBias?.normalBias ?? _lightProbeContext.params.normalBias;
 				const activeViewBias = samplingBias?.viewBias ?? _lightProbeContext.params.viewBias;
-				const useRuntimeVisibilityPath = surfaceSample?.visibilityPath === 'gpu-runtime-positionworld-distance-bias';
 				const useRuntimeUnguardedVisibilityPath = surfaceSample?.visibilityPath === 'gpu-runtime-unguarded-visibility';
 				const useRuntimeProbeMeta = surfaceSample?.probeMetaPath === 'gpu-runtime-probe-meta';
-				const runtimeVisibilityDistanceBias = useRuntimeVisibilityPath ?
-					_lightProbeContext.probeGrid.visibilityBias?.value ?? 0 :
-					0;
+				const runtimeVisibilityDistanceBias = useRuntimeUnguardedVisibilityPath ?
+					0 :
+					_lightProbeContext.probeGrid.visibilityBias?.value ?? 0;
 				samplePosition.copy( receiverPosition ).add( new THREE.Vector3(
 					receiverNormal.x * probeSpacing.x * activeNormalBias + viewDirection.x * probeSpacing.x * activeViewBias,
 					receiverNormal.y * probeSpacing.y * activeNormalBias + viewDirection.y * probeSpacing.y * activeViewBias,
 					receiverNormal.z * probeSpacing.z * activeNormalBias + viewDirection.z * probeSpacing.z * activeViewBias
 				) );
-				const visibilityReceiverPosition = receiverPosition.clone().add( new THREE.Vector3(
-					receiverNormal.x * probeSpacing.x * activeNormalBias * visibilityBiasScale + viewDirection.x * probeSpacing.x * activeViewBias * visibilityBiasScale,
-					receiverNormal.y * probeSpacing.y * activeNormalBias * visibilityBiasScale + viewDirection.y * probeSpacing.y * activeViewBias * visibilityBiasScale,
-					receiverNormal.z * probeSpacing.z * activeNormalBias * visibilityBiasScale + viewDirection.z * probeSpacing.z * activeViewBias * visibilityBiasScale
-				) );
-				const runtimeVisibilityReceiverPosition = useRuntimeVisibilityPath || useRuntimeUnguardedVisibilityPath ?
-					receiverPosition :
-					visibilityReceiverPosition;
+				const runtimeVisibilityReceiverPosition = receiverPosition;
 				const probeCoord = new THREE.Vector3(
 					( samplePosition.x - _lightProbeContext.gridMin.x ) / ( _lightProbeContext.gridMax.x - _lightProbeContext.gridMin.x ),
 					( samplePosition.y - _lightProbeContext.gridMin.y ) / ( _lightProbeContext.gridMax.y - _lightProbeContext.gridMin.y ),
@@ -395,9 +282,10 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					const delta = Math.max( receiverDistance - moment.meanDistance - runtimeVisibilityDistanceBias, 0 );
 					const chebyshevVisibility = moment.variance / ( moment.variance + delta * delta );
 					const momentVisibility = chebyshevVisibility;
+					const hitConfidence = Math.max( 0, Math.min( moment.hitConfidence, 1 ) );
 					const visibility = useRuntimeUnguardedVisibilityPath ?
 						1 :
-						resolveHitConfidenceVisibility( moment.hitConfidence, momentVisibility, hitConfidencePolicy );
+						hitConfidence * momentVisibility + ( 1 - hitConfidence );
 					const normalWeight = ( ( receiverNormal.dot( probeDirection ) + 1 ) * 0.5 ) * 0.5 + 0.5;
 					const rawProbeValidity = probeValidity[ probeIndex ] ?? 1;
 					const validityWeight = Math.max( rawProbeValidity, probeValidityFloor );
@@ -417,8 +305,8 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					const side = probePosition.x < dividerX ? 'left' : 'right';
 					const relationToReceiver = side === correctSide ? 'correct-side' : 'wrong-side';
 					const crossesDivider = ( probePosition.x - dividerX ) * ( runtimeVisibilityReceiverPosition.x - dividerX ) <= 0;
-					const visibilitySegmentDividerAudit = auditDividerSegment( probePosition, runtimeVisibilityReceiverPosition );
-					const surfaceSegmentDividerAudit = auditDividerSegment( probePosition, receiverPosition );
+					const visibilitySegmentIntersectsDivider = doesDividerSegmentIntersect( probePosition, runtimeVisibilityReceiverPosition );
+					const surfaceSegmentIntersectsDivider = doesDividerSegmentIntersect( probePosition, receiverPosition );
 					const suppression = visibilityWeight / Math.max( baseWeight, 0.0001 );
 					const escaped = relationToReceiver === 'wrong-side' && baseWeight > 0.0001 && suppression > 0.9;
 					let escapeReason = 'not-escaped';
@@ -435,17 +323,13 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 						escapeReason = 'suppressed';
 
-					} else if ( visibilitySegmentDividerAudit.intersects === false && surfaceSegmentDividerAudit.intersects === true ) {
+					} else if ( visibilitySegmentIntersectsDivider === false && surfaceSegmentIntersectsDivider === true ) {
 
 						escapeReason = 'visibility-bias-bypasses-divider';
 
-					} else if ( visibilitySegmentDividerAudit.intersects === false ) {
+					} else if ( visibilitySegmentIntersectsDivider === false ) {
 
 						escapeReason = 'front-edge-bypass';
-
-					} else if ( hitConfidencePolicy.mode === 'threshold' && moment.hitConfidence <= hitConfidencePolicy.threshold ) {
-
-						escapeReason = 'below-hit-threshold';
 
 					} else if ( delta <= 0 ) {
 
@@ -465,8 +349,6 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 						probeIndex,
 						relationToReceiver,
 						crossesDivider,
-						compatibleKernel: roundMetric( compatibleKernel ),
-						visibility: roundMetric( visibility ),
 						scalarWeight: roundMetric( scalarWeight ),
 						baseWeight: roundMetric( baseWeight ),
 						visibilityWeight: roundMetric( visibilityWeight ),
@@ -476,27 +358,58 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 				}
 
-				const wrongSideRows = rows.filter( row => row.relationToReceiver === 'wrong-side' && row.baseWeight > 0.0001 );
-				const escapedRows = wrongSideRows.filter( row => row.escaped === true );
+				const receiverFacts = rows.reduce( ( facts, row ) => {
 
-				const sum = ( relation, key ) => rows
-					.filter( row => row.relationToReceiver === relation )
-					.reduce( ( total, row ) => total + row[ key ], 0 );
-				const scalarCorrect = sum( 'correct-side', 'scalarWeight' );
-				const scalarWrong = sum( 'wrong-side', 'scalarWeight' );
-				const baseCorrect = sum( 'correct-side', 'baseWeight' );
-				const baseWrong = sum( 'wrong-side', 'baseWeight' );
-				const visibilityCorrect = sum( 'correct-side', 'visibilityWeight' );
-				const visibilityWrong = sum( 'wrong-side', 'visibilityWeight' );
-				const baseSum = rows.reduce( ( total, row ) => total + row.baseWeight, 0 );
-				const visibleSum = rows.reduce( ( total, row ) => total + row.visibilityWeight, 0 );
-				const baseContributionSum = baseCorrect + baseWrong;
-				const visibleContributionSum = visibilityCorrect + visibilityWrong;
+					const relationFacts = row.relationToReceiver === 'correct-side' ? facts.correct : facts.wrong;
+					relationFacts.scalar += row.scalarWeight;
+					relationFacts.base += row.baseWeight;
+					relationFacts.visibility += row.visibilityWeight;
+					facts.baseSum += row.baseWeight;
+					facts.visibleSum += row.visibilityWeight;
+					facts.probeFacts.probeCount ++;
+					if ( row.relationToReceiver === 'correct-side' ) facts.probeFacts.correctSideProbeCount ++;
+					if ( row.relationToReceiver === 'wrong-side' ) facts.probeFacts.wrongSideProbeCount ++;
+					if ( row.crossesDivider === true ) facts.probeFacts.crossingProbeCount ++;
+					if ( row.escaped === true ) facts.probeFacts.escapedProbeCount ++;
+
+					if ( row.relationToReceiver === 'wrong-side' && row.baseWeight > 0.0001 ) {
+
+						facts.probeFacts.weightedWrongSideProbeCount ++;
+
+						if ( row.escaped === true ) {
+
+							facts.probeFacts.wrongSideEscapedCount ++;
+							if ( row.escapeReason === 'visibility-bias-bypasses-divider' ) facts.probeFacts.visibilityBypassEscapeCount ++;
+							if ( row.escapeReason === 'front-edge-bypass' ) facts.probeFacts.frontEdgeBypassEscapeCount ++;
+
+						}
+
+					}
+
+					return facts;
+
+				}, {
+					correct: { scalar: 0, base: 0, visibility: 0 },
+					wrong: { scalar: 0, base: 0, visibility: 0 },
+					baseSum: 0,
+					visibleSum: 0,
+					probeFacts: {
+						probeCount: 0,
+						correctSideProbeCount: 0,
+						wrongSideProbeCount: 0,
+						crossingProbeCount: 0,
+						escapedProbeCount: 0,
+						weightedWrongSideProbeCount: 0,
+						wrongSideEscapedCount: 0,
+						visibilityBypassEscapeCount: 0,
+						frontEdgeBypassEscapeCount: 0
+					},
+				} );
+				const baseContributionSum = receiverFacts.correct.base + receiverFacts.wrong.base;
+				const visibleContributionSum = receiverFacts.correct.visibility + receiverFacts.wrong.visibility;
 
 				return {
-					label,
 					correctSide,
-					quadratureWeight: roundMetric( surfaceSample?.quadratureWeight ?? 1 ),
 					receiverNormal: {
 						x: roundMetric( receiverNormal.x ),
 						y: roundMetric( receiverNormal.y ),
@@ -504,23 +417,19 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 					},
 					rows,
 					totals: {
-						scalarCorrect: roundMetric( scalarCorrect ),
-						scalarWrong: roundMetric( scalarWrong ),
-						baseSum: roundMetric( baseSum ),
-						visibleSum: roundMetric( visibleSum ),
-						visibilityMass: roundMetric( visibleSum / Math.max( baseSum, 0.0001 ) ),
-						baseWrongContributionRatio: roundMetric( baseWrong / Math.max( baseContributionSum, 0.0001 ) ),
-						visibleWrongContributionRatio: roundMetric( visibilityWrong / Math.max( visibleContributionSum, 0.0001 ) ),
-						correctSuppression: roundMetric( visibilityCorrect / Math.max( scalarCorrect, 0.0001 ) ),
-						wrongSuppression: roundMetric( visibilityWrong / Math.max( scalarWrong, 0.0001 ) )
+						scalarCorrect: roundMetric( receiverFacts.correct.scalar ),
+						scalarWrong: roundMetric( receiverFacts.wrong.scalar ),
+						baseSum: roundMetric( receiverFacts.baseSum ),
+						visibleSum: roundMetric( receiverFacts.visibleSum ),
+						visibilityMass: roundMetric( receiverFacts.visibleSum / Math.max( receiverFacts.baseSum, 0.0001 ) ),
+						baseWrongContributionRatio: roundMetric( receiverFacts.wrong.base / Math.max( baseContributionSum, 0.0001 ) ),
+						visibleWrongContributionRatio: roundMetric( receiverFacts.wrong.visibility / Math.max( visibleContributionSum, 0.0001 ) ),
+						correctSuppression: roundMetric( receiverFacts.correct.visibility / Math.max( receiverFacts.correct.base, 0.0001 ) ),
+						wrongSuppression: roundMetric( receiverFacts.wrong.visibility / Math.max( receiverFacts.wrong.base, 0.0001 ) )
 					},
-					escapeSummary: {
-						wrongSideProbeCount: wrongSideRows.length,
-						escapedProbes: escapedRows.map( row => ( {
-							probeIndex: row.probeIndex,
-							escapeReason: row.escapeReason,
-							crossesDivider: row.crossesDivider
-						} ) )
+					probeFacts: {
+						receiverCount: 1,
+						...receiverFacts.probeFacts
 					}
 				};
 
@@ -535,74 +444,60 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				const averageComparable = ( key ) => comparableReceivers.reduce(
 					( total, receiver ) => total + receiver.totals[ key ], 0
 				) / Math.max( comparableReceivers.length, 1 );
-				const receiverRows = [ leftReceiver, rightReceiver ];
-				const averageReceiver = ( key ) => receiverRows.reduce(
-					( total, receiver ) => total + ( receiver.totals[ key ] ?? 0 ), 0
-				) / Math.max( receiverRows.length, 1 );
 				const correctSuppressionMean = averageComparable( 'correctSuppression' );
 				const wrongSuppressionMean = averageComparable( 'wrongSuppression' );
 				const wrongMinusCorrectSuppression = wrongSuppressionMean - correctSuppressionMean;
-				const visibilityWrongContributionDelta = averageReceiver( 'visibleWrongContributionRatio' ) - averageReceiver( 'baseWrongContributionRatio' );
 
 				return {
 					comparableReceiverCount: comparableReceivers.length,
-					baseSumMean: roundMetric( averageReceiver( 'baseSum' ) ),
-					visibleSumMean: roundMetric( averageReceiver( 'visibleSum' ) ),
-					visibilityMassMean: roundMetric( averageReceiver( 'visibilityMass' ) ),
-					visibleWrongContributionRatioMean: roundMetric( averageReceiver( 'visibleWrongContributionRatio' ) ),
-					wrongContributionRatioDelta: roundMetric( visibilityWrongContributionDelta ),
-					wrongMinusCorrectSuppression: roundMetric( wrongMinusCorrectSuppression ),
-					directionalSuppressionSupported: comparableReceivers.length > 0 &&
-						wrongMinusCorrectSuppression <= 0
+					wrongMinusCorrectSuppression: roundMetric( wrongMinusCorrectSuppression )
 				};
 
 			};
 
-			const left = await analyzeReceiver( 'leftReceiver', _lightProbeContext.leakFixture.leftReceiver, 'left', currentVisibilityBiasScale );
-			const right = await analyzeReceiver( 'rightReceiver', _lightProbeContext.leakFixture.rightReceiver, 'right', currentVisibilityBiasScale );
+			const summarizeReceiverProbeFacts = receivers => receivers.reduce( ( facts, receiver ) => {
+
+				facts.receiverCount += receiver.probeFacts.receiverCount;
+				facts.probeCount += receiver.probeFacts.probeCount;
+				facts.correctSideProbeCount += receiver.probeFacts.correctSideProbeCount;
+				facts.wrongSideProbeCount += receiver.probeFacts.wrongSideProbeCount;
+				facts.crossingProbeCount += receiver.probeFacts.crossingProbeCount;
+				facts.escapedProbeCount += receiver.probeFacts.escapedProbeCount;
+				facts.weightedWrongSideProbeCount += receiver.probeFacts.weightedWrongSideProbeCount;
+				facts.wrongSideEscapedCount += receiver.probeFacts.wrongSideEscapedCount;
+				facts.visibilityBypassEscapeCount += receiver.probeFacts.visibilityBypassEscapeCount;
+				facts.frontEdgeBypassEscapeCount += receiver.probeFacts.frontEdgeBypassEscapeCount;
+
+				return facts;
+
+			}, {
+				receiverCount: 0,
+				probeCount: 0,
+				correctSideProbeCount: 0,
+				wrongSideProbeCount: 0,
+				crossingProbeCount: 0,
+				escapedProbeCount: 0,
+				weightedWrongSideProbeCount: 0,
+				wrongSideEscapedCount: 0,
+				visibilityBypassEscapeCount: 0,
+				frontEdgeBypassEscapeCount: 0
+			} );
+
+			const left = await analyzeReceiver( _lightProbeContext.leakFixture.leftReceiver, 'left' );
+			const right = await analyzeReceiver( _lightProbeContext.leakFixture.rightReceiver, 'right' );
 			const summary = summarizeReceivers( left, right );
-			const combineEscapeSummary = ( receivers ) => {
-
-				const escapedProbes = receivers.flatMap( receiver => receiver.escapeSummary.escapedProbes.map( probe => ( {
-					receiver: receiver.label,
-					probeIndex: probe.probeIndex,
-					escapeReason: probe.escapeReason,
-					crossesDivider: probe.crossesDivider
-				} ) ) );
-				const escapeReasons = escapedProbes.reduce( ( reasons, row ) => {
-
-					reasons[ row.escapeReason ] = ( reasons[ row.escapeReason ] ?? 0 ) + 1;
-					return reasons;
-
-				}, {} );
-				const countEscapes = reason => escapedProbes.filter( row => row.escapeReason === reason ).length;
-
-				return {
-					wrongSideProbeCount: receivers.reduce( ( total, receiver ) => total + receiver.escapeSummary.wrongSideProbeCount, 0 ),
-					wrongSideEscapedCount: escapedProbes.length,
-					visibilityBypassEscapeCount: countEscapes( 'visibility-bias-bypasses-divider' ),
-					frontEdgeBypassEscapeCount: countEscapes( 'front-edge-bypass' ),
-					lowHitConfidenceEscapeCount: countEscapes( 'below-hit-threshold' ),
-					escapeReasons,
-					escapedProbes
-				};
-
-			};
-
-			const aggregateReceiverCoefficients = async ( rows, weightKey, predicate = () => true, coefficientReader = readProbeCoefficients ) => {
+			const aggregateReceiverCoefficients = async ( rows, weightKey ) => {
 
 				const coefficients = createZeroCoefficients();
 				let totalWeight = 0;
 
 				for ( const row of rows ) {
 
-					if ( predicate( row ) === false ) continue;
-
 					const weight = row[ weightKey ];
 
 					if ( weight <= 0 ) continue;
 
-					const probe = await coefficientReader( row.probeIndex );
+					const probe = await readProbeCoefficients( row.probeIndex );
 					addScaledCoefficients( coefficients, probe.coefficients, weight );
 					totalWeight += weight;
 
@@ -615,21 +510,20 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 
 			};
 
-			const createAggregateEvaluation = async ( receiver, weightKey, predicate = () => true, coefficientReader = readProbeCoefficients ) => {
+			const createAggregateEvaluation = async ( receiver, weightKey ) => {
 
 				const normal = new THREE.Vector3(
 					receiver.receiverNormal.x,
 					receiver.receiverNormal.y,
 					receiver.receiverNormal.z
 				);
-				const aggregate = await aggregateReceiverCoefficients( receiver.rows, weightKey, predicate, coefficientReader );
+				const aggregate = await aggregateReceiverCoefficients( receiver.rows, weightKey );
 				const irradiance = evaluateProbeCoefficientsForReceiver( aggregate.coefficients, normal );
 
 				return {
 					totalWeight: roundMetric( aggregate.totalWeight ),
 					coefficients: aggregate.coefficients,
-					colorBias: createReceiverColorBias( irradiance, receiver.correctSide ),
-					chromaPressure: createReceiverChromaPressure( irradiance, receiver.correctSide )
+					wrongRatio: createReceiverWrongRatio( irradiance, receiver.correctSide )
 				};
 
 			};
@@ -639,60 +533,47 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 				analyzeShContributionDiagnostics
 			} = createLightProbeGridGPUShDiagnostics( {
 				createAggregateEvaluation,
-				createReceiverChromaPressure,
-				createReceiverColorBias,
+				createReceiverWrongRatio,
 				evaluateProbeCoefficientsForReceiver,
 				mixCoefficients,
 				readProbeCoefficients,
-				roundColor,
 				roundMetric,
 				visibilityWeightFloor
 			} );
 			const {
-				createReceiverSurfaceQuadratureDiagnostic,
-				captureReceiverGpuDebugDiagnostics
+				createReceiverSurfaceQuadratureDiagnostic
 			} = createLightProbeGridGPUReceiverDiagnostics( {
 				_lightProbeContext,
 				analyzeReceiver,
 				analyzeReceiverShContributions,
 				captureLeakRegionMetrics,
-				currentHitConfidencePolicy,
-				currentVisibilityBiasScale,
-				fixtureMode,
 				roundMetric
 			} );
 
-
-
-			const escapeClassification = combineEscapeSummary( [ left, right ] );
+			const receiverProbeAggregate = summarizeReceiverProbeFacts( [ left, right ] );
+			const receiverProbeFacts = {
+				receiverCount: receiverProbeAggregate.receiverCount,
+				probeCount: receiverProbeAggregate.probeCount,
+				correctSideProbeCount: receiverProbeAggregate.correctSideProbeCount,
+				wrongSideProbeCount: receiverProbeAggregate.wrongSideProbeCount,
+				crossingProbeCount: receiverProbeAggregate.crossingProbeCount,
+				escapedProbeCount: receiverProbeAggregate.escapedProbeCount
+			};
+			const escapeClassification = {
+				wrongSideProbeCount: receiverProbeAggregate.weightedWrongSideProbeCount,
+				wrongSideEscapedCount: receiverProbeAggregate.wrongSideEscapedCount,
+				visibilityBypassEscapeCount: receiverProbeAggregate.visibilityBypassEscapeCount,
+				frontEdgeBypassEscapeCount: receiverProbeAggregate.frontEdgeBypassEscapeCount
+			};
 			const shContributionDiagnostic = await analyzeShContributionDiagnostics( left, right );
 			const receiverSurfaceQuadratureDiagnostic = await createReceiverSurfaceQuadratureDiagnostic();
-			const receiverGpuDebugDiagnostic = await captureReceiverGpuDebugDiagnostics( receiverSurfaceQuadratureDiagnostic );
-			const compactReceiver = receiver => ( {
-				label: receiver.label,
-				correctSide: receiver.correctSide,
-				rows: receiver.rows.map( row => ( {
-					visibility: row.visibility,
-					scalarWeight: row.scalarWeight,
-					baseWeight: row.baseWeight,
-					compatibleKernel: row.compatibleKernel,
-					visibilityWeight: row.visibilityWeight,
-					crossesDivider: row.crossesDivider,
-					escaped: row.escaped,
-					escapeReason: row.escapeReason
-				} ) )
-			} );
 			return {
 				fixtureMode,
-				diagnosticScope: fixtureMode === 'thin-wall' ? 'thin-wall-receiver-centers' : 'sealed-wall-receiver-centers',
-				visibilityDepth: typeof _lightProbeContext.probeGrid.getVisibilityDepthInfo === 'function' ? _lightProbeContext.probeGrid.getVisibilityDepthInfo() : { available: false, mode: 'unavailable-proof-6-runtime-removed', resolution: 0, bytes: 0 },
-				left: compactReceiver( left ),
-				right: compactReceiver( right ),
-				summary,
+				receiverProbeFacts,
+				...summary,
 				escapeClassification,
 				shContributionDiagnostic,
 				receiverSurfaceQuadratureDiagnostic,
-				receiverGpuDebugDiagnostic
 			};
 
 		} finally {

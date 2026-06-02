@@ -130,3 +130,98 @@ Chain strategy: pending
 - [x] 18.1 Audit remaining `reason`, `referenceBoundary`, and `action` payloads in harness/diagnostic outputs.
 - [x] 18.2 Remove projection adapter fallback prose `reason`; keep selected path, fallback flag, capability, and runtime guard facts.
 - [x] 18.3 Run final focused syntax, source-invariant, synthetic proof-gate, and `git diff --check` verification after the narrative sweep.
+
+## Phase 19: Leak Evidence Shape Cleanup
+
+- [x] 19.1 Tighten receiver-surface agreement so `surfaceCpuRenderDelta` compares surface render capture only against surface CPU quadrature, not masked visible-pixel leak ratios.
+- [x] 19.2 Remove tone-mapped sealed-wall wrong-side improvements as promotion-blocking proof gates; keep the linear pre-tone masked leak improvement and correct-bounce preservation gates.
+- [x] 19.3 Update source invariants, roadmap, and proof ledger to guard the new evidence ownership shape.
+- [x] 19.4 Run focused no-build verification after the leak evidence cleanup.
+
+## Phase 20: Density Fixture Proof-Validation Cleanup
+
+- [x] 20.1 Extract density-specific budget and same-fixture predicates in proof validation.
+- [x] 20.2 Update source invariants and roadmap to guard named density fixture proof checks instead of repeated inline field chains.
+- [x] 20.3 Run focused no-build verification after the proof-validation cleanup.
+
+## Phase 21: Projection Oracle Runner Assertion Cleanup
+
+- [x] 21.1 Extract core runner projection parity contract, compute candidate, adapter fallback, and atlas repack checks into named raw-fact predicates.
+- [x] 21.2 Update source invariants and roadmap to guard the named projection-oracle predicate seams.
+- [x] 21.3 Run focused no-build verification after the runner assertion cleanup.
+
+## Phase 22: Visibility Runner Assertion Cleanup
+
+- [x] 22.1 Extract visibility runner moment, weighting, escape, SH contribution, receiver-surface, and receiver-normal checks into named raw-fact predicates.
+- [x] 22.2 Update source invariants and roadmap to guard the named visibility predicate seams.
+- [x] 22.3 Run focused no-build verification after the visibility runner cleanup.
+
+## Phase 23: Matrix Runner Assertion Cleanup
+
+- [x] 23.1 Extract matrix runner probe occupancy, leak-proof fixture, leak-proof row, and restoration checks into named raw-fact predicates.
+- [x] 23.2 Update source invariants and roadmap to guard the named matrix predicate seams.
+- [x] 23.3 Run focused no-build verification after the matrix runner cleanup.
+
+## Phase 24: Runtime Runner Assertion Cleanup
+
+- [x] 24.1 Extract runtime runner bake-coalescing, benchmark backend/memory/visibility-depth/timing, and color-sanity checks into named raw-fact predicates.
+- [x] 24.2 Update roadmap and proof ledger to record the runtime runner predicate seam.
+- [x] 24.3 Run focused no-build verification after the runtime runner cleanup.
+
+## Phase 25: Core Runtime Parity/Profile Assertion Cleanup
+
+- [x] 25.1 Extract core runner compute projection runtime parity and profiling checks into named raw-fact predicates.
+- [x] 25.2 Update source invariants, roadmap, and proof ledger to guard the named core parity/profile seams.
+- [x] 25.3 Run focused no-build verification after the core runner cleanup.
+
+## Phase 26: Proof Summary Validation Cleanup
+
+- [x] 26.1 Extract proof-summary gate-count, id, compact-shape, required-supported, and byte-budget checks into named predicates.
+- [x] 26.2 Update source invariants, roadmap, and proof ledger to guard the named proof-summary validation seam.
+- [x] 26.3 Run focused no-build verification after the proof-summary cleanup.
+
+## Phase 27: Density Row Proof-Validation Cleanup
+
+- [x] 27.1 Extract density reference, shadowless, crisp-shadow, and damped row checks into named proof-validation predicates.
+- [x] 27.2 Fix the density damped row assertion so its message is a real assertion message, not part of the boolean expression.
+- [x] 27.3 Update source invariants, roadmap, and proof ledger to guard the named density row validation seam.
+- [x] 27.4 Run focused no-build verification after the density row cleanup.
+
+## Phase 28: Low-Res Proof-Validation Cleanup
+
+- [x] 28.1 Extract low-res shared-intensity, band-isolation, bounce-preservation, and damped-comparison checks into named predicates.
+- [x] 28.2 Update source invariants, roadmap, and proof ledger to guard the named low-res validation seam.
+- [x] 28.3 Run focused no-build verification after the low-res proof-validation cleanup.
+
+## Phase 29: Density Damped Predicate Split
+
+- [x] 29.1 Split density damped fixture-preservation and math-action checks into separate named predicates.
+- [x] 29.2 Update source invariants, roadmap, and proof ledger to guard the split density damped validation seam.
+- [x] 29.3 Run focused no-build verification after the density damped predicate split.
+
+## Phase 30: Density Crisp-Shadow Predicate Split
+
+- [x] 30.1 Split density crisp-shadow row facts from cross-row reference comparison facts.
+- [x] 30.2 Update source invariants, roadmap, and proof ledger to guard the split crisp-shadow validation seam.
+- [x] 30.3 Run focused no-build verification after the density crisp-shadow predicate split.
+
+## Phase 31: Receiver-Surface Agreement Ownership
+
+- [x] 31.1 Change receiver-surface diagnostics to emit raw render and CPU surface wrong-ratio facts instead of a pre-derived delta.
+- [x] 31.2 Derive receiver-surface CPU/render delta once inside proof gates with matching max-to-max aggregation, then feed that same derived fact to both the receiver-surface predicate and gate actual.
+- [x] 31.3 Update runner assertions, source invariants, roadmap, and proof ledger to guard proof-gate ownership of receiver-surface agreement.
+- [x] 31.4 Run focused no-build verification after the receiver-surface agreement ownership cleanup.
+
+## Phase 32: Visibility Status Payload Cleanup
+
+- [x] 32.1 Remove the unused `deriveVisibilityProofStatus()` wrapper and its `visibilityLabel`/`visibilityStatus`/`ddgiStatus` verdict payload.
+- [x] 32.2 Keep moment-backed visibility validation on the raw `isMomentBackedVisibility()` predicate.
+- [x] 32.3 Update source invariants, roadmap, and proof ledger to guard against reintroducing unused visibility/DDGI status payloads.
+- [x] 32.4 Run focused no-build verification after the visibility status payload cleanup.
+
+## Phase 33: Leak Evidence Artifact Visibility
+
+- [x] 33.1 Write compact `leak-proof-facts.json` alongside `proof-summary.json` so baseline and visibility-moment leak rows remain directly auditable.
+- [x] 33.2 Keep the artifact raw: sealed-wall fixture/settings/sampling plus the two baseline/candidate leak rows, without proof-gate verdicts or nested metric snapshots.
+- [x] 33.3 Add artifact/source-invariant guards for finite raw leak and bounce metrics.
+- [x] 33.4 Run focused no-build verification after the leak evidence artifact cleanup.

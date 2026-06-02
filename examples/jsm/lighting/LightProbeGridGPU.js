@@ -687,27 +687,7 @@ class LightProbeGridGPU extends Object3D {
 		return {
 			available,
 			mode: this.visibilityDepthMode,
-			encoding: 'radial-distance',
-			resolution: available ? this.visibilityDepthResolution : 0,
-			moments: available ? 2 : 0,
-			bytes: available ? memory.visibilityDepthBytes : 0,
-			texture: available ? {
-				width: this.visibilityDepthResolution,
-				height: this.visibilityDepthResolution,
-				depth: this.totalProbes
-			} : null,
-			samples: [],
-			stats: {
-				sampleCount: 0,
-				finiteSampleCount: 0,
-				hitSampleCount: 0,
-				minMeanDistance: null,
-				maxMeanDistance: null,
-				minVariance: null,
-				maxVariance: null
-			},
-			hitConfidenceChannel: 'b',
-			backfaceConfidenceChannel: 'a'
+			bytes: available ? memory.visibilityDepthBytes : 0
 		};
 
 	}

@@ -1,3 +1,65 @@
+const hasNoFields = ( object, ...fields ) => fields.every( field => object[ field ] === undefined );
+
+const hasBakeCoalescingFacts = bakeCoalescing =>
+	bakeCoalescing.samePromise === true &&
+	Number.isFinite( bakeCoalescing.totalBakeMs ) &&
+	hasNoFields( bakeCoalescing, 'timings' );
+
+const hasBenchmarkBackendFacts = benchmark =>
+	benchmark.probes === 8 &&
+	[ 'compute-probe-reduction', 'fragment-coefficient-projection' ].includes( benchmark.backend.projection ) &&
+	[ 'compute-probe-reduction', 'fragment-coefficient-projection' ].includes( benchmark.projectionBackend ) &&
+	benchmark.backend.atlas === 'render-pass' &&
+	benchmark.backend.update === 'full';
+
+const hasBenchmarkMemoryFacts = benchmark =>
+	benchmark.estimatedGpuBytes.total > 0 &&
+	benchmark.estimatedGpuBytes.cubemapBytes > 0 &&
+	benchmark.estimatedGpuBytes.coefficientBytes > 0 &&
+	benchmark.estimatedGpuBytes.atlasBytes > 0 &&
+	benchmark.estimatedGpuBytes.probeValidityBytes > 0 &&
+	hasNoFields( benchmark.estimatedGpuBytes, 'backend' );
+
+const hasBenchmarkVisibilityDepthFacts = benchmark =>
+	benchmark.visibilityDepth?.available === true &&
+	benchmark.visibilityDepth?.mode === 'moments' &&
+	benchmark.visibilityDepth?.bytes > 0 &&
+	hasNoFields( benchmark.visibilityDepth,
+		'encoding',
+		'resolution',
+		'moments',
+		'texture',
+		'samples',
+		'stats'
+	);
+
+const hasBenchmarkTimingFacts = benchmark =>
+	Number.isFinite( benchmark.totalBakeMs ) &&
+	benchmark.totalBakeMs > 0 &&
+	benchmark.timingSource !== 'unavailable' &&
+	[ 'gpu-timestamp', 'performance.now diagnostic', 'unavailable' ].includes( benchmark.timingSourceKind ) &&
+	[ 'gpu-timestamp', 'unavailable' ].includes( benchmark.gpuTimestampStatus ) &&
+	Number.isFinite( benchmark.cubemapMs ) &&
+	Number.isFinite( benchmark.projectionMs ) &&
+	Number.isFinite( benchmark.copyMs ) &&
+	benchmark.timingBuckets !== undefined &&
+	benchmark.timingBuckets.source === benchmark.timingSourceKind &&
+	Number.isFinite( benchmark.timingBuckets.sceneUpdateMs ) &&
+	Number.isFinite( benchmark.timingBuckets.radianceCubemapCaptureMs ) &&
+	Number.isFinite( benchmark.timingBuckets.distanceCubemapCaptureMs ) &&
+	Number.isFinite( benchmark.timingBuckets.computeShProjectionMs ) &&
+	Number.isFinite( benchmark.timingBuckets.visibilityRepackMs ) &&
+	Number.isFinite( benchmark.timingBuckets.atlasRepackMs ) &&
+	benchmark.timingBuckets.verifierReadbackTimingSource === 'unavailable' &&
+	Number.isFinite( benchmark.frameMs ) &&
+	hasNoFields( benchmark, 'wallClockTotalBakeMs', 'deterministicTimerDetected' );
+
+const hasColorSanityFacts = colorSanity =>
+	colorSanity.leftRedOverGreen > 1.25 &&
+	colorSanity.rightGreenOverRed > 1.25 &&
+	colorSanity.centerEnergy > 18 &&
+	hasNoFields( colorSanity, 'left', 'right', 'center' );
+
 export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 
 	const { call, callRejects, capture, startOperation, waitUntilReady, assert, results } = context;
@@ -19,9 +81,8 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 		'leak setter: expected normal mode to enable weighted sampling.' );
 
 	const bakeCoalescing = await call( 'testBakeCoalescing' );
-	assert( bakeCoalescing.samePromise === true, 'bake contract: expected overlapping bake calls to share the same promise.' );
-	assert( Number.isFinite( bakeCoalescing.totalBakeMs ), 'bake contract: expected finite coalesced bake timing.' );
-	assert( bakeCoalescing.timings === undefined, 'bake contract: expected compact bake timing payload.' );
+	assert( hasBakeCoalescingFacts( bakeCoalescing ),
+		'bake contract: expected compact bake coalescing facts.' );
 	results.push( { step: 'bake coalescing', bakeCoalescing } );
 
 	const benchmark = await call( 'runBenchmarkCase', {
@@ -29,49 +90,14 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 		cubemapSize: 8,
 		projectionPrecision: 'half float'
 	} );
-	assert( benchmark.probes === 8, 'benchmark: expected probe count metadata.' );
-	assert( [ 'compute-probe-reduction', 'fragment-coefficient-projection' ].includes( benchmark.backend.projection ),
-		'benchmark: expected guarded compute projection backend or fragment fallback label.' );
-	assert( [ 'compute-probe-reduction', 'fragment-coefficient-projection' ].includes( benchmark.projectionBackend ),
-		'benchmark: expected timing metadata to report guarded compute projection backend or fragment fallback.' );
-	assert( benchmark.backend.atlas === 'render-pass', 'benchmark: expected render-pass atlas backend label.' );
-	assert( benchmark.backend.update === 'full', 'benchmark: expected full update backend label.' );
-	assert( benchmark.estimatedGpuBytes.total > 0, 'benchmark: expected positive GPU memory estimate.' );
-	assert( benchmark.estimatedGpuBytes.cubemapBytes > 0, 'benchmark: expected cubemap memory estimate.' );
-	assert( benchmark.estimatedGpuBytes.coefficientBytes > 0, 'benchmark: expected coefficient memory estimate.' );
-	assert( benchmark.estimatedGpuBytes.atlasBytes > 0, 'benchmark: expected atlas memory estimate.' );
-	assert( benchmark.estimatedGpuBytes.probeValidityBytes > 0, 'benchmark: expected probe validity memory estimate.' );
-	assert( benchmark.estimatedGpuBytes.backend === undefined,
-		'benchmark: expected compact memory estimate without duplicated backend metadata.' );
-	assert( benchmark.visibilityDepth?.available === true &&
-		benchmark.visibilityDepth?.mode === 'moments' &&
-		benchmark.visibilityDepth?.bytes > 0,
-	'benchmark: expected private moment-backed visibility/depth metadata.' );
+	assert( hasBenchmarkBackendFacts( benchmark ),
+		'benchmark: expected compact backend facts.' );
+	assert( hasBenchmarkMemoryFacts( benchmark ),
+		'benchmark: expected compact GPU memory facts without duplicated backend metadata.' );
+	assert( hasBenchmarkVisibilityDepthFacts( benchmark ),
+	'benchmark: expected compact private moment-backed visibility/depth facts.' );
 	assert( benchmark.precision.requestedPrecision === 'half float', 'benchmark: expected requested precision metadata.' );
-	assert( Number.isFinite( benchmark.totalBakeMs ) &&
-		benchmark.totalBakeMs > 0 &&
-		benchmark.timingSource !== 'unavailable',
-	'benchmark: expected positive total bake timing with a known timing source.' );
-	assert( [ 'gpu-timestamp', 'performance.now diagnostic', 'unavailable' ].includes( benchmark.timingSourceKind ),
-		'benchmark: expected explicit timing source kind.' );
-	assert( [ 'gpu-timestamp', 'unavailable' ].includes( benchmark.gpuTimestampStatus ),
-		'benchmark: expected explicit GPU timestamp status.' );
-	assert( Number.isFinite( benchmark.cubemapMs ), 'benchmark: expected finite cubemap timing.' );
-	assert( Number.isFinite( benchmark.projectionMs ), 'benchmark: expected finite projection timing.' );
-	assert( Number.isFinite( benchmark.copyMs ), 'benchmark: expected finite copy timing.' );
-	assert( benchmark.timingBuckets !== undefined &&
-		benchmark.timingBuckets.source === benchmark.timingSourceKind &&
-		Number.isFinite( benchmark.timingBuckets.sceneUpdateMs ) &&
-		Number.isFinite( benchmark.timingBuckets.radianceCubemapCaptureMs ) &&
-		Number.isFinite( benchmark.timingBuckets.distanceCubemapCaptureMs ) &&
-		Number.isFinite( benchmark.timingBuckets.computeShProjectionMs ) &&
-		Number.isFinite( benchmark.timingBuckets.visibilityRepackMs ) &&
-		Number.isFinite( benchmark.timingBuckets.atlasRepackMs ) &&
-		benchmark.timingBuckets.verifierReadbackTimingSource === 'unavailable',
-	'benchmark: expected honest proof-only timing buckets with readback/runtime timing marked unavailable.' );
-	assert( Number.isFinite( benchmark.frameMs ), 'benchmark: expected finite frame timing.' );
-	assert( benchmark.wallClockTotalBakeMs === undefined &&
-		benchmark.deterministicTimerDetected === undefined,
+	assert( hasBenchmarkTimingFacts( benchmark ),
 	'benchmark: expected compact timing payload without exploratory runtime timing fields.' );
 	results.push( { step: 'benchmark case', benchmark } );
 
@@ -160,6 +186,8 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 	await waitUntilReady( 'rebake probes only' );
 	const rebakeMetrics = await capture( 'rebake probes only' );
 	const colorSanity = await call( 'captureColorSanity' );
+	assert( hasColorSanityFacts( colorSanity ),
+	'probes only color sanity: expected compact wall-dominance and center-energy facts without raw RGB regions.' );
 
 	results.push( {
 		step: 'probes only color sanity',

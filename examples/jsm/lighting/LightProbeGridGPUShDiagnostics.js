@@ -4,12 +4,10 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 	const {
 		createAggregateEvaluation,
-		createReceiverChromaPressure,
-		createReceiverColorBias,
+		createReceiverWrongRatio,
 		evaluateProbeCoefficientsForReceiver,
 		mixCoefficients,
 		readProbeCoefficients,
-		roundColor,
 		roundMetric,
 		visibilityWeightFloor
 	} = dependencies;
@@ -21,23 +19,21 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 			receiver.receiverNormal.y,
 			receiver.receiverNormal.z
 		);
-		const invertedNormal = normal.clone().multiplyScalar( - 1 );
-		const rows = [];
+		let correctSideMixedColorRowCount = 0;
 
 		for ( const row of receiver.rows ) {
 
 			const probe = await readProbeCoefficients( row.probeIndex );
 			const irradiance = evaluateProbeCoefficientsForReceiver( probe.coefficients, normal );
-			const l0Irradiance = roundColor( probe.l0Irradiance );
+			const wrongRatio = createReceiverWrongRatio( irradiance, receiver.correctSide );
 
-			rows.push( {
-				relationToReceiver: row.relationToReceiver,
-				scalarWeight: row.scalarWeight,
-				visibilityWeight: row.visibilityWeight,
-				chromaPressure: createReceiverChromaPressure( irradiance, receiver.correctSide ),
-				colorBias: createReceiverColorBias( irradiance, receiver.correctSide ),
-				l0ColorBias: createReceiverColorBias( l0Irradiance, receiver.correctSide )
-			} );
+			if ( row.relationToReceiver === 'correct-side' &&
+				row.visibilityWeight > 0.0001 &&
+				wrongRatio >= 0.5 ) {
+
+				correctSideMixedColorRowCount ++;
+
+			}
 
 		}
 
@@ -53,138 +49,34 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 			visibilityMix
 		);
 		const runtimeIrradiance = evaluateProbeCoefficientsForReceiver( runtimeCoefficients, normal );
-		const invertedRuntimeIrradiance = evaluateProbeCoefficientsForReceiver( runtimeCoefficients, invertedNormal );
-		const runtimeColorBias = createReceiverColorBias( runtimeIrradiance, receiver.correctSide );
-		const invertedRuntimeColorBias = createReceiverColorBias( invertedRuntimeIrradiance, receiver.correctSide );
+		const runtimeWrongRatio = createReceiverWrongRatio( runtimeIrradiance, receiver.correctSide );
 
 		return {
-			label: receiver.label,
-			correctSide: receiver.correctSide,
-			rows,
-			aggregates: {
-				scalar: {
-					colorBias: scalarAggregate.colorBias
-				},
-				visibility: {
-					colorBias: visibilityAggregate.colorBias
-				},
-				runtimeFinal: {
-					colorBias: runtimeColorBias,
-					chromaPressure: createReceiverChromaPressure( runtimeIrradiance, receiver.correctSide )
-				},
-				invertedNormalRuntimeFinal: {
-					label: 'runtime-final-mixed-coefficients-inverted-normal',
-					colorBias: invertedRuntimeColorBias
-				}
-			}
+			visibilityWrongRatio: visibilityAggregate.wrongRatio,
+			runtimeWrongRatio,
+			correctSideMixedColorRowCount
 		};
 
 	};
 
 	const analyzeShContributionDiagnostics = async ( leftReceiver, rightReceiver ) => {
 
-		const receiverDiagnostics = [
-			await analyzeReceiverShContributions( leftReceiver ),
-			await analyzeReceiverShContributions( rightReceiver )
-		];
-		const scalarWrongRatioMean = roundMetric(
-			receiverDiagnostics.reduce( ( total, receiver ) =>
-				total + receiver.aggregates.scalar.colorBias.wrongOverCorrect, 0
-			) / Math.max( receiverDiagnostics.length, 1 )
-		);
+		const leftDiagnostic = await analyzeReceiverShContributions( leftReceiver );
+		const rightDiagnostic = await analyzeReceiverShContributions( rightReceiver );
+		const receiverCount = 2;
 		const runtimeWrongRatioMean = roundMetric(
-			receiverDiagnostics.reduce( ( total, receiver ) =>
-				total + receiver.aggregates.runtimeFinal.colorBias.wrongOverCorrect, 0
-			) / Math.max( receiverDiagnostics.length, 1 )
-		);
-		const invertedNormalRuntimeWrongRatioMean = roundMetric(
-			receiverDiagnostics.reduce( ( total, receiver ) =>
-				total + receiver.aggregates.invertedNormalRuntimeFinal.colorBias.wrongOverCorrect, 0
-			) / Math.max( receiverDiagnostics.length, 1 )
+			( leftDiagnostic.runtimeWrongRatio + rightDiagnostic.runtimeWrongRatio ) / receiverCount
 		);
 		const visibilityWrongRatioMean = roundMetric(
-			receiverDiagnostics.reduce( ( total, receiver ) =>
-				total + receiver.aggregates.visibility.colorBias.wrongOverCorrect, 0
-			) / Math.max( receiverDiagnostics.length, 1 )
+			( leftDiagnostic.visibilityWrongRatio + rightDiagnostic.visibilityWrongRatio ) / receiverCount
 		);
-		const correctVisibilityRows = receiverDiagnostics.flatMap( receiver =>
-			receiver.rows.filter( row =>
-				row.relationToReceiver === 'correct-side' &&
-						row.visibilityWeight > 0.0001
-			)
-		);
-		const weightedCorrectLeakTotal = correctVisibilityRows.reduce(
-			( total, row ) => total + row.colorBias.wrongOverCorrect * row.visibilityWeight,
-			0
-		);
-		const weightedCorrectWeightTotal = correctVisibilityRows.reduce(
-			( total, row ) => total + row.visibilityWeight,
-			0
-		);
-		const weightedCorrectSideWrongOverCorrectMean = roundMetric(
-			weightedCorrectLeakTotal / Math.max( weightedCorrectWeightTotal, 0.0001 )
-		);
-		const correctSideMixedColorRows = correctVisibilityRows.filter(
-			row => row.colorBias.wrongOverCorrect >= 0.5
-		);
-		const createWeightedMean = ( rows, weightKey, read ) => {
+		const correctSideMixedColorRowCount =
+			leftDiagnostic.correctSideMixedColorRowCount + rightDiagnostic.correctSideMixedColorRowCount;
 
-			const totalWeight = rows.reduce( ( total, row ) => total + row[ weightKey ], 0 );
-			const weightedTotal = rows.reduce(
-				( total, row ) => total + read( row ) * row[ weightKey ],
-				0
-			);
-
-			return roundMetric( weightedTotal / Math.max( totalWeight, 0.0001 ) );
-
-		};
-
-		const positiveChromaPressure = row => Math.max( row.chromaPressure.wrongMinusCorrect, 0 );
-		const summarizeProbeContentReceiver = receiver => {
-
-			const correctRows = receiver.rows.filter( row =>
-				row.visibilityWeight > 0.0001 &&
-				row.relationToReceiver === 'correct-side'
-			);
-			const maxCorrectSideChromaPressure = correctRows.reduce( ( max, row ) => Math.max( max, positiveChromaPressure( row ) ), 0 );
-			const weightedCorrectSideVisibilityChromaPressureMean = createWeightedMean(
-				correctRows,
-				'visibilityWeight',
-				positiveChromaPressure
-			);
-			return {
-				weightedCorrectSideVisibilityChromaPressureMean,
-				runtimeFinalChromaPressure: receiver.aggregates.runtimeFinal.chromaPressure,
-				maxCorrectSideChromaPressure: roundMetric( maxCorrectSideChromaPressure )
-			};
-
-		};
-
-		const probeContentReceivers = receiverDiagnostics.map( summarizeProbeContentReceiver );
-		const maxCorrectSideChromaPressure = roundMetric( Math.max(
-			...probeContentReceivers.map( receiver => receiver.maxCorrectSideChromaPressure )
-		) );
-		const maxRuntimeFinalChromaPressure = roundMetric( Math.max(
-			...probeContentReceivers.map( receiver => Math.max( receiver.runtimeFinalChromaPressure.wrongMinusCorrect, 0 ) )
-		) );
-		const weightedCorrectSideChromaPressureMean = roundMetric(
-			probeContentReceivers.reduce(
-				( total, receiver ) => total + receiver.weightedCorrectSideVisibilityChromaPressureMean,
-				0
-			) / Math.max( probeContentReceivers.length, 1 )
-		);
 		return {
-			summary: {
-				scalarWrongRatioMean,
-				visibilityWrongRatioMean,
-				runtimeWrongRatioMean,
-				invertedNormalRuntimeWrongRatioMean,
-				correctSideMixedColorRowCount: correctSideMixedColorRows.length,
-				maxCorrectSideChromaPressure,
-				maxRuntimeFinalChromaPressure,
-				weightedCorrectSideChromaPressureMean,
-				weightedCorrectSideWrongOverCorrectMean,
-			}
+			visibilityWrongRatioMean,
+			runtimeWrongRatioMean,
+			correctSideMixedColorRowCount
 		};
 
 	};
