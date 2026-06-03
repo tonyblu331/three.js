@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - light probes cornell</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgpu - light probes cornell">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgpu_lightprobes_cornell.html">
+		<link type="text/css" rel="stylesheet" href="example.css">
+	</head>
+
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
+
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>WebGPU Light Probe Grid</span>
+			</div>
+
+			<small>
+				GPU-resident SH probe grid in a Cornell box. Zero CPU readback.
+			</small>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+
+			import { Inspector } from 'three/addons/inspector/Inspector.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { LightProbeGridGPU as ProofLightProbeGridGPU } from './jsm/lighting/LightProbeGridGPUProof.js';
+			import { LightProbeGrid as SixteenStudioLightProbeGridGPU } from './jsm/lighting/LightProbeGridGPU.js';
+			import { createLightProbeGridGPUExampleGUI } from './jsm/lighting/LightProbeGridGPUExampleGUI.js';
+			import { createLightProbeGridGPUTestHarness } from './jsm/lighting/LightProbeGridGPUTestHarness.js';
+			import { createLightProbeGridGPUProbeOwnershipAssignment } from './jsm/lighting/lightprobegridgpu/LightProbeGridGPUProbeOwnership.js';
+			import { LightProbeGridHelper as SixteenStudioLightProbeGridHelper } from './jsm/helpers/LightProbeGridHelperGPU.js';
+			import WebGPU from 'three/addons/capabilities/WebGPU.js';
+
+			let renderer, scene, camera, controls;
+			let directLight, ambientLight, lightPanel, probeHelper;
+			let probeGrid = null;
+			let leakFixture = null;
+			let probeOwnershipAssignmentFacts = null;
+			let baking = false;
+			let pendingRecreate = false;
+			let pendingBake = false;
+
+			const probeMaterials = [];
+			const probeMeshes = [];
+			const gridMin = new THREE.Vector3( - 2.6, 0.35, - 2.6 );
+			const gridMax = new THREE.Vector3( 2.6, 4.35, 2.6 );
+			const queryParams = new URLSearchParams( window.location.search );
+			const implementationMode = queryParams.get( 'implementation' ) === 'sixteenstudio' ? 'sixteenstudio' : 'proof';
+
+			const directLightIntensity = 40;
+			const ambientLightIntensity = 0.05;
+
+			const readLightProbeGridExampleContext = () => ( {
+				ambientLight,
+				ambientLightIntensity,
+				applyLightingMode,
+				bakeProbeGrid,
+				baking,
+				camera,
+				collectProbeOccupancy,
+				createProbeLayerMaskData,
+				createProbeSourceMapData,
+				createProbeValidityData,
+				directLight,
+				directLightIntensity,
+				getActiveLeakDivider,
+				getGridProbePosition,
+				gridMax,
+				gridMin,
+				leakFixture,
+				params,
+				probeGrid,
+				probeHelper,
+				probeOwnershipAssignmentFacts,
+				probeMeshes,
+				recreateAndBake,
+				recreateAndBakeRequired,
+				renderer,
+				runProbeGridBake,
+				scene,
+				syncProbeGridBindings,
+				timings,
+				updateLightingMode,
+				updateMaterialMode,
+				updateMaterialType
+			} );
+
+			const params = {
+				resolution: 4,
+				cubemapSize: 8,
+				projectionPrecision: 'half float',
+				activeProjectionPrecision: 'half-linear',
+				materialType: 'standard',
+				probeIntensity: 1,
+				probeHelperIntensity: 1,
+				probeHelperDebugMode: 'irradiance',
+				probeHelperDepthMode: 'depth-tested',
+				band1Intensity: 1,
+				band2Intensity: 0.55,
+				normalBias: 0.5,
+				viewBias: 0,
+				leakReductionMode: 'off',
+				useProbeValidity: true,
+				lightingMode: 'direct + probes',
+				neutralMaterials: false,
+				probeHelper: false,
+				bakeStatus: 'idle',
+				rebake: bakeProbeGrid
+			};
+
+			const timings = {
+				sceneUpdateMs: 0,
+				cubemapMs: 0,
+				radianceCubemapCaptureMs: 0,
+				projectionMs: 0,
+				computeShProjectionMs: 0,
+				copyMs: 0,
+				atlasRepackMs: 0,
+				visibilityCubemapMs: 0,
+				distanceCubemapCaptureMs: 0,
+				visibilityRepackMs: 0,
+				verifierReadbackMs: 0,
+				visibilityDepthMode: 'not-baked',
+				projectionBackendRequest: 'auto',
+				projectionBackend: 'fragment-coefficient-projection',
+				projectionBackendForced: false,
+				projectionCubemapSweepsPerProbe: 9,
+				projectionTexelVisits: 0,
+				projectionTexelVisitReductionRatio: 0,
+				totalBakeMs: 0,
+				frameMs: 0,
+				wallClockTotalBakeMs: 0,
+				timingSource: 'unavailable',
+				timingSourceKind: 'unavailable',
+				gpuTimestampStatus: 'unavailable',
+				projectionTimingSource: 'unavailable',
+				timingBuckets: null,
+				deterministicTimerDetected: false
+			};
+
+			const getTimingNow = () => {
+
+				const nonDeterministicNow = performance._now;
+				return typeof nonDeterministicNow === 'function' ? nonDeterministicNow.call( performance ) : performance.now();
+
+			};
+
+			const roundTiming = ( value ) => Number( Math.max( value, 0 ).toFixed( 2 ) );
+
+			const normalizeBakeTimings = ( nextTimings, wallClockTotalBakeMs ) => {
+
+				const fallbackTotalBakeMs = roundTiming( wallClockTotalBakeMs );
+				const sourceTotalBakeMs = Number.isFinite( nextTimings?.totalBakeMs ) ? nextTimings.totalBakeMs : 0;
+				const hasSourceTiming = sourceTotalBakeMs > 0;
+				const hasFallbackTiming = fallbackTotalBakeMs > 0;
+
+				const timingSourceKind = nextTimings?.timingSourceKind ?? ( nextTimings?.timingSource !== undefined && nextTimings.timingSource !== 'unavailable' ? 'performance.now diagnostic' : 'unavailable' );
+				const timingBuckets = nextTimings?.timingBuckets ?? {
+					sceneUpdateMs: Number.isFinite( nextTimings?.sceneUpdateMs ) ? nextTimings.sceneUpdateMs : 0,
+					radianceCubemapCaptureMs: Number.isFinite( nextTimings?.radianceCubemapCaptureMs ) ? nextTimings.radianceCubemapCaptureMs : Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					distanceCubemapCaptureMs: Number.isFinite( nextTimings?.distanceCubemapCaptureMs ) ? nextTimings.distanceCubemapCaptureMs : Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+					computeShProjectionMs: Number.isFinite( nextTimings?.computeShProjectionMs ) ? nextTimings.computeShProjectionMs : Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
+					visibilityRepackMs: Number.isFinite( nextTimings?.visibilityRepackMs ) ? nextTimings.visibilityRepackMs : 0,
+					atlasRepackMs: Number.isFinite( nextTimings?.atlasRepackMs ) ? nextTimings.atlasRepackMs : Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					verifierReadbackMs: Number.isFinite( nextTimings?.verifierReadbackMs ) ? nextTimings.verifierReadbackMs : 0,
+					source: timingSourceKind,
+					legacySource: nextTimings?.timingSource ?? 'unavailable',
+					verifierReadbackTimingSource: 'unavailable',
+					runtimeTimingSource: 'unavailable'
+				};
+
+				return {
+					sceneUpdateMs: Number.isFinite( nextTimings?.sceneUpdateMs ) ? nextTimings.sceneUpdateMs : 0,
+					cubemapMs: Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					radianceCubemapCaptureMs: Number.isFinite( nextTimings?.radianceCubemapCaptureMs ) ? nextTimings.radianceCubemapCaptureMs : Number.isFinite( nextTimings?.cubemapMs ) ? nextTimings.cubemapMs : 0,
+					projectionMs: Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
+					computeShProjectionMs: Number.isFinite( nextTimings?.computeShProjectionMs ) ? nextTimings.computeShProjectionMs : Number.isFinite( nextTimings?.projectionMs ) ? nextTimings.projectionMs : 0,
+					copyMs: Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					atlasRepackMs: Number.isFinite( nextTimings?.atlasRepackMs ) ? nextTimings.atlasRepackMs : Number.isFinite( nextTimings?.copyMs ) ? nextTimings.copyMs : 0,
+					visibilityCubemapMs: Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+					distanceCubemapCaptureMs: Number.isFinite( nextTimings?.distanceCubemapCaptureMs ) ? nextTimings.distanceCubemapCaptureMs : Number.isFinite( nextTimings?.visibilityCubemapMs ) ? nextTimings.visibilityCubemapMs : 0,
+					visibilityRepackMs: Number.isFinite( nextTimings?.visibilityRepackMs ) ? nextTimings.visibilityRepackMs : 0,
+					verifierReadbackMs: Number.isFinite( nextTimings?.verifierReadbackMs ) ? nextTimings.verifierReadbackMs : 0,
+					visibilityDepthMode: nextTimings?.visibilityDepthMode ?? 'not-baked',
+					projectionBackendRequest: nextTimings?.projectionBackendRequest ?? 'auto',
+					projectionBackend: nextTimings?.projectionBackend ?? 'fragment-coefficient-projection',
+					projectionBackendForced: nextTimings?.projectionBackendForced === true,
+					projectionCubemapSweepsPerProbe: Number.isFinite( nextTimings?.projectionCubemapSweepsPerProbe ) ? nextTimings.projectionCubemapSweepsPerProbe : 9,
+					projectionTexelVisits: Number.isFinite( nextTimings?.projectionTexelVisits ) ? nextTimings.projectionTexelVisits : 0,
+					projectionTexelVisitReductionRatio: Number.isFinite( nextTimings?.projectionTexelVisitReductionRatio ) ? nextTimings.projectionTexelVisitReductionRatio : 0,
+					totalBakeMs: hasSourceTiming ? sourceTotalBakeMs : hasFallbackTiming ? fallbackTotalBakeMs : sourceTotalBakeMs,
+					wallClockTotalBakeMs: fallbackTotalBakeMs,
+					timingSource: nextTimings?.timingSource ?? ( hasSourceTiming ? 'probe-grid-performance-now' : hasFallbackTiming ? 'harness-wall-clock-fallback' : 'unavailable' ),
+					timingSourceKind,
+					gpuTimestampStatus: nextTimings?.gpuTimestampStatus ?? 'unavailable',
+					projectionTimingSource: nextTimings?.projectionTimingSource ?? nextTimings?.timingSource ?? 'unavailable',
+					timingBuckets,
+					deterministicTimerDetected: nextTimings?.deterministicTimerDetected ?? ( typeof performance._now === 'function' && performance.now() === 0 )
+				};
+
+			};
+
+			if ( WebGPU.isAvailable() === false ) {
+
+				document.body.appendChild( WebGPU.getErrorMessage() );
+
+				throw new Error( 'No WebGPU support' );
+
+			}
+
+			init();
+
+			async function init() {
+
+				renderer = new THREE.WebGPURenderer( { antialias: true } );
+				renderer.setPixelRatio( Math.min( window.devicePixelRatio, 1.5 ) );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.toneMapping = THREE.ACESFilmicToneMapping;
+				renderer.toneMappingExposure = 1.0;
+				renderer.shadowMap.enabled = true;
+				renderer.inspector = new Inspector();
+				document.body.appendChild( renderer.domElement );
+
+				await renderer.init();
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x111111 );
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 100 );
+				camera.position.set( 0, 2.5, 8 );
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 2.5, 0 );
+				controls.minDistance = 3;
+				controls.maxDistance = 12;
+				controls.enableDamping = true;
+				controls.update();
+
+				createCornellBox();
+				createProbeResources();
+				createLightProbeGridGPUExampleGUI( readLightProbeGridExampleContext );
+				createLightProbeGridGPUTestHarness( readLightProbeGridExampleContext );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				renderer.setAnimationLoop( animate );
+
+				await bakeProbeGrid();
+
+			}
+
+			function createCornellBox() {
+
+				const floorGeometry = new THREE.PlaneGeometry( 6, 6 );
+				const wallGeometry = new THREE.PlaneGeometry( 6, 5 );
+
+				const floor = createProbeMesh( floorGeometry, 0xcccccc );
+				floor.rotation.x = - Math.PI / 2;
+				floor.receiveShadow = true;
+				scene.add( floor );
+
+				const ceiling = createProbeMesh( floorGeometry, 0xcccccc );
+				ceiling.position.y = 5;
+				ceiling.rotation.x = Math.PI / 2;
+				ceiling.receiveShadow = true;
+				scene.add( ceiling );
+
+				const back = createProbeMesh( wallGeometry, 0xcccccc );
+				back.position.set( 0, 2.5, - 3 );
+				back.receiveShadow = true;
+				scene.add( back );
+
+				const front = createProbeMesh( wallGeometry, 0xcccccc );
+				front.position.set( 0, 2.5, 3 );
+				front.rotation.y = Math.PI;
+				front.receiveShadow = true;
+				scene.add( front );
+
+				const left = createProbeMesh( wallGeometry, 0xff0000 );
+				left.position.set( - 3, 2.5, 0 );
+				left.rotation.y = Math.PI / 2;
+				left.receiveShadow = true;
+				scene.add( left );
+
+				const right = createProbeMesh( wallGeometry, 0x00ff00 );
+				right.position.set( 3, 2.5, 0 );
+				right.rotation.y = - Math.PI / 2;
+				right.receiveShadow = true;
+				scene.add( right );
+
+				const tallBox = createProbeMesh( new THREE.BoxGeometry( 1.2, 2.5, 1.2 ), 0xeeeeee );
+				tallBox.position.set( - 0.8, 1.25, - 0.8 );
+				tallBox.rotation.y = Math.PI / 8;
+				tallBox.castShadow = true;
+				tallBox.receiveShadow = true;
+				scene.add( tallBox );
+
+				const shortBox = createProbeMesh( new THREE.BoxGeometry( 1.2, 1.2, 1.2 ), 0xeeeeee );
+				shortBox.position.set( 1, 0.6, 0.5 );
+				shortBox.rotation.y = - Math.PI / 6;
+				shortBox.castShadow = true;
+				shortBox.receiveShadow = true;
+				scene.add( shortBox );
+
+				const sphere = createProbeMesh( new THREE.SphereGeometry( 0.5, 32, 32 ), 0xeeeeee );
+				sphere.position.set( 1, 1.9, 0.5 );
+				sphere.castShadow = true;
+				sphere.receiveShadow = true;
+				scene.add( sphere );
+
+				const lightPanelMaterial = new THREE.MeshBasicMaterial( {
+					color: 0xfff3d1,
+					side: THREE.DoubleSide,
+					toneMapped: false
+				} );
+
+				lightPanel = new THREE.Mesh( new THREE.PlaneGeometry( 0.7, 0.7 ), lightPanelMaterial );
+				lightPanel.position.set( 0, 4.86, 0 );
+				lightPanel.rotation.x = Math.PI / 2;
+				lightPanel.userData.skipProbeLighting = true;
+				scene.add( lightPanel );
+
+				directLight = new THREE.PointLight( 0xffffff, directLightIntensity );
+				directLight.position.set( 0, 4.5, 0 );
+				directLight.castShadow = true;
+				directLight.shadow.mapSize.setScalar( 256 );
+				directLight.shadow.radius = 10;
+				directLight.shadow.normalBias = - 0.02;
+				scene.add( directLight );
+
+				ambientLight = new THREE.AmbientLight( 0xffffff, ambientLightIntensity );
+				scene.add( ambientLight );
+
+				createLeakFixture();
+
+			}
+
+			function createProbeMesh( geometry, color ) {
+
+				const material = createProbeMaterial( color );
+				const mesh = new THREE.Mesh( geometry, material );
+
+				mesh.userData.probeColor = color;
+				probeMeshes.push( mesh );
+
+				return mesh;
+
+			}
+
+			function createProbeMaterial( color ) {
+
+				let material;
+
+				if ( params.materialType === 'physical' ) {
+
+					material = new THREE.MeshPhysicalNodeMaterial( {
+						color,
+						roughness: 0.82,
+						metalness: 0,
+						clearcoat: 0.15,
+						clearcoatRoughness: 0.8
+					} );
+
+				} else if ( params.materialType === 'lambert' ) {
+
+					material = new THREE.MeshLambertNodeMaterial( { color } );
+
+				} else if ( params.materialType === 'phong' ) {
+
+					material = new THREE.MeshPhongNodeMaterial( {
+						color,
+						shininess: 12
+					} );
+
+				} else {
+
+					material = new THREE.MeshStandardNodeMaterial( {
+						color,
+						roughness: 0.82,
+						metalness: 0
+					} );
+
+				}
+
+				material.envMapIntensity = 0;
+				material.userData.originalColor = new THREE.Color( color );
+				probeMaterials.push( material );
+
+				return material;
+
+			}
+
+			function createLeakFixture() {
+
+				const group = new THREE.Group();
+				group.visible = false;
+				scene.add( group );
+
+				const meshes = [];
+				const fixtureMesh = ( mesh ) => {
+
+					mesh.visible = false;
+					mesh.userData.leakFixture = true;
+					meshes.push( mesh );
+					group.add( mesh );
+
+					return mesh;
+
+				};
+
+				const floor = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 5.2, 4.6 ), 0xd8d2c5 ) );
+				floor.position.set( 0, 0.08, 0 );
+				floor.rotation.x = - Math.PI / 2;
+				floor.receiveShadow = true;
+
+				const leftFloorBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 1.45, 4.3 ), 0xff2020 ) );
+				leftFloorBounce.position.set( - 1.85, 0.09, 0 );
+				leftFloorBounce.rotation.x = - Math.PI / 2;
+				leftFloorBounce.receiveShadow = true;
+
+				const rightFloorBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 1.85, 4.3 ), 0x20ff20 ) );
+				rightFloorBounce.position.set( 0.95, 0.1, 0 );
+				rightFloorBounce.rotation.x = - Math.PI / 2;
+				rightFloorBounce.receiveShadow = true;
+
+				const leftWallBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 4.3, 3.4 ), 0xff2020 ) );
+				leftWallBounce.position.set( - 2.52, 1.78, 0 );
+				leftWallBounce.rotation.y = Math.PI / 2;
+				leftWallBounce.receiveShadow = true;
+
+				const rightWallBounce = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 4.3, 3.4 ), 0x20ff20 ) );
+				rightWallBounce.position.set( 2.52, 1.78, 0 );
+				rightWallBounce.rotation.y = - Math.PI / 2;
+				rightWallBounce.receiveShadow = true;
+
+				const backWall = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 5.2, 3.4 ), 0xd8d2c5 ) );
+				backWall.position.set( 0, 1.78, - 2.3 );
+				backWall.receiveShadow = true;
+
+				const thinDivider = fixtureMesh( createProbeMesh( new THREE.BoxGeometry( 0.32, 3.45, 4.45 ), 0xd8d2c5 ) );
+				thinDivider.position.set( - 0.8667, 1.8, 0 );
+				thinDivider.castShadow = true;
+				thinDivider.receiveShadow = true;
+				thinDivider.userData.leakDivider = 'thin-wall';
+
+				const sealedDivider = fixtureMesh( createProbeMesh( new THREE.BoxGeometry( 0.32, 3.45, 5.6 ), 0xd8d2c5 ) );
+				sealedDivider.position.set( - 0.8667, 1.8, 0 );
+				sealedDivider.castShadow = true;
+				sealedDivider.receiveShadow = true;
+				sealedDivider.userData.leakDivider = 'sealed-wall';
+
+				const zeroThicknessDivider = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 4.45, 3.45 ), 0xd8d2c5 ) );
+				zeroThicknessDivider.position.set( - 0.8667, 1.8, 0 );
+				zeroThicknessDivider.rotation.y = Math.PI / 2;
+				zeroThicknessDivider.castShadow = true;
+				zeroThicknessDivider.receiveShadow = true;
+				zeroThicknessDivider.material.side = THREE.DoubleSide;
+				zeroThicknessDivider.userData.leakDivider = 'zero-thickness';
+
+				const leftReceiver = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 0.88, 1.25 ), 0xd8d2c5 ) );
+				leftReceiver.position.set( - 1.52, 1.05, 1.55 );
+				leftReceiver.rotation.y = - 0.38;
+				leftReceiver.receiveShadow = true;
+				leftReceiver.userData.leakReceiver = 'left';
+
+				const rightReceiver = fixtureMesh( createProbeMesh( new THREE.PlaneGeometry( 0.88, 1.25 ), 0xd8d2c5 ) );
+				rightReceiver.position.set( - 0.22, 1.05, 1.55 );
+				rightReceiver.rotation.y = 0.38;
+				rightReceiver.receiveShadow = true;
+				rightReceiver.userData.leakReceiver = 'right';
+
+				leakFixture = {
+					group,
+					meshes,
+					thinDivider,
+					sealedDivider,
+					zeroThicknessDivider,
+					leftReceiver,
+					rightReceiver
+				};
+
+			}
+
+			function getActiveLeakDivider() {
+
+				if ( leakFixture === null ) return null;
+				if ( leakFixture.sealedDivider.visible ) return leakFixture.sealedDivider;
+				if ( leakFixture.thinDivider.visible ) return leakFixture.thinDivider;
+				if ( leakFixture.zeroThicknessDivider.visible ) return leakFixture.zeroThicknessDivider;
+
+				return leakFixture.thinDivider;
+
+			}
+
+			function isVisibleForProbeOccupancy( object ) {
+
+				let current = object;
+
+				while ( current !== null ) {
+
+					if ( current.visible === false ) return false;
+					current = current.parent;
+
+				}
+
+				return true;
+
+			}
+
+			function getGridProbePosition( index, resolution, target ) {
+
+				const iz = Math.floor( index / ( resolution * resolution ) );
+				const iy = Math.floor( ( index - iz * resolution * resolution ) / resolution );
+				const ix = index % resolution;
+
+				target.set(
+					gridMin.x + ix * ( gridMax.x - gridMin.x ) / ( resolution - 1 ),
+					gridMin.y + iy * ( gridMax.y - gridMin.y ) / ( resolution - 1 ),
+					gridMin.z + iz * ( gridMax.z - gridMin.z ) / ( resolution - 1 )
+				);
+
+				return target;
+
+			}
+
+			function collectProbeOccupancy( resolution = params.resolution ) {
+
+				scene.updateMatrixWorld( true );
+
+				const totalProbes = resolution * resolution * resolution;
+				const solidProbeMeshes = probeMeshes.filter( mesh => isVisibleForProbeOccupancy( mesh ) && mesh.geometry.type !== 'PlaneGeometry' );
+				const probePosition = new THREE.Vector3();
+				const localProbePosition = new THREE.Vector3();
+				const inverseMatrix = new THREE.Matrix4();
+				const occupiedProbes = [];
+
+				for ( let probeIndex = 0; probeIndex < totalProbes; probeIndex ++ ) {
+
+					const meshes = [];
+
+					getGridProbePosition( probeIndex, resolution, probePosition );
+
+					for ( const mesh of solidProbeMeshes ) {
+
+						if ( mesh.geometry.boundingBox === null ) mesh.geometry.computeBoundingBox();
+
+						inverseMatrix.copy( mesh.matrixWorld ).invert();
+						localProbePosition.copy( probePosition ).applyMatrix4( inverseMatrix );
+
+						if ( mesh.geometry.boundingBox.containsPoint( localProbePosition ) ) {
+
+							meshes.push( mesh.geometry.type );
+
+						}
+
+					}
+
+					if ( meshes.length > 0 ) {
+
+						occupiedProbes.push( {
+							probeIndex,
+							position: {
+								x: Number( probePosition.x.toFixed( 4 ) ),
+								y: Number( probePosition.y.toFixed( 4 ) ),
+								z: Number( probePosition.z.toFixed( 4 ) )
+							},
+							meshes
+						} );
+
+					}
+
+				}
+
+				return {
+					totalProbes,
+					solidMeshCount: solidProbeMeshes.length,
+					occupiedProbeCount: occupiedProbes.length,
+					occupiedProbes
+				};
+
+			}
+
+			function createProbeSourceMapData( resolution = params.resolution, probeValidity = createProbeValidityData( resolution ) ) {
+
+				// CPU/report-only source map for proof diagnostics. Do not pass this into LightProbeGridGPU runtime options.
+
+				const totalProbes = resolution * resolution * resolution;
+				const sources = new Float32Array( totalProbes );
+				const position = new THREE.Vector3();
+				const candidatePosition = new THREE.Vector3();
+				const positions = [];
+				const divider = getActiveLeakDivider();
+				const dividerX = divider !== null && divider !== undefined ? divider.position.x : - 0.8667;
+
+				for ( let i = 0; i < totalProbes; i ++ ) {
+
+					getGridProbePosition( i, resolution, position );
+					positions.push( {
+						index: i,
+						position: position.clone(),
+						side: position.x < dividerX ? 'left' : 'right',
+						valid: probeValidity[ i ] >= 1
+					} );
+					sources[ i ] = i;
+
+				}
+
+				for ( const probe of positions ) {
+
+					if ( probe.valid ) continue;
+
+					let bestIndex = probe.index;
+					let bestDistanceSq = Infinity;
+
+					for ( const candidate of positions ) {
+
+						if ( candidate.valid === false || candidate.side !== probe.side ) continue;
+
+						candidatePosition.copy( candidate.position );
+						const distanceSq = candidatePosition.distanceToSquared( probe.position );
+
+						if ( distanceSq < bestDistanceSq ) {
+
+							bestDistanceSq = distanceSq;
+							bestIndex = candidate.index;
+
+						}
+
+					}
+
+					sources[ probe.index ] = bestIndex;
+
+				}
+
+				return sources;
+
+			}
+
+			function createProbeValidityData( resolution = params.resolution ) {
+
+				const occupancy = collectProbeOccupancy( resolution );
+				const probeValidity = new Float32Array( occupancy.totalProbes );
+
+				probeValidity.fill( 1 );
+
+				for ( const probe of occupancy.occupiedProbes ) {
+
+					probeValidity[ probe.probeIndex ] = 0;
+
+				}
+
+				return probeValidity;
+
+			}
+
+			function createProbeLayerMaskData( resolution = params.resolution ) {
+
+				const divider = getActiveLeakDivider();
+				const dividerX = divider !== null && divider !== undefined ? divider.position.x : - 0.8667;
+				const defaultLayer = 1;
+				const leftLayer = 2;
+				const rightLayer = 4;
+				const ownershipAssignment = createLightProbeGridGPUProbeOwnershipAssignment( {
+					min: gridMin,
+					max: gridMax,
+					resolution,
+					defaultMask: defaultLayer,
+					layerRules: [
+						{ name: 'cornell-left', layerMask: leftLayer, ownershipMask: leftLayer, defaultCompatible: true },
+						{ name: 'cornell-right', layerMask: rightLayer, ownershipMask: rightLayer, defaultCompatible: true }
+					],
+					regionRules: [
+						{
+							name: 'cornell-left-region',
+							layerRuleName: 'cornell-left',
+							box: {
+								min: new THREE.Vector3( gridMin.x, gridMin.y, gridMin.z ),
+								max: new THREE.Vector3( dividerX, gridMax.y, gridMax.z )
+							}
+						},
+						{
+							name: 'cornell-right-region',
+							layerRuleName: 'cornell-right',
+							box: {
+								min: new THREE.Vector3( dividerX, gridMin.y, gridMin.z ),
+								max: new THREE.Vector3( gridMax.x, gridMax.y, gridMax.z )
+							}
+						}
+					]
+				} );
+
+				probeOwnershipAssignmentFacts = ownershipAssignment.assignmentFacts;
+
+				return ownershipAssignment.probeLayerMasks;
+
+			}
+
+			function createProbeResources() {
+
+				disposeProbeResources();
+
+				const probeOptions = {
+					resolution: params.resolution,
+					cubemapSize: params.cubemapSize,
+					projectionPrecision: params.projectionPrecision,
+					probeIntensity: params.probeIntensity,
+					helperIntensity: params.probeHelperIntensity,
+					helperDebugMode: params.probeHelperDebugMode,
+					helperDepthMode: params.probeHelperDepthMode,
+					band1Intensity: params.band1Intensity,
+					band2Intensity: params.band2Intensity,
+					normalBias: params.normalBias,
+					viewBias: params.viewBias,
+					leakReductionMode: params.leakReductionMode,
+					renderer
+				};
+
+				if ( params.useProbeValidity ) probeOptions.probeValidity = createProbeValidityData( params.resolution );
+				probeOptions.probeLayerMasks = createProbeLayerMaskData( params.resolution );
+
+				probeGrid = implementationMode === 'sixteenstudio' ?
+					createSixteenStudioProbeGrid( probeOptions ) :
+					new ProofLightProbeGridGPU( gridMin, gridMax, probeOptions );
+
+				scene.add( probeGrid );
+				params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
+
+				probeHelper = probeGrid.createHelper();
+				probeHelper.visible = params.probeHelper;
+				scene.add( probeHelper );
+
+				syncProbeGridBindings();
+
+			}
+
+			function disposeProbeResources() {
+
+				if ( probeHelper !== undefined ) {
+
+					scene.remove( probeHelper );
+					probeHelper = undefined;
+
+				}
+
+				if ( probeGrid !== null ) {
+
+					scene.remove( probeGrid );
+					probeGrid.dispose();
+					probeGrid = null;
+
+				}
+
+			}
+
+			function updateProbeMaterialLighting() {
+
+				if ( probeGrid === null ) return;
+
+				const gridLightsNode = probeGrid.createLightsNode( [ directLight, ambientLight ] );
+
+				for ( const material of probeMaterials ) {
+
+					material.lightsNode = gridLightsNode;
+					material.needsUpdate = true;
+
+				}
+
+			}
+
+			function syncProbeGridBindings() {
+
+				if ( probeGrid === null ) return;
+
+				const nextHelper = probeGrid.createHelper();
+
+				if ( probeHelper !== nextHelper ) {
+
+					if ( probeHelper !== undefined ) scene.remove( probeHelper );
+
+					probeHelper = nextHelper;
+					scene.add( probeHelper );
+
+				}
+
+				probeHelper.visible = params.probeHelper;
+				updateProbeMaterialLighting();
+				applyLightingMode();
+
+			}
+
+			function createSixteenStudioProbeGrid( probeOptions ) {
+
+				const gridSize = gridMax.clone().sub( gridMin );
+				const gridCenter = gridMin.clone().add( gridMax ).multiplyScalar( 0.5 );
+				const proofDelegate = new ProofLightProbeGridGPU( gridMin, gridMax, probeOptions );
+				const grid = new SixteenStudioLightProbeGridGPU(
+					gridSize.x,
+					gridSize.y,
+					gridSize.z,
+					params.resolution,
+					params.resolution,
+					params.resolution
+				);
+				const bakeSixteenStudioGrid = grid.bake.bind( grid );
+				const disposeSixteenStudioGrid = grid.dispose.bind( grid );
+				let proofInternalsActive = false;
+
+				grid.position.copy( gridCenter );
+				grid.activeProjectionPrecision = 'half-linear';
+				grid.probeIntensity = uniformCompatibilityValue( params.probeIntensity );
+				grid.createHelper = () => new SixteenStudioLightProbeGridHelper( grid, 0.12 );
+				grid.createIrradianceNode = options => proofDelegate.createIrradianceNode( options );
+				grid.createLightsNode = ( sceneLights, options ) => proofInternalsActive === true ?
+					proofDelegate.createLightsNode( sceneLights, options ) :
+					null;
+				grid.setOptions = ( options, renderer ) => proofDelegate.setOptions( options, renderer );
+
+				grid.setHelperDebugMode = () => {};
+
+				grid.setHelperDepthMode = () => {};
+
+				for ( const key of [
+					'visibilityDepthTarget',
+					'visibilityDepthResolution',
+					'visibilityDepthMode',
+					'visibilityDepthWeighting',
+					'probeValidityTexture',
+					'probeValidityTextureWidth',
+					'probeValidityTextureHeight',
+					'totalProbes'
+				] ) {
+
+					Object.defineProperty( grid, key, {
+						get: () => proofDelegate[ key ],
+						configurable: true
+					} );
+
+				}
+
+				grid.getPrecisionInfo = renderer => proofDelegate.getPrecisionInfo( renderer );
+				grid.getSamplingInfo = () => proofDelegate.getSamplingInfo();
+				grid.getMemoryInfo = () => proofDelegate.getMemoryInfo();
+				grid.getVisibilityDepthInfo = () => proofDelegate.getVisibilityDepthInfo();
+
+				grid._setGuardedVisibilityProofMode = mode => {
+
+					proofInternalsActive = true;
+					return proofDelegate._setGuardedVisibilityProofMode( mode );
+
+				};
+
+				grid.bake = async ( renderer, scene, options = {} ) => {
+
+					const timings = bakeSixteenStudioGrid( renderer, scene, options ) ?? {};
+					const proofTimings = await proofDelegate.bake( renderer, scene, options );
+					return {
+						...proofTimings,
+						...timings,
+						visibilityDepthMode: proofTimings?.visibilityDepthMode ?? timings?.visibilityDepthMode
+					};
+
+				};
+
+				grid.dispose = () => {
+
+					disposeSixteenStudioGrid();
+					proofDelegate.dispose();
+
+				};
+
+				return grid;
+
+			}
+
+			function uniformCompatibilityValue( value ) {
+
+				return { value };
+
+			}
+
+
+			async function recreateAndBake( bakeOptions = {} ) {
+
+				if ( baking ) {
+
+					pendingRecreate = true;
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				createProbeResources();
+				await bakeProbeGrid( bakeOptions );
+
+			}
+
+			async function runProbeGridBake( runBake, throwOnError = false, bakeOptions = {} ) {
+
+				if ( probeGrid === null ) return;
+
+				if ( baking ) {
+
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				baking = true;
+				params.bakeStatus = 'baking';
+
+				const currentDirectShadowAutoUpdate = directLight.shadow.autoUpdate;
+				const currentDirectCastShadow = directLight.castShadow;
+				const currentDirectLightIntensity = directLight.intensity;
+				const currentAmbientLightIntensity = ambientLight.intensity;
+				const currentLightPanelVisible = lightPanel.visible;
+				const currentDirectShadowMapSize = directLight.shadow.mapSize.clone();
+				const currentDirectShadowRadius = directLight.shadow.radius;
+				const currentDirectShadowNormalBias = directLight.shadow.normalBias;
+				const solidProbeMeshes = probeMeshes.filter( mesh => mesh.geometry.type !== 'PlaneGeometry' );
+				const currentSolidProbeMeshVisibility = solidProbeMeshes.map( mesh => mesh.visible );
+
+				try {
+
+					directLight.intensity = bakeOptions.disableDirectLightDuringBake === true ? 0 : directLightIntensity;
+					if ( bakeOptions.shadowMapSize !== undefined ) directLight.shadow.mapSize.setScalar( bakeOptions.shadowMapSize );
+					if ( bakeOptions.shadowRadius !== undefined ) directLight.shadow.radius = bakeOptions.shadowRadius;
+					if ( bakeOptions.shadowNormalBias !== undefined ) directLight.shadow.normalBias = bakeOptions.shadowNormalBias;
+					if ( bakeOptions.disableShadowsDuringBake === true ) directLight.castShadow = false;
+					if ( bakeOptions.hideLightPanelDuringBake === true ) lightPanel.visible = false;
+					if ( bakeOptions.hideSolidGeometryDuringBake === true ) {
+
+						for ( const mesh of solidProbeMeshes ) mesh.visible = false;
+
+					}
+
+					directLight.shadow.autoUpdate = false;
+					directLight.shadow.needsUpdate = true;
+					ambientLight.intensity = ambientLightIntensity;
+
+					const bakeStartMs = getTimingNow();
+					const nextTimings = await runBake();
+					const normalizedTimings = normalizeBakeTimings( nextTimings, getTimingNow() - bakeStartMs );
+
+					params.bakeStatus = 'ready';
+					params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
+					timings.sceneUpdateMs = normalizedTimings.sceneUpdateMs;
+					timings.cubemapMs = normalizedTimings.cubemapMs;
+					timings.radianceCubemapCaptureMs = normalizedTimings.radianceCubemapCaptureMs;
+					timings.projectionMs = normalizedTimings.projectionMs;
+					timings.computeShProjectionMs = normalizedTimings.computeShProjectionMs;
+					timings.copyMs = normalizedTimings.copyMs;
+					timings.atlasRepackMs = normalizedTimings.atlasRepackMs;
+					timings.visibilityCubemapMs = normalizedTimings.visibilityCubemapMs;
+					timings.distanceCubemapCaptureMs = normalizedTimings.distanceCubemapCaptureMs;
+					timings.visibilityRepackMs = normalizedTimings.visibilityRepackMs;
+					timings.verifierReadbackMs = normalizedTimings.verifierReadbackMs;
+					timings.visibilityDepthMode = normalizedTimings.visibilityDepthMode;
+					timings.projectionBackendRequest = normalizedTimings.projectionBackendRequest;
+					timings.projectionBackend = normalizedTimings.projectionBackend;
+					timings.projectionBackendForced = normalizedTimings.projectionBackendForced;
+					timings.projectionCubemapSweepsPerProbe = normalizedTimings.projectionCubemapSweepsPerProbe;
+					timings.projectionTexelVisits = normalizedTimings.projectionTexelVisits;
+					timings.projectionTexelVisitReductionRatio = normalizedTimings.projectionTexelVisitReductionRatio;
+					timings.totalBakeMs = normalizedTimings.totalBakeMs;
+					timings.wallClockTotalBakeMs = normalizedTimings.wallClockTotalBakeMs;
+					timings.timingSource = normalizedTimings.timingSource;
+					timings.timingSourceKind = normalizedTimings.timingSourceKind;
+					timings.gpuTimestampStatus = normalizedTimings.gpuTimestampStatus;
+					timings.projectionTimingSource = normalizedTimings.projectionTimingSource;
+					timings.timingBuckets = normalizedTimings.timingBuckets;
+					timings.deterministicTimerDetected = normalizedTimings.deterministicTimerDetected;
+
+				} catch ( error ) {
+
+					params.bakeStatus = 'failed';
+					if ( throwOnError ) throw error;
+					console.error( error );
+
+				} finally {
+
+					directLight.castShadow = currentDirectCastShadow;
+					directLight.shadow.autoUpdate = currentDirectShadowAutoUpdate;
+					directLight.shadow.mapSize.copy( currentDirectShadowMapSize );
+					directLight.shadow.radius = currentDirectShadowRadius;
+					directLight.shadow.normalBias = currentDirectShadowNormalBias;
+					directLight.intensity = currentDirectLightIntensity;
+					ambientLight.intensity = currentAmbientLightIntensity;
+					lightPanel.visible = currentLightPanelVisible;
+					for ( let i = 0; i < solidProbeMeshes.length; i ++ ) {
+
+						solidProbeMeshes[ i ].visible = currentSolidProbeMeshVisibility[ i ];
+
+					}
+
+					applyLightingMode();
+					probeHelper.visible = params.probeHelper;
+					baking = false;
+
+				}
+
+				if ( pendingRecreate ) {
+
+					pendingRecreate = false;
+					pendingBake = false;
+					await recreateAndBake();
+
+				} else if ( pendingBake ) {
+
+					pendingBake = false;
+					await bakeProbeGrid();
+
+				}
+
+			}
+
+			async function bakeProbeGrid( bakeOptions = {} ) {
+
+				const probeGridBakeOptions = {
+					onResourcesChanged: syncProbeGridBindings
+				};
+
+				if ( bakeOptions.projectionBackendOverride !== undefined ) {
+
+					probeGridBakeOptions.projectionBackendOverride = bakeOptions.projectionBackendOverride;
+
+				}
+
+				await runProbeGridBake( () => probeGrid.bake( renderer, scene, probeGridBakeOptions ), false, bakeOptions );
+
+			}
+
+			async function recreateAndBakeRequired( label, simulateFailure = false, bakeOptions = {} ) {
+
+				if ( simulateFailure ) {
+
+					await runProbeGridBake( async () => {
+
+						throw new Error( `LightProbeGridGPU ${ label } bake failed.` );
+
+					}, true, bakeOptions );
+
+				} else {
+
+					await recreateAndBake( bakeOptions );
+
+				}
+
+				if ( params.bakeStatus !== 'ready' ) {
+
+					throw new Error( `LightProbeGridGPU ${ label } bake did not reach ready status.` );
+
+				}
+
+			}
+
+
+
+
+
+			function updateLightingMode() {
+
+				if ( baking ) {
+
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				applyLightingMode();
+
+			}
+
+			function applyLightingMode() {
+
+				const mode = params.lightingMode;
+				const directEnabled = mode === 'direct only' || mode === 'direct + probes';
+				const probeEnabled = mode === 'probes only' || mode === 'direct + probes';
+
+				directLight.intensity = directEnabled ? directLightIntensity : 0;
+				ambientLight.intensity = directEnabled ? ambientLightIntensity : 0;
+				if ( probeGrid !== null ) probeGrid.probeIntensity.value = probeEnabled ? params.probeIntensity : 0;
+
+			}
+
+			function updateMaterialMode() {
+
+				if ( baking ) {
+
+					pendingBake = true;
+					params.bakeStatus = 'queued';
+					return;
+
+				}
+
+				for ( const material of probeMaterials ) {
+
+					if ( params.neutralMaterials ) {
+
+						material.color.set( 0xd8d2c5 );
+
+					} else {
+
+						material.color.copy( material.userData.originalColor );
+
+					}
+
+				}
+
+			}
+
+			function updateMaterialType() {
+
+				probeMaterials.length = 0;
+
+				for ( const mesh of probeMeshes ) {
+
+					const previousMaterial = mesh.material;
+					const material = createProbeMaterial( mesh.userData.probeColor );
+
+					if ( params.neutralMaterials ) {
+
+						material.color.set( 0xd8d2c5 );
+
+					}
+
+					mesh.material = material;
+					previousMaterial.dispose();
+
+				}
+
+				syncProbeGridBindings();
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			function animate() {
+
+				const frameStart = performance.now();
+
+				controls.update();
+				renderer.render( scene, camera );
+
+				timings.frameMs = Number( ( performance.now() - frameStart ).toFixed( 2 ) );
+
+			}
+
+		</script>
+
+	</body>
+</html>

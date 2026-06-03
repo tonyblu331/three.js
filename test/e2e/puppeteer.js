@@ -1,5 +1,8 @@
 import puppeteer from 'puppeteer';
 import { Image } from './image.js';
+import { writeLightProbeGridGpuCommonEvalArtifact } from './lightprobegrid-gpu-common-eval.js';
+import { checkSmokeScreenshot, runSmokeHarness } from './lightprobegrid-gpu-smoke.js';
+import { smokeHarnesses } from './lightprobegrid-gpu-smoke-config.js';
 import * as fs from 'fs/promises';
 import { createServer } from '../../utils/server.js';
 
@@ -163,6 +166,16 @@ async function main() {
 		.filter( s => s.slice( - 5 ) === '.html' && s !== 'index.html' )
 		.map( s => s.slice( 0, s.length - 5 ) )
 		.filter( f => isExactList ? exactList.includes( f ) : ! exceptionList.includes( f ) );
+
+	if ( isExactList ) {
+
+		for ( const file of exactList ) {
+
+			if ( files.includes( file ) === false && smokeHarnesses[ file ] !== undefined ) files.push( file );
+
+		}
+
+	}
 
 	if ( isExactList ) {
 
@@ -431,7 +444,13 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 
 		try {
 
-			await page.goto( `http://localhost:${ port }/examples/${ file }.html`, {
+			const smokeHarness = smokeHarnesses[ file ];
+			const query = smokeHarness !== undefined ? `?${ smokeHarness.query }` : '';
+			const example = smokeHarness?.example !== undefined ?
+				smokeHarness.example.replace( /^examples\//, '' ).replace( /\.html$/, '' ) :
+				`${ file }`;
+
+			await page.goto( `http://localhost:${ port }/examples/${ example }.html${ query }`, {
 				waitUntil: 'networkidle0',
 				timeout: networkTimeout * 60000
 			} );
@@ -501,9 +520,21 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 
 		}
 
+		const smokeResults = isMakeScreenshot === false && smokeHarnesses[ file ] !== undefined ?
+			await runSmokeHarness( page, file, smokeHarnesses[ file ] ) :
+			null;
+
 		const screenshot = ( await Image.read( await page.screenshot() ) ).scale( 1 / viewScale );
 
 		if ( page.error !== undefined ) throw new Error( page.error );
+
+		if ( smokeResults !== null ) checkSmokeScreenshot( file, screenshot );
+
+		if ( smokeResults !== null ) {
+
+			await writeLightProbeGridGpuCommonEvalArtifact( file, smokeHarnesses[ file ], smokeResults, screenshot );
+
+		}
 
 		if ( isMakeScreenshot ) {
 

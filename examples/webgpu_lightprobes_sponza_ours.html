@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
-		<title>three.js webgpu - light probe volume (Sponza)</title>
+		<title>three.js webgpu - light probe volume (Sponza, ours)</title>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
-		<meta property="og:title" content="three.js webgpu - light probe volume (Sponza)">
+		<meta property="og:title" content="three.js webgpu - light probe volume (Sponza, ours)">
 		<meta property="og:type" content="website">
 		<meta property="og:url" content="https://threejs.org/examples/webgpu_lightprobes_sponza.html">
 		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgpu_lightprobes_sponza.jpg">
@@ -13,7 +13,7 @@
 	<body>
 
 		<div id="info">
-			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - light probe volume (Sponza)<br/>
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - light probe volume (Sponza, ours)<br/>
 			WASD to move, mouse to look &middot; floating sphere = dynamic object lit by the probe grid
 		</div>
 
@@ -38,8 +38,7 @@
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 			import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
-			import { LightProbeGrid } from 'three/addons/lighting/LightProbeGridGPU.js';
-			import { LightProbeGridHelper } from 'three/addons/helpers/LightProbeGridHelperGPU.js';
+			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPUProof.js';
 
 			const MODEL_INDEX_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/model-index.json';
 			const SAMPLE_ASSETS_BASE_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
@@ -47,6 +46,7 @@
 			let camera, scene, renderer, controls, timer;
 			let probes = null, probesHelper = null;
 			let movingSphere = null;
+			let sponzaModel = null;
 			let modelSize = null;
 			let dirLight = null, sky = null;
 			let bakeStatus = 'pending';
@@ -114,6 +114,7 @@
 				const modelURL = await getSponzaModelURL();
 				const gltf = await loader.loadAsync( modelURL );
 				const model = gltf.scene;
+				sponzaModel = model;
 				const embeddedLights = [];
 
 				model.traverse( ( child ) => {
@@ -256,11 +257,27 @@
 							// referenced by the lighting pipeline.
 							if ( ! probes ) {
 
-								probes = new LightProbeGrid(
-									params.sizeX, params.sizeY, params.sizeZ,
-									params.countX, params.countY, params.countZ
+								const gridMin = new THREE.Vector3(
+									params.boundsX - params.sizeX / 2,
+									params.boundsY - params.sizeY / 2,
+									params.boundsZ - params.sizeZ / 2
 								);
-								probes.position.set( params.boundsX, params.boundsY, params.boundsZ );
+								const gridMax = new THREE.Vector3(
+									params.boundsX + params.sizeX / 2,
+									params.boundsY + params.sizeY / 2,
+									params.boundsZ + params.sizeZ / 2
+								);
+
+								probes = new LightProbeGridGPU( gridMin, gridMax, {
+									resolution: params.countX,
+									cubemapSize: 32,
+									projectionPrecision: 'half float',
+									probeIntensity: 1,
+									normalBias: 0.5,
+									viewBias: 0,
+									leakReductionMode: 'normal',
+									renderer
+								} );
 								scene.add( probes );
 
 							}
@@ -268,25 +285,25 @@
 							// Keep the dynamic sphere out of the bake so it isn't burned into the probes.
 							if ( movingSphere ) movingSphere.visible = false;
 
-							probes.bake( renderer, scene, {
+							await probes.bake( renderer, scene, {
 								cubemapSize: 32,
 								near: 0.05,
 								far: probeFar
 							} );
 							bakeCount ++;
 							probes.visible = params.enabled;
+							updateProbeMaterialLighting();
 
 							if ( movingSphere ) movingSphere.visible = params.dynamicSphere;
 
 							if ( ! probesHelper ) {
 
-								probesHelper = new LightProbeGridHelper( probes, params.probeSize );
+								probesHelper = probes.createHelper();
 								probesHelper.visible = params.showProbes;
 								scene.add( probesHelper );
 
 							} else {
 
-								probesHelper.update();
 								probesHelper.visible = params.showProbes;
 
 							}
@@ -307,6 +324,41 @@
 						isBaking = false;
 
 					}
+
+				}
+
+				function updateProbeMaterialLighting() {
+
+					if ( probes === null ) return;
+
+					const gridLightsNode = probes.createLightsNode( [ dirLight ] );
+					const applyMaterial = material => {
+
+						material.lightsNode = gridLightsNode;
+						material.needsUpdate = true;
+
+					};
+
+					if ( sponzaModel !== null ) {
+
+						sponzaModel.traverse( child => {
+
+							if ( child.isMesh !== true || child.material === undefined ) return;
+							if ( Array.isArray( child.material ) ) {
+
+								for ( const material of child.material ) applyMaterial( material );
+
+							} else {
+
+								applyMaterial( child.material );
+
+							}
+
+						} );
+
+					}
+
+					if ( movingSphere?.material !== undefined ) applyMaterial( movingSphere.material );
 
 				}
 
@@ -355,13 +407,13 @@
 					if ( probesHelper ) probesHelper.visible = value;
 
 				} );
-				gui.add( params, 'probeSize', 0.05, 2.0, 0.05 ).name( 'Probe Size' ).onChange( ( value ) => {
+				gui.add( params, 'probeSize', 0.05, 2.0, 0.05 ).name( 'Probe Size' ).onChange( () => {
 
 					if ( probesHelper ) {
 
 						scene.remove( probesHelper );
 						probesHelper.dispose();
-						probesHelper = new LightProbeGridHelper( probes, value );
+						probesHelper = probes.createHelper();
 						probesHelper.visible = params.showProbes;
 						scene.add( probesHelper );
 
@@ -397,19 +449,19 @@
 						getMetrics() {
 
 							const resolution = probes ? probes.resolution : null;
-							const probeCount = resolution ? resolution.x * resolution.y * resolution.z : 0;
+							const probeCount = Number.isFinite( resolution ) ? resolution ** 3 : 0;
 
 							return {
-								implementation: 'sixteenstudio-reference-sponza',
+								implementation: 'ours-sponza-proof',
 								status: bakeStatus,
 								bakeError: lastBakeError,
 								bakeCount,
 								isLightProbeGrid: probes?.isLightProbeGrid === true,
 								hasTexture: probes?.texture !== null,
 								hasBoundingBox: probes?.boundingBox !== undefined,
-								resolution: resolution ? [ resolution.x, resolution.y, resolution.z ] : [ 0, 0, 0 ],
-								size: probes ? [ probes.width, probes.height, probes.depth ] : [ 0, 0, 0 ],
-								position: probes ? [ probes.position.x, probes.position.y, probes.position.z ] : [ 0, 0, 0 ],
+								resolution: Number.isFinite( resolution ) ? resolution : 0,
+								size: probes ? [ params.sizeX, params.sizeY, params.sizeZ ] : [ 0, 0, 0 ],
+								position: probes ? [ params.boundsX, params.boundsY, params.boundsZ ] : [ 0, 0, 0 ],
 								probeCount
 							};
 
@@ -418,19 +470,19 @@
 
 							const resolution = probes.resolution;
 							const samples = [
-								[ 0, 0, 0 ],
-								[ resolution.x - 1, resolution.y - 1, resolution.z - 1 ],
-								[
-									Math.floor( resolution.x / 2 ),
-									Math.floor( resolution.y / 2 ),
-									Math.floor( resolution.z / 2 )
-								]
-							].map( ( index ) => {
+								0,
+								probes.totalProbes - 1,
+								Math.floor( probes.totalProbes / 2 )
+							].map( ( probeIndex ) => {
 
-								probes.getProbePosition( index[ 0 ], index[ 1 ], index[ 2 ], sampleProbe );
+								probes.getProbePosition( probeIndex, sampleProbe );
 
 								return {
-									index,
+									index: [
+										probeIndex % resolution,
+										Math.floor( probeIndex / resolution ) % resolution,
+										Math.floor( probeIndex / ( resolution * resolution ) )
+									],
 									position: [ sampleProbe.x, sampleProbe.y, sampleProbe.z ]
 								};
 

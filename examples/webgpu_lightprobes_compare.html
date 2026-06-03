@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - light probe comparison</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+		<style>
+			body {
+				margin: 0;
+				background: #101214;
+				color: #f4f7fb;
+				font-family: system-ui, sans-serif;
+				overflow: hidden;
+			}
+
+			#tabs {
+				position: absolute;
+				z-index: 2;
+				top: 0;
+				left: 0;
+				right: 0;
+				display: flex;
+				gap: 6px;
+				padding: 10px;
+				background: rgba( 16, 18, 20, 0.92 );
+				border-bottom: 1px solid rgba( 255, 255, 255, 0.14 );
+			}
+
+			button {
+				border: 1px solid rgba( 255, 255, 255, 0.22 );
+				background: #1d242b;
+				color: #e8eef5;
+				padding: 8px 12px;
+				border-radius: 6px;
+				cursor: pointer;
+				font: inherit;
+			}
+
+			button.active {
+				background: #f4f7fb;
+				color: #101214;
+			}
+
+			iframe {
+				position: absolute;
+				inset: 49px 0 0 0;
+				width: 100%;
+				height: calc( 100% - 49px );
+				border: 0;
+				background: #000;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="tabs"></div>
+		<iframe id="view" title="Light probe comparison view"></iframe>
+
+		<script>
+			const tabs = [
+				{ label: 'Ours Cornell', url: 'webgpu_lightprobes_cornell.html' },
+				{ label: 'SixteenStudio Cornell', url: 'webgpu_lightprobes_cornell.html?implementation=sixteenstudio' },
+				{ label: 'Ours Sponza', url: 'webgpu_lightprobes_sponza_ours.html' },
+				{ label: 'SixteenStudio Sponza', url: 'webgpu_lightprobes_sponza.html' }
+			];
+			const tabsElement = document.getElementById( 'tabs' );
+			const view = document.getElementById( 'view' );
+			const buttons = [];
+
+			function selectTab( index ) {
+
+				view.src = tabs[ index ].url;
+
+				for ( let i = 0; i < buttons.length; i ++ ) {
+
+					buttons[ i ].classList.toggle( 'active', i === index );
+
+				}
+
+			}
+
+			for ( let i = 0; i < tabs.length; i ++ ) {
+
+				const button = document.createElement( 'button' );
+				button.textContent = tabs[ i ].label;
+				button.addEventListener( 'click', () => selectTab( i ) );
+				tabsElement.appendChild( button );
+				buttons.push( button );
+
+			}
+
+			selectTab( 0 );
+		</script>
+	</body>
+</html>
