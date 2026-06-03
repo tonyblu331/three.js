@@ -78,6 +78,74 @@ const hasVisibilityWeightingFacts = diagnostic =>
 	Number.isFinite( diagnostic.wrongMinusCorrectSuppression ) &&
 	diagnostic.summary === undefined;
 
+const hasVisibilityRepresentationFacts = diagnostic => {
+
+	const facts = diagnostic.visibilityRepresentation;
+	return facts !== undefined &&
+		Number.isInteger( facts.angularResolution ) &&
+		Number.isFinite( facts.effectiveBias ) &&
+		facts.momentFilter === 'cardinal-dilated-9-tap-moments' &&
+		facts.borderPolicy === 'clamped-oct-uv-no-gutter' &&
+		Number.isInteger( facts.momentHitProbeCount ) &&
+		Number.isInteger( facts.momentNoHitProbeCount ) &&
+		Number.isInteger( facts.wrongSideEscapedCount ) &&
+		Number.isFinite( facts.wrongMinusCorrectSuppression ) &&
+		facts.momentHitProbeCount + facts.momentNoHitProbeCount === diagnostic.receiverProbeFacts.probeCount;
+
+};
+
+const hasReceiverScopedShapingFacts = diagnostic => {
+
+	const facts = diagnostic.receiverScopedShaping;
+	return facts !== undefined &&
+		facts.shapingPolicy === 'receiver-scoped-probe-layer-mask' &&
+		facts.probeLayerMaskMode === 'custom' &&
+		facts.probeLayerMaskPolicy === 'default-bit-plus-side-bit' &&
+		facts.receiverMaskMode === 'per-receiver-side-mask' &&
+		facts.receiverLayerMaskScope === 'grid-default-or-node-input' &&
+		facts.defaultLayerPreserved === true &&
+		Number.isInteger( facts.compatibleProbeCount ) &&
+		Number.isInteger( facts.incompatibleProbeCount ) &&
+		Number.isInteger( facts.excludedWrongSideProbeCount ) &&
+		Number.isInteger( facts.preservedCorrectSideProbeCount ) &&
+		Number.isInteger( facts.shapedWrongSideEscapedCount ) &&
+		Number.isFinite( facts.correctSideBasePreservationRatio ) &&
+		Number.isFinite( facts.correctSideVisibilityPreservationRatio ) &&
+		Number.isFinite( facts.wrongSideBaseExclusionRatio ) &&
+		Number.isFinite( facts.wrongSideVisibilityExclusionRatio ) &&
+		facts.compatibleProbeCount === diagnostic.receiverProbeFacts.correctSideProbeCount &&
+		facts.incompatibleProbeCount === diagnostic.receiverProbeFacts.wrongSideProbeCount &&
+		facts.shapedWrongSideEscapedCount === 0;
+
+};
+
+const hasBoundaryOwnershipShapingFacts = diagnostic => {
+
+	const facts = diagnostic.boundaryOwnershipShaping;
+	return facts !== undefined &&
+		facts.boundaryOwnershipPolicy === 'layer-region-probe-ownership' &&
+		facts.assignmentPolicy === 'probeMeta.b authored bitfield' &&
+		facts.receiverMaskMode === 'per-receiver-side-mask' &&
+		Number.isInteger( facts.layerRuleCount ) &&
+		Number.isInteger( facts.boundLayerRuleCount ) &&
+		Number.isInteger( facts.unboundLayerRuleCount ) &&
+		Number.isInteger( facts.regionRuleCount ) &&
+		Number.isInteger( facts.assignedProbeCount ) &&
+		Number.isInteger( facts.defaultProbeCount ) &&
+		Number.isInteger( facts.compatibleOverlapCount ) &&
+		Number.isInteger( facts.incompatibleOverlapCount ) &&
+		Number.isFinite( facts.boundarySelectedReceiverSampleRatio ) &&
+		Number.isFinite( facts.interiorCompatibleContributionRatio ) &&
+		Number.isFinite( facts.boundaryCompatibleContributionRatio ) &&
+		Number.isInteger( facts.boundaryWrongSideExcludedCount ) &&
+		Number.isInteger( facts.boundaryCorrectSidePreservedCount ) &&
+		Number.isFinite( facts.boundaryCorrectSidePreservationRatio ) &&
+		Number.isFinite( facts.boundaryWrongSideExclusionRatio ) &&
+		facts.boundaryWrongSideExcludedCount === diagnostic.receiverScopedShaping.excludedWrongSideProbeCount &&
+		facts.boundaryCorrectSidePreservedCount === diagnostic.receiverScopedShaping.preservedCorrectSideProbeCount;
+
+};
+
 const hasEscapeClassificationFacts = classification =>
 	classification !== undefined &&
 	classification.wrongSideProbeCount > 0 &&
@@ -117,7 +185,11 @@ const hasReceiverSurfaceFacts = surface =>
 	) &&
 	surface.sampleCountPerReceiver === 9 &&
 	Number.isFinite( surface.surfaceRuntimeWrongRatioMax ) &&
-	Number.isFinite( surface.renderSurfaceWrongRatio );
+	Number.isFinite( surface.centerRuntimeWrongRatioMax ) &&
+	Number.isFinite( surface.renderSurfaceWrongRatio ) &&
+	Number.isFinite( surface.renderSurfaceCenterWrongRatio ) &&
+	Number.isFinite( surface.renderIrradianceCenterWrongRatio ) &&
+	Number.isFinite( surface.renderLinearIrradianceCenterWrongRatio );
 
 const hasReceiverNormalFacts = diagnostic =>
 	diagnostic.available === true &&
@@ -143,7 +215,14 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 		hasVisibilityWeightingFacts( visibilityWeightingDiagnostic ),
 	'visibility weighting diagnostic: expected raw receiver-level facts without proof status.' );
 	assertReceiverProbeFacts( assert, visibilityWeightingDiagnostic, 'visibility weighting diagnostic' );
+	assert( hasVisibilityRepresentationFacts( visibilityWeightingDiagnostic ),
+	'visibility weighting diagnostic: expected compact visibility representation facts.' );
+	assert( hasReceiverScopedShapingFacts( visibilityWeightingDiagnostic ),
+	'visibility weighting diagnostic: expected compact receiver-scoped shaping facts.' );
+	assert( hasBoundaryOwnershipShapingFacts( visibilityWeightingDiagnostic ),
+	'visibility weighting diagnostic: expected compact boundary ownership shaping facts from assignment metadata.' );
 	assert( hasEscapeClassificationFacts( visibilityWeightingDiagnostic.escapeClassification ) &&
+		Number.isInteger( visibilityWeightingDiagnostic.escapeClassification.visibilityDepthResolution ) &&
 		Number.isInteger( visibilityWeightingDiagnostic.escapeClassification.visibilityBypassEscapeCount ) &&
 		visibilityWeightingDiagnostic.escapeClassification.wrongSideEscapedCount >= 0,
 	'visibility weighting diagnostic: expected aggregate wrong-side escape classification.' );
@@ -154,6 +233,12 @@ async function runLightProbeGridGpuVisibilityBaseAssertions( context ) {
 		hasVisibilityWeightingFacts( sealedVisibilityWeightingDiagnostic ),
 	'sealed visibility weighting diagnostic: expected raw sealed-wall receiver-level facts.' );
 	assertReceiverProbeFacts( assert, sealedVisibilityWeightingDiagnostic, 'sealed visibility weighting diagnostic' );
+	assert( hasVisibilityRepresentationFacts( sealedVisibilityWeightingDiagnostic ),
+	'sealed visibility weighting diagnostic: expected compact visibility representation facts.' );
+	assert( hasReceiverScopedShapingFacts( sealedVisibilityWeightingDiagnostic ),
+	'sealed visibility weighting diagnostic: expected compact receiver-scoped shaping facts.' );
+	assert( hasBoundaryOwnershipShapingFacts( sealedVisibilityWeightingDiagnostic ),
+	'sealed visibility weighting diagnostic: expected compact boundary ownership shaping facts from assignment metadata.' );
 	assert( hasNoFields( sealedVisibilityWeightingDiagnostic, 'directionalSuppressionSupported' ),
 	'sealed visibility weighting diagnostic: expected raw suppression and escape facts without proof verdict echoes.' );
 	assert( sealedVisibilityWeightingDiagnostic.escapeClassification.frontEdgeBypassEscapeCount === 0,

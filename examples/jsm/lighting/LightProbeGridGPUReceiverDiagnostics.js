@@ -7,6 +7,7 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 		analyzeReceiver,
 		analyzeReceiverShContributions,
 		captureLeakRegionMetrics,
+		captureReceiverIrradianceRenderMetrics,
 		roundMetric
 	} = dependencies;
 
@@ -70,16 +71,36 @@ export function createLightProbeGridGPUReceiverDiagnostics( dependencies ) {
 
 		};
 
+		const summarizeReceiverCenter = async ( mesh, correctSide ) => {
+
+			const receiver = await analyzeReceiver( mesh, correctSide );
+			const contribution = await analyzeReceiverShContributions( receiver );
+
+			return contribution.runtimeWrongRatio;
+
+		};
+
 		const renderMetrics = captureLeakRegionMetrics();
+		const irradianceRenderMetrics = captureReceiverIrradianceRenderMetrics();
 		const leftSurface = await summarizeReceiverSurface( _lightProbeContext.leakFixture.leftReceiver, 'left' );
 		const rightSurface = await summarizeReceiverSurface( _lightProbeContext.leakFixture.rightReceiver, 'right' );
 		const surfaceRuntimeWrongRatioMax = roundMetric( Math.max( leftSurface.runtimeWrongRatio, rightSurface.runtimeWrongRatio ) );
+		const leftCenterRuntimeWrongRatio = await summarizeReceiverCenter( _lightProbeContext.leakFixture.leftReceiver, 'left' );
+		const rightCenterRuntimeWrongRatio = await summarizeReceiverCenter( _lightProbeContext.leakFixture.rightReceiver, 'right' );
+		const centerRuntimeWrongRatioMax = roundMetric( Math.max( leftCenterRuntimeWrongRatio, rightCenterRuntimeWrongRatio ) );
 		const renderSurfaceWrongRatio = renderMetrics.surfaceWrongSideColorRatio;
+		const renderSurfaceCenterWrongRatio = renderMetrics.surfaceCenterWrongSideColorRatio;
+		const renderIrradianceCenterWrongRatio = irradianceRenderMetrics?.renderIrradianceCenterWrongRatio ?? null;
+		const renderLinearIrradianceCenterWrongRatio = irradianceRenderMetrics?.renderLinearIrradianceCenterWrongRatio ?? null;
 
 		return {
 			sampleCountPerReceiver: leftSurface.sampleCount,
 			surfaceRuntimeWrongRatioMax,
-			renderSurfaceWrongRatio
+			centerRuntimeWrongRatioMax,
+			renderSurfaceWrongRatio,
+			renderSurfaceCenterWrongRatio,
+			renderIrradianceCenterWrongRatio,
+			renderLinearIrradianceCenterWrongRatio
 		};
 
 	};

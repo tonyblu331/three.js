@@ -191,6 +191,7 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 		samplingControls.configuredSampling.viewBias === 0.25 &&
 		samplingControls.configuredSampling.leakReductionMode === 'normal' &&
 		samplingControls.configuredSampling.probeValidityMode === 'custom' &&
+		samplingControls.configuredSampling.probeMeta.probeLayerMaskMode === 'custom' &&
 		samplingControls.configuredSampling.invalidProbeCount === 1 &&
 		samplingControls.configuredSampling.weightedProbeSampling === true,
 	'sampling controls: expected configured bias and leak reduction metadata.' );
@@ -198,6 +199,10 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 		'sampling controls: expected invalid leak reduction mode to be rejected.' );
 	assert( /leakReductionMode/.test( samplingControls.invalidLeakReductionModeMessage ),
 		'sampling controls: expected leak reduction validation error message.' );
+	assert( samplingControls.invalidProbeLayerMasksRejected === true,
+		'sampling controls: expected invalid probe layer masks to be rejected.' );
+	assert( /probeLayerMasks/.test( samplingControls.invalidProbeLayerMasksMessage ),
+		'sampling controls: expected probe layer mask validation error message.' );
 	results.push( { step: 'sampling controls', samplingControls } );
 
 	const leakReductionComparison = await call( 'compareLeakReductionModes' );

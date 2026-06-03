@@ -36,6 +36,7 @@ import {
 	ivec3,
 	lights,
 	max,
+	nodeObject,
 	normalWorld,
 	positionWorld,
 	texture3D,
@@ -44,7 +45,8 @@ import {
 	uniform,
 	uv,
 	vec3,
-	vec4
+	vec4,
+	wgslFn
 } from 'three/tsl';
 
 import {
@@ -231,6 +233,47 @@ const getBakeTimingSourceKind = ( timingSource ) => timingSource === 'gpu-timest
 		'unavailable' :
 		'performance.now diagnostic';
 
+const resolveReceiverLayerMaskNode = ( receiverLayerMask, defaultReceiverLayerMask ) => {
+
+	if ( receiverLayerMask === undefined || receiverLayerMask === null ) return defaultReceiverLayerMask;
+	if ( typeof receiverLayerMask === 'number' ) return uint( receiverLayerMask );
+
+	return nodeObject( receiverLayerMask ).toUint();
+
+};
+
+const resolveReceiverBoundaryWeightNode = ( receiverBoundaryWeight ) => {
+
+	if ( receiverBoundaryWeight === undefined || receiverBoundaryWeight === null ) return float( 0 );
+	if ( typeof receiverBoundaryWeight === 'number' ) return float( receiverBoundaryWeight ).clamp( 0, 1 );
+
+	return nodeObject( receiverBoundaryWeight ).toFloat().clamp( 0, 1 );
+
+};
+
+const selectReceiverLayerMaskWGSL = wgslFn( `
+	fn selectReceiverLayerMask(
+		receiverLayerMask: u32,
+		receiverBoundaryLayerMask: u32,
+		receiverBoundaryWeight: f32
+	) -> u32 {
+
+		return select( receiverLayerMask, receiverBoundaryLayerMask, receiverBoundaryWeight >= 0.5 );
+
+	}
+` );
+
+const receiverLayerCompatibilityWGSL = wgslFn( `
+	fn receiverLayerCompatibility(
+		probeLayerMask: u32,
+		receiverLayerMask: u32
+	) -> f32 {
+
+		return select( 0.0, 1.0, ( probeLayerMask & receiverLayerMask ) != 0u );
+
+	}
+` );
+
 /**
  * GPU-resident L2 spherical harmonics irradiance probe grid.
  *
@@ -278,6 +321,7 @@ class LightProbeGridGPU extends Object3D {
 	 * @param {number} [options.viewBias=0] - Sample offset toward the active camera, in probe-spacing units.
 	 * @param {'off'|'normal'} [options.leakReductionMode='off'] - Optional scoped probe leak reduction.
 	 * @param {?ArrayLike<number>} [options.probeValidity=null] - Optional per-probe validity weights packed during bake. Length must equal resolution^3.
+	 * @param {?ArrayLike<number>} [options.probeLayerMasks=null] - Optional per-probe integer layer masks packed with validity metadata. Length must equal resolution^3.
 	 * @param {?Renderer} [options.renderer=null] - Optional renderer for feature detection during construction.
 	 */
 	constructor( min, max, options = {} ) {
@@ -327,6 +371,10 @@ class LightProbeGridGPU extends Object3D {
 		this.leakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? 'off' );
 		this.probeValiditySource = this._validateProbeValidity(
 			options.probeValidity ?? null,
+			this.resolution * this.resolution * this.resolution
+		);
+		this.probeLayerMaskSource = this._validateProbeLayerMasks(
+			options.probeLayerMasks ?? null,
 			this.resolution * this.resolution * this.resolution
 		);
 
@@ -405,8 +453,13 @@ class LightProbeGridGPU extends Object3D {
 		const nextProjectionPrecision = options.projectionPrecision ?? this.projectionPrecision;
 		const nextLeakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? this.leakReductionMode );
 		const hasProbeValidityOption = Object.prototype.hasOwnProperty.call( options, 'probeValidity' );
+		const hasProbeLayerMasksOption = Object.prototype.hasOwnProperty.call( options, 'probeLayerMasks' );
 		const nextProbeValiditySource = this._validateProbeValidity(
 			hasProbeValidityOption ? options.probeValidity : this.probeValiditySource,
+			nextResolution * nextResolution * nextResolution
+		);
+		const nextProbeLayerMaskSource = this._validateProbeLayerMasks(
+			hasProbeLayerMasksOption ? options.probeLayerMasks : this.probeLayerMaskSource,
 			nextResolution * nextResolution * nextResolution
 		);
 
@@ -420,6 +473,7 @@ class LightProbeGridGPU extends Object3D {
 		this.projectionPrecision = nextProjectionPrecision;
 		this.leakReductionMode = nextLeakReductionMode;
 		this.probeValiditySource = nextProbeValiditySource;
+		this.probeLayerMaskSource = nextProbeLayerMaskSource;
 
 		if ( options.probeIntensity !== undefined ) this.probeIntensity.value = options.probeIntensity;
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
@@ -431,7 +485,7 @@ class LightProbeGridGPU extends Object3D {
 		if ( options.viewBias !== undefined ) this.viewBias.value = options.viewBias;
 
 		if ( recreate ) this._createResources( renderer );
-		else if ( hasProbeValidityOption ) this._createProbeValidityTexture();
+		else if ( hasProbeValidityOption || hasProbeLayerMasksOption ) this._createProbeValidityTexture();
 
 	}
 
@@ -505,6 +559,38 @@ class LightProbeGridGPU extends Object3D {
 		}
 
 		return probeValidity;
+
+	}
+
+	_validateProbeLayerMasks( probeLayerMasks, totalProbes ) {
+
+		if ( probeLayerMasks === null || probeLayerMasks === undefined ) return null;
+
+		if ( typeof probeLayerMasks.length !== 'number' ) {
+
+			throw new Error( 'LightProbeGridGPU: probeLayerMasks must be an array-like object.' );
+
+		}
+
+		if ( probeLayerMasks.length !== totalProbes ) {
+
+			throw new Error( `LightProbeGridGPU: probeLayerMasks length must equal resolution^3 (${ totalProbes }).` );
+
+		}
+
+		for ( let i = 0; i < probeLayerMasks.length; i ++ ) {
+
+			const value = probeLayerMasks[ i ];
+
+			if ( Number.isInteger( value ) === false || value < 0 || value > 0xFFFFFF ) {
+
+				throw new Error( 'LightProbeGridGPU: probeLayerMasks values must be integer masks between 0 and 0xFFFFFF.' );
+
+			}
+
+		}
+
+		return probeLayerMasks;
 
 	}
 
@@ -601,9 +687,9 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	createLightsNode( sceneLights = [] ) {
+	createLightsNode( sceneLights = [], options = {} ) {
 
-		return lights( [ ...sceneLights, new IrradianceNode( this.createIrradianceNode() ) ] );
+		return lights( [ ...sceneLights, new IrradianceNode( this.createIrradianceNode( options ) ) ] );
 
 	}
 
@@ -663,7 +749,9 @@ class LightProbeGridGPU extends Object3D {
 				confidenceChannel: 'probeMeta.g',
 				layerMaskChannel: 'probeMeta.b',
 				defaultLayerMask: DEFAULT_PROBE_LAYER_MASK,
-				receiverLayerMask: this.receiverLayerMask.value
+				probeLayerMaskMode: this.probeLayerMaskSource === null ? 'constant' : 'custom',
+				receiverLayerMask: this.receiverLayerMask.value,
+				receiverLayerMaskScope: 'grid-default-or-node-input'
 			},
 			visibilityDepthMode: this.visibilityDepthMode,
 			visibilityDepthResolution: this.visibilityDepthResolution,
@@ -748,9 +836,9 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	createIrradianceNode() {
+	createIrradianceNode( options = {} ) {
 
-		return this._usesManualIrradianceSampling() ? this._createManualIrradianceNode() : this._createAtlasIrradianceNode();
+		return this._usesManualIrradianceSampling() ? this._createManualIrradianceNode( options ) : this._createAtlasIrradianceNode();
 
 	}
 
@@ -811,13 +899,13 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	_createManualIrradianceNode() {
+	_createManualIrradianceNode( options = {} ) {
 
-		return this._createManualIrradianceDebugNode( 'finalIrradiance' );
+		return this._createManualIrradianceDebugNode( 'finalIrradiance', options );
 
 	}
 
-	_createManualIrradianceDebugNode( debugMode = 'finalIrradiance' ) {
+	_createManualIrradianceDebugNode( debugMode = 'finalIrradiance', options = {} ) {
 
 		const resolution = this.resolution;
 		const resolutionMinusOne = resolution - 1;
@@ -831,6 +919,14 @@ class LightProbeGridGPU extends Object3D {
 		const useGuardedVisibility = this._guardedVisibilityProofMode === 'guarded' && this.visibilityDepthTarget !== null;
 		const visibilityLoad = useGuardedVisibility ? texture3D( this.visibilityDepthTarget.texture ).setSampler( false ) : null;
 		const probeMetaTextureWidth = this.probeValidityTextureWidth;
+		const receiverLayerMask = resolveReceiverLayerMaskNode( options.receiverLayerMask, this.receiverLayerMask );
+		const receiverBoundaryLayerMask = resolveReceiverLayerMaskNode( options.receiverBoundaryLayerMask, receiverLayerMask );
+		const receiverBoundaryWeight = resolveReceiverBoundaryWeightNode( options.receiverBoundaryWeight );
+		const effectiveReceiverLayerMask = selectReceiverLayerMaskWGSL( {
+			receiverLayerMask,
+			receiverBoundaryLayerMask,
+			receiverBoundaryWeight
+		} );
 
 		const loadPackedSamples = ( coord ) => {
 
@@ -932,7 +1028,10 @@ class LightProbeGridGPU extends Object3D {
 				const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
 				const validityWeight = meta.x.max( PROBE_VALIDITY_FLOOR );
 				const confidenceWeight = meta.y.clamp( 0, 1 );
-				const sameLayer = meta.z.toUint().bitAnd( this.receiverLayerMask ).notEqual( uint( 0 ) ).select( float( 1 ), float( 0 ) );
+				const sameLayer = receiverLayerCompatibilityWGSL( {
+					probeLayerMask: meta.z.toUint(),
+					receiverLayerMask: effectiveReceiverLayerMask
+				} );
 				const kernelOffset = positionWorld.sub( probePosition ).div( probeSpacing.max( vec3( 0.0001 ) ) );
 				const compatibleKernel = useGuardedVisibility ? kernelOffset.dot( kernelOffset ).negate().exp2() : float( 1 );
 				const layerCompatibility = useGuardedVisibility ? sameLayer : float( 1 );
@@ -1580,11 +1679,12 @@ class LightProbeGridGPU extends Object3D {
 		for ( let i = 0; i < this.totalProbes; i ++ ) {
 
 			const validity = this.probeValiditySource === null ? 1 : this.probeValiditySource[ i ];
+			const layerMask = this.probeLayerMaskSource === null ? DEFAULT_PROBE_LAYER_MASK : this.probeLayerMaskSource[ i ];
 			const offset = i * 4;
 
 			data[ offset ] = validity;
 			data[ offset + 1 ] = validity;
-			data[ offset + 2 ] = DEFAULT_PROBE_LAYER_MASK;
+			data[ offset + 2 ] = layerMask;
 			data[ offset + 3 ] = 1;
 
 			if ( validity < 1 ) this.invalidProbeCount ++;

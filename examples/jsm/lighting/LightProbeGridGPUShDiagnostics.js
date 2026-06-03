@@ -6,10 +6,8 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 		createAggregateEvaluation,
 		createReceiverWrongRatio,
 		evaluateProbeCoefficientsForReceiver,
-		mixCoefficients,
 		readProbeCoefficients,
-		roundMetric,
-		visibilityWeightFloor
+		roundMetric
 	} = dependencies;
 
 	const analyzeReceiverShContributions = async ( receiver ) => {
@@ -39,16 +37,17 @@ export function createLightProbeGridGPUShDiagnostics( dependencies ) {
 
 		const scalarAggregate = await createAggregateEvaluation( receiver, 'scalarWeight' );
 		const visibilityAggregate = await createAggregateEvaluation( receiver, 'visibilityWeight' );
-		const visibilityMix = Math.max(
+		const visibilityMass = Math.max(
 			0,
-			Math.min( visibilityAggregate.totalWeight / visibilityWeightFloor, 1 )
+			Math.min( visibilityAggregate.totalWeight / Math.max( scalarAggregate.totalWeight, 0.0001 ), 1 )
 		);
-		const runtimeCoefficients = mixCoefficients(
-			scalarAggregate.coefficients,
-			visibilityAggregate.coefficients,
-			visibilityMix
-		);
-		const runtimeIrradiance = evaluateProbeCoefficientsForReceiver( runtimeCoefficients, normal );
+		const scalarIrradiance = evaluateProbeCoefficientsForReceiver( scalarAggregate.coefficients, normal );
+		const visibilityIrradiance = evaluateProbeCoefficientsForReceiver( visibilityAggregate.coefficients, normal );
+		const runtimeIrradiance = {
+			r: visibilityIrradiance.r * visibilityMass,
+			g: visibilityIrradiance.g * visibilityMass,
+			b: visibilityIrradiance.b * visibilityMass
+		};
 		const runtimeWrongRatio = createReceiverWrongRatio( runtimeIrradiance, receiver.correctSide );
 
 		return {

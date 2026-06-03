@@ -44,12 +44,14 @@
 			import { LightProbeGridGPU } from './jsm/lighting/LightProbeGridGPU.js';
 			import { createLightProbeGridGPUExampleGUI } from './jsm/lighting/LightProbeGridGPUExampleGUI.js';
 			import { createLightProbeGridGPUTestHarness } from './jsm/lighting/LightProbeGridGPUTestHarness.js';
+			import { createLightProbeGridGPUProbeOwnershipAssignment } from './jsm/lighting/lightprobegridgpu/LightProbeGridGPUProbeOwnership.js';
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 
 			let renderer, scene, camera, controls;
 			let directLight, ambientLight, lightPanel, probeHelper;
 			let probeGrid = null;
 			let leakFixture = null;
+			let probeOwnershipAssignmentFacts = null;
 			let baking = false;
 			let pendingRecreate = false;
 			let pendingBake = false;
@@ -70,6 +72,7 @@
 				baking,
 				camera,
 				collectProbeOccupancy,
+				createProbeLayerMaskData,
 				createProbeSourceMapData,
 				createProbeValidityData,
 				directLight,
@@ -82,6 +85,7 @@
 				params,
 				probeGrid,
 				probeHelper,
+				probeOwnershipAssignmentFacts,
 				probeMeshes,
 				recreateAndBake,
 				recreateAndBakeRequired,
@@ -663,6 +667,48 @@
 
 			}
 
+			function createProbeLayerMaskData( resolution = params.resolution ) {
+
+				const divider = getActiveLeakDivider();
+				const dividerX = divider !== null && divider !== undefined ? divider.position.x : - 0.8667;
+				const defaultLayer = 1;
+				const leftLayer = 2;
+				const rightLayer = 4;
+				const ownershipAssignment = createLightProbeGridGPUProbeOwnershipAssignment( {
+					min: gridMin,
+					max: gridMax,
+					resolution,
+					defaultMask: defaultLayer,
+					layerRules: [
+						{ name: 'cornell-left', layerMask: leftLayer, ownershipMask: leftLayer, defaultCompatible: true },
+						{ name: 'cornell-right', layerMask: rightLayer, ownershipMask: rightLayer, defaultCompatible: true }
+					],
+					regionRules: [
+						{
+							name: 'cornell-left-region',
+							layerRuleName: 'cornell-left',
+							box: {
+								min: new THREE.Vector3( gridMin.x, gridMin.y, gridMin.z ),
+								max: new THREE.Vector3( dividerX, gridMax.y, gridMax.z )
+							}
+						},
+						{
+							name: 'cornell-right-region',
+							layerRuleName: 'cornell-right',
+							box: {
+								min: new THREE.Vector3( dividerX, gridMin.y, gridMin.z ),
+								max: new THREE.Vector3( gridMax.x, gridMax.y, gridMax.z )
+							}
+						}
+					]
+				} );
+
+				probeOwnershipAssignmentFacts = ownershipAssignment.assignmentFacts;
+
+				return ownershipAssignment.probeLayerMasks;
+
+			}
+
 			function createProbeResources() {
 
 				disposeProbeResources();
@@ -684,6 +730,7 @@
 				};
 
 				if ( params.useProbeValidity ) probeOptions.probeValidity = createProbeValidityData( params.resolution );
+				probeOptions.probeLayerMasks = createProbeLayerMaskData( params.resolution );
 
 				probeGrid = new LightProbeGridGPU( gridMin, gridMax, probeOptions );
 

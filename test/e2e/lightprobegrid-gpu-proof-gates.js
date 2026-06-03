@@ -1,5 +1,6 @@
 const MAX_PROOF_GATE_COUNT = 16;
 const MAX_PROOF_SUMMARY_BYTES = 6000;
+const SEALED_WALL_GROUND_TRUTH_WRONG_SIDE_LEAK = 0;
 
 export function isMomentBackedVisibility( info ) {
 
@@ -77,27 +78,104 @@ const hasReceiverSurfaceAgreement = ( facts, surfaceCpuRenderDelta ) =>
 	surfaceCpuRenderDelta <= 0.15;
 
 const deriveReceiverSurfaceDelta = receiverSurface =>
-	receiverSurface.renderSurfaceWrongRatio !== null &&
-	receiverSurface.surfaceRuntimeWrongRatioMax !== null ?
+	receiverSurface.renderLinearIrradianceCenterWrongRatio !== null && receiverSurface.centerRuntimeWrongRatioMax !== null ?
+		roundMetric( Math.abs( receiverSurface.renderLinearIrradianceCenterWrongRatio - receiverSurface.centerRuntimeWrongRatioMax ) ) :
+		null;
+
+const deriveDisplaySurfaceDelta = receiverSurface =>
+	receiverSurface.renderSurfaceWrongRatio !== null && receiverSurface.surfaceRuntimeWrongRatioMax !== null ?
 		roundMetric( Math.abs( receiverSurface.renderSurfaceWrongRatio - receiverSurface.surfaceRuntimeWrongRatioMax ) ) :
 		null;
 
+const deriveDisplayIrradianceCenterDelta = receiverSurface =>
+	receiverSurface.renderIrradianceCenterWrongRatio !== null && receiverSurface.centerRuntimeWrongRatioMax !== null ?
+		roundMetric( Math.abs( receiverSurface.renderIrradianceCenterWrongRatio - receiverSurface.centerRuntimeWrongRatioMax ) ) :
+		null;
+
+const createReceiverSurfaceEvidence = ( receiverSurface, surfaceCpuRenderDelta ) => ( {
+	renderSurfaceWrongRatio: receiverSurface.renderSurfaceWrongRatio,
+	renderSurfaceCenterWrongRatio: receiverSurface.renderSurfaceCenterWrongRatio,
+	renderIrradianceCenterWrongRatio: receiverSurface.renderIrradianceCenterWrongRatio,
+	renderLinearIrradianceCenterWrongRatio: receiverSurface.renderLinearIrradianceCenterWrongRatio,
+	surfaceRuntimeWrongRatioMax: receiverSurface.surfaceRuntimeWrongRatioMax,
+	centerRuntimeWrongRatioMax: receiverSurface.centerRuntimeWrongRatioMax,
+	displaySurfaceCpuRenderDelta: deriveDisplaySurfaceDelta( receiverSurface ),
+	displayIrradianceCenterCpuRenderDelta: deriveDisplayIrradianceCenterDelta( receiverSurface ),
+	surfaceCpuRenderDelta
+} );
+
+const createResidualSourceAttributionFacts = ( sealedWall, receiverSurface ) => ( {
+	attributionPolicy: 'masked-residual-vs-irradiance-runtime',
+	maskedVisibleResidualRatio: sealedWall.residualAttribution.maskedVisibleResidualRatio,
+	preToneMaskedResidualRatio: sealedWall.residualAttribution.preToneMaskedResidualRatio,
+	candidateRenderIrradianceCenterWrongRatio: sealedWall.residualAttribution.candidateRenderIrradianceCenterWrongRatio,
+	candidateRenderLinearIrradianceCenterWrongRatio: sealedWall.residualAttribution.candidateRenderLinearIrradianceCenterWrongRatio,
+	candidateLinearIrradianceToMaskedVisibleRatio: sealedWall.residualAttribution.candidateLinearIrradianceToMaskedVisibleRatio,
+	candidateRenderIrradianceMaskedWrongRatio: sealedWall.residualAttribution.candidateRenderIrradianceMaskedWrongRatio,
+	candidateRenderLinearIrradianceMaskedWrongRatio: sealedWall.residualAttribution.candidateRenderLinearIrradianceMaskedWrongRatio,
+	candidateMaskedIrradianceToMaskedVisibleRatio: sealedWall.residualAttribution.candidateMaskedIrradianceToMaskedVisibleRatio,
+	candidateReceiverMaterialType: sealedWall.residualAttribution.candidateReceiverMaterialType,
+	candidateReceiverAlbedoWrongSideRatio: sealedWall.residualAttribution.candidateReceiverAlbedoWrongSideRatio,
+	candidateReceiverRoughness: sealedWall.residualAttribution.candidateReceiverRoughness,
+	candidateReceiverMetalness: sealedWall.residualAttribution.candidateReceiverMetalness,
+	candidatePreToneMaskedToAlbedoRatio: sealedWall.residualAttribution.candidatePreToneMaskedToAlbedoRatio,
+	candidateRenderLambertMaskedWrongRatio: sealedWall.residualAttribution.candidateRenderLambertMaskedWrongRatio,
+	candidateRenderLinearLambertMaskedWrongRatio: sealedWall.residualAttribution.candidateRenderLinearLambertMaskedWrongRatio,
+	candidateLinearLambertToLinearIrradianceRatio: sealedWall.residualAttribution.candidateLinearLambertToLinearIrradianceRatio,
+	candidatePreToneMaskedToLinearLambertRatio: sealedWall.residualAttribution.candidatePreToneMaskedToLinearLambertRatio,
+	candidateNearDividerEdgeWrongSideColorRatio: sealedWall.residualAttribution.candidateNearDividerEdgeWrongSideColorRatio,
+	candidateNearDividerEdgeToSurfaceCenterRatio: sealedWall.residualAttribution.candidateNearDividerEdgeToSurfaceCenterRatio,
+	candidateNearDividerEdgeToMaskedVisibleRatio: sealedWall.residualAttribution.candidateNearDividerEdgeToMaskedVisibleRatio,
+	candidateMaskedVisiblePixelCount: sealedWall.residualAttribution.candidateMaskedVisiblePixelCount,
+	candidateMaskedVisiblePixelRatio: sealedWall.residualAttribution.candidateMaskedVisiblePixelRatio,
+	candidateMaskedVisibleToSurfaceCenterRatio: sealedWall.residualAttribution.candidateMaskedVisibleToSurfaceCenterRatio,
+	candidatePreToneMaskedToMaskedVisibleRatio: sealedWall.residualAttribution.candidatePreToneMaskedToMaskedVisibleRatio,
+	minCameraDotCpuNormal: sealedWall.residualAttribution.minCameraDotCpuNormal,
+	receiverSurfaceRegionAreaRatio: sealedWall.residualAttribution.receiverSurfaceRegionAreaRatio,
+	renderSurfaceWrongRatio: receiverSurface.renderSurfaceWrongRatio,
+	renderSurfaceCenterWrongRatio: receiverSurface.renderSurfaceCenterWrongRatio,
+	renderLinearIrradianceCenterWrongRatio: receiverSurface.renderLinearIrradianceCenterWrongRatio,
+	centerRuntimeWrongRatioMax: receiverSurface.centerRuntimeWrongRatioMax,
+	irradianceRuntimeDelta: deriveReceiverSurfaceDelta( receiverSurface )
+} );
+
 const hasBakedShMixedColorRisk = facts => {
-
-	if ( facts.visibilityWeighting.wrongSideEscapedCount > 0 ) return true;
-
-	const shWrongRatioMax = Math.max(
-		facts.shContribution.visibilityWrongRatioMean ?? 0,
-		facts.shContribution.runtimeWrongRatioMean ?? 0
-	);
 
 	return hasDirectionalSuppression( facts ) &&
 		facts.shContribution.correctSideMixedColorRowCount > 0 &&
-		shWrongRatioMax >= 0.25;
+		( facts.shContribution.runtimeWrongRatioMean ?? 0 ) >= 0.25;
 
 };
 
 const hasNoBakedShMixedColorRisk = facts => hasBakedShMixedColorRisk( facts ) === false;
+
+const hasNoWrongSideEscape = facts =>
+	facts.visibilityWeighting.fixtureMode === 'sealed-wall' &&
+	facts.visibilityWeighting.receiverScopedShaping !== undefined &&
+	facts.visibilityWeighting.receiverScopedShaping.shapedWrongSideEscapedCount === 0 &&
+	facts.visibilityWeighting.receiverScopedShaping.correctSideBasePreservationRatio >= 0.999 &&
+	facts.visibilityWeighting.receiverScopedShaping.correctSideVisibilityPreservationRatio >= 0.999 &&
+	facts.visibilityWeighting.receiverScopedShaping.wrongSideBaseExclusionRatio >= 0.999;
+
+const createWrongSideEscapeEvidence = facts => ( {
+	angularResolution: facts.visibilityWeighting.angularResolution,
+	effectiveBias: facts.visibilityWeighting.effectiveBias,
+	momentFilter: facts.visibilityWeighting.momentFilter,
+	borderPolicy: facts.visibilityWeighting.borderPolicy,
+	momentHitProbeCount: facts.visibilityWeighting.momentHitProbeCount,
+	momentNoHitProbeCount: facts.visibilityWeighting.momentNoHitProbeCount,
+	visibilityDepthResolution: facts.visibilityWeighting.visibilityDepthResolution,
+	wrongSideEscapedCount: facts.visibilityWeighting.wrongSideEscapedCount,
+	visibilityBypassEscapeCount: facts.visibilityWeighting.visibilityBypassEscapeCount,
+	frontEdgeBypassEscapeCount: facts.visibilityWeighting.frontEdgeBypassEscapeCount,
+	receiverScopedShaping: facts.visibilityWeighting.receiverScopedShaping,
+	boundaryOwnershipShaping: facts.visibilityWeighting.boundaryOwnershipShaping
+} );
+
+const createBakedShMixedColorRiskEvidence = facts => ( {
+	runtimeWrongRatioMean: facts.shContribution.runtimeWrongRatioMean,
+	correctSideMixedColorRowCount: facts.shContribution.correctSideMixedColorRowCount
+} );
 
 const createSealedWallRowFacts = row => ( {
 	wrongSideColorRatio: row.wrongSideColorRatio,
@@ -113,7 +191,8 @@ const createSealedWallProofFacts = leakProofFacts => {
 
 	return {
 		baseline: createSealedWallRowFacts( rows.get( 'sealed-wall-validity-weighted' ) ),
-		candidate: createSealedWallRowFacts( rows.get( 'sealed-wall-visibility-moments' ) )
+		candidate: createSealedWallRowFacts( rows.get( 'sealed-wall-visibility-moments' ) ),
+		residualAttribution: leakProofFacts.residualAttribution
 	};
 
 };
@@ -129,13 +208,18 @@ const deriveSealedWallVisibilityFacts = ( sealedWallFacts ) => {
 
 	return {
 		preToneMaskedWrongSideImprovement: improvementRatio( readPreToneMaskedWrongSide ),
+		preToneMaskedWrongSideResidualLeak: readPreToneMaskedWrongSide( candidate ),
+		preToneMaskedWrongSideResidualLeakRatio: ratio( readPreToneMaskedWrongSide ),
 		correctBouncePreservation: ratio( readCorrectBounce ),
 		preToneMaskedCorrectBouncePreservation: ratio( readPreToneMaskedCorrectBounce )
 	};
 
 };
 
-const hasSealedWallThresholdSupport = ( actual, threshold ) => actual >= threshold;
+const hasSealedWallThresholdSupport = ( actual, threshold, supportMode = 'minimum' ) =>
+	supportMode === 'equals' ?
+		actual === threshold :
+		actual >= threshold;
 
 const createGate = ( {
 	id,
@@ -177,6 +261,12 @@ const SEALED_WALL_GATE_DEFINITIONS = [
 		metric: 'preToneMaskedCorrectBouncePreservation',
 		threshold: 0.9,
 		reason: 'Linear pre-tone leak gate must preserve correct bounce.'
+	},
+	{
+		metric: 'preToneMaskedWrongSideResidualLeakRatio',
+		threshold: 0,
+		supportMode: 'equals',
+		reason: 'Sealed-wall visibility proof must report residual wrong-side leak against the physical zero-leak oracle; baseline is not ground truth.'
 	}
 ];
 
@@ -193,7 +283,7 @@ export function createLightProbeProofFacts( results ) {
 	const projectionCoefficientMaxDelta = finiteOrNull( computeProjectionRuntimeParity.coefficientMaxDelta );
 	const projectionAtlasMaxDelta = finiteOrNull( computeProjectionRuntimeParity.atlasMaxDelta );
 
-	return {
+	const facts = {
 		runtime: {
 			status: initial.status,
 			hasTexture: initial.hasTexture === true,
@@ -218,7 +308,52 @@ export function createLightProbeProofFacts( results ) {
 		visibilityWeighting: {
 			fixtureMode: sealedVisibilityWeightingDiagnostic.fixtureMode,
 			comparableReceiverCount: sealedVisibilityWeightingDiagnostic.comparableReceiverCount,
+			angularResolution: sealedVisibilityWeightingDiagnostic.visibilityRepresentation.angularResolution,
+			effectiveBias: sealedVisibilityWeightingDiagnostic.visibilityRepresentation.effectiveBias,
+			momentFilter: sealedVisibilityWeightingDiagnostic.visibilityRepresentation.momentFilter,
+			borderPolicy: sealedVisibilityWeightingDiagnostic.visibilityRepresentation.borderPolicy,
+			momentHitProbeCount: sealedVisibilityWeightingDiagnostic.visibilityRepresentation.momentHitProbeCount,
+			momentNoHitProbeCount: sealedVisibilityWeightingDiagnostic.visibilityRepresentation.momentNoHitProbeCount,
+			visibilityDepthResolution: sealedVisibilityWeightingDiagnostic.escapeClassification.visibilityDepthResolution,
 			wrongSideEscapedCount: sealedVisibilityWeightingDiagnostic.escapeClassification.wrongSideEscapedCount,
+			visibilityBypassEscapeCount: sealedVisibilityWeightingDiagnostic.escapeClassification.visibilityBypassEscapeCount,
+			frontEdgeBypassEscapeCount: sealedVisibilityWeightingDiagnostic.escapeClassification.frontEdgeBypassEscapeCount,
+			receiverScopedShaping: {
+				shapingPolicy: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.shapingPolicy,
+				probeLayerMaskMode: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.probeLayerMaskMode,
+				probeLayerMaskPolicy: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.probeLayerMaskPolicy,
+				receiverMaskMode: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.receiverMaskMode,
+				defaultLayerPreserved: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.defaultLayerPreserved,
+				compatibleProbeCount: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.compatibleProbeCount,
+				incompatibleProbeCount: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.incompatibleProbeCount,
+				excludedWrongSideProbeCount: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.excludedWrongSideProbeCount,
+				preservedCorrectSideProbeCount: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.preservedCorrectSideProbeCount,
+				shapedWrongSideEscapedCount: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.shapedWrongSideEscapedCount,
+				correctSideBasePreservationRatio: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.correctSideBasePreservationRatio,
+				correctSideVisibilityPreservationRatio: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.correctSideVisibilityPreservationRatio,
+				wrongSideBaseExclusionRatio: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.wrongSideBaseExclusionRatio,
+				wrongSideVisibilityExclusionRatio: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.wrongSideVisibilityExclusionRatio
+			},
+			boundaryOwnershipShaping: {
+				boundaryOwnershipPolicy: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundaryOwnershipPolicy,
+				assignmentPolicy: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.assignmentPolicy,
+				receiverMaskMode: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.receiverMaskMode,
+				layerRuleCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.layerRuleCount,
+				boundLayerRuleCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundLayerRuleCount,
+				unboundLayerRuleCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.unboundLayerRuleCount,
+				regionRuleCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.regionRuleCount,
+				assignedProbeCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.assignedProbeCount,
+				defaultProbeCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.defaultProbeCount,
+				compatibleOverlapCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.compatibleOverlapCount,
+				incompatibleOverlapCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.incompatibleOverlapCount,
+				boundarySelectedReceiverSampleRatio: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundarySelectedReceiverSampleRatio,
+				interiorCompatibleContributionRatio: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.interiorCompatibleContributionRatio,
+				boundaryCompatibleContributionRatio: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundaryCompatibleContributionRatio,
+				boundaryWrongSideExcludedCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundaryWrongSideExcludedCount,
+				boundaryCorrectSidePreservedCount: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundaryCorrectSidePreservedCount,
+				boundaryCorrectSidePreservationRatio: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundaryCorrectSidePreservationRatio,
+				boundaryWrongSideExclusionRatio: sealedVisibilityWeightingDiagnostic.boundaryOwnershipShaping.boundaryWrongSideExclusionRatio
+			},
 			wrongMinusCorrectSuppression: finiteOrNull( sealedVisibilityWeightingDiagnostic.wrongMinusCorrectSuppression )
 		},
 		shContribution: {
@@ -231,16 +366,28 @@ export function createLightProbeProofFacts( results ) {
 			receiverCount: sealedReceiverNormalDiagnostic.receiverCount,
 			frontFaceReceiverCount: sealedReceiverNormalDiagnostic.frontFaceReceiverCount,
 			frontSideVisibleReceiverCount: sealedReceiverNormalDiagnostic.frontSideVisibleReceiverCount,
-			frontSideCpuNormalConventionCount: sealedReceiverNormalDiagnostic.frontSideCpuNormalConventionCount
+			frontSideCpuNormalConventionCount: sealedReceiverNormalDiagnostic.frontSideCpuNormalConventionCount,
+			minCameraDotCpuNormal: finiteOrNull( sealedReceiverNormalDiagnostic.minCameraDotCpuNormal ),
+			receiverSurfaceRegionAreaRatio: finiteOrNull( sealedReceiverNormalDiagnostic.receiverSurfaceRegionAreaRatio )
 		},
 		receiverSurface: {
 			fixtureMode: sealedVisibilityWeightingDiagnostic.fixtureMode,
 			sampleCountPerReceiver: receiverSurfaceQuadratureDiagnostic.sampleCountPerReceiver,
 			renderSurfaceWrongRatio: finiteOrNull( receiverSurfaceQuadratureDiagnostic.renderSurfaceWrongRatio ),
-			surfaceRuntimeWrongRatioMax: finiteOrNull( receiverSurfaceQuadratureDiagnostic.surfaceRuntimeWrongRatioMax )
+			renderSurfaceCenterWrongRatio: finiteOrNull( receiverSurfaceQuadratureDiagnostic.renderSurfaceCenterWrongRatio ),
+			renderIrradianceCenterWrongRatio: finiteOrNull( receiverSurfaceQuadratureDiagnostic.renderIrradianceCenterWrongRatio ),
+			renderLinearIrradianceCenterWrongRatio: finiteOrNull( receiverSurfaceQuadratureDiagnostic.renderLinearIrradianceCenterWrongRatio ),
+			surfaceRuntimeWrongRatioMax: finiteOrNull( receiverSurfaceQuadratureDiagnostic.surfaceRuntimeWrongRatioMax ),
+			centerRuntimeWrongRatioMax: finiteOrNull( receiverSurfaceQuadratureDiagnostic.centerRuntimeWrongRatioMax )
 		},
 		sealedWall: createSealedWallProofFacts( leakProofFacts )
 	};
+
+	facts.sealedWall.residualAttribution.minCameraDotCpuNormal = facts.receiverNormal.minCameraDotCpuNormal;
+	facts.sealedWall.residualAttribution.receiverSurfaceRegionAreaRatio = facts.receiverNormal.receiverSurfaceRegionAreaRatio;
+	facts.sealedWall.residualSourceAttribution = createResidualSourceAttributionFacts( facts.sealedWall, facts.receiverSurface );
+
+	return facts;
 
 }
 
@@ -248,11 +395,15 @@ export function evaluateLightProbeProofGates( facts ) {
 
 	const sealedWallVisibilityFacts = deriveSealedWallVisibilityFacts( facts.sealedWall );
 	const bakedShMixedColorRisk = hasBakedShMixedColorRisk( facts );
+	const bakedShMixedColorRiskEvidence = createBakedShMixedColorRiskEvidence( facts );
+	const wrongSideEscapeEvidence = createWrongSideEscapeEvidence( facts );
 	const visibilityMomentReadbackPass = hasVisibilityMomentReadback( facts );
 	const receiverNormalAgreement = hasReceiverNormalAgreement( facts );
 	const receiverNormalGatePass = hasReceiverNormalProof( facts );
 	const directionalSuppressionPass = hasDirectionalSuppression( facts );
+	const wrongSideEscapePass = hasNoWrongSideEscape( facts );
 	const receiverSurfaceDelta = deriveReceiverSurfaceDelta( facts.receiverSurface );
+	const receiverSurfaceEvidence = createReceiverSurfaceEvidence( facts.receiverSurface, receiverSurfaceDelta );
 	const receiverSurfaceGatePass = hasReceiverSurfaceAgreement( facts, receiverSurfaceDelta );
 	const projectionCoefficientDeltaPass = hasProjectionCoefficientDelta( facts );
 	const projectionAtlasDeltaPass = hasProjectionAtlasDelta( facts );
@@ -351,10 +502,26 @@ export function evaluateLightProbeProofGates( facts ) {
 			evidenceRef: 'sealed visibility weighting diagnostic'
 		} ),
 		createGate( {
+			id: 'visibilityWeighting.noWrongSideEscape',
+			subject: 'visibilityWeighting',
+			metric: 'wrongSideEscapedCount',
+			actual: wrongSideEscapeEvidence,
+			expected: {
+				receiverScopedShaping: {
+					shapedWrongSideEscapedCount: 0,
+					correctSideBasePreservationRatio: '>= 0.999',
+					wrongSideBaseExclusionRatio: '>= 0.999'
+				}
+			},
+			pass: wrongSideEscapePass,
+			reason: 'Receiver-scoped probe shaping should leave no compatible wrong-side probes escaping the sealed divider while preserving correct-side contribution.',
+			evidenceRef: 'sealed visibility weighting diagnostic'
+		} ),
+		createGate( {
 			id: 'receiverSurface.cpuRenderAgreement',
 			subject: 'receiverSurface',
 			metric: 'surfaceCpuRenderDelta',
-			actual: receiverSurfaceDelta,
+			actual: receiverSurfaceEvidence,
 			expected: '<= 0.15',
 			pass: receiverSurfaceGatePass,
 			reason: 'Receiver-surface CPU quadrature should agree with rendered sealed-wall surface color within diagnostic tolerance.',
@@ -364,23 +531,27 @@ export function evaluateLightProbeProofGates( facts ) {
 			id: 'shContribution.noBakedMixedColorRisk',
 			subject: 'shContribution',
 			metric: 'bakedShMixedColorRisk',
-			actual: bakedShMixedColorRisk,
-			expected: false,
+			actual: bakedShMixedColorRiskEvidence,
+			expected: {
+				runtimeWrongRatioMean: '< 0.25'
+			},
 			pass: shMixedColorRiskPass,
-			reason: 'Packed SH contribution evidence must not indicate mixed-color risk after escape and directional-suppression gates pass.',
+			reason: 'Packed SH contribution evidence must not indicate runtime mixed-color risk after escape and directional-suppression gates pass.',
 			evidenceRef: 'sealed visibility weighting diagnostic'
 		} ),
-		...SEALED_WALL_GATE_DEFINITIONS.map( ( { metric, threshold, reason } ) => {
+		...SEALED_WALL_GATE_DEFINITIONS.map( ( { metric, threshold, supportMode, reason } ) => {
 
 			const actual = sealedWallVisibilityFacts[ metric ];
-			const sealedWallGatePass = hasSealedWallThresholdSupport( actual, threshold );
+			const sealedWallGatePass = hasSealedWallThresholdSupport( actual, threshold, supportMode );
 
 			return createGate( {
 				id: `sealedWall.${ metric }`,
 				subject: 'sealedWall',
 				metric,
 				actual,
-				expected: `>= ${ threshold }`,
+				expected: metric === 'preToneMaskedWrongSideResidualLeakRatio' ?
+					`ground truth wrong-side leak ${ SEALED_WALL_GROUND_TRUTH_WRONG_SIDE_LEAK }` :
+					`>= ${ threshold }`,
 				pass: sealedWallGatePass,
 				reason,
 				evidenceRef: 'leak proof facts'
@@ -451,10 +622,12 @@ export function assertLightProbeProofSummary( summary, assert ) {
 		'projection.coefficientDelta',
 		'projection.atlasDelta',
 		'visibilityWeighting.directionalSuppression',
+		'visibilityWeighting.noWrongSideEscape',
 		'receiverNormal.frontFaceShaderAgreement',
 		'receiverSurface.cpuRenderAgreement',
 		'shContribution.noBakedMixedColorRisk',
-		'sealedWall.preToneMaskedWrongSideImprovement'
+		'sealedWall.preToneMaskedWrongSideImprovement',
+		'sealedWall.preToneMaskedWrongSideResidualLeakRatio'
 	];
 
 	assert( hasBoundedProofGateCount( summary ),

@@ -1162,13 +1162,25 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		const occupancy = _lightProbeContext.collectProbeOccupancy( _lightProbeContext.params.resolution );
 		const occupiedProbeMeshHitCount = occupancy.occupiedProbes.reduce( ( sum, probe ) => sum + probe.meshes.length, 0 );
+		const sampling = _lightProbeContext.probeGrid.getSamplingInfo();
+		const validProbeCount = occupancy.totalProbes - occupancy.occupiedProbeCount;
 
 		return {
 			totalProbes: occupancy.totalProbes,
 			solidMeshCount: occupancy.solidMeshCount,
 			occupiedProbeCount: occupancy.occupiedProbeCount,
 			occupiedProbeMeshHitCount,
-			sampling: _lightProbeContext.probeGrid.getSamplingInfo()
+			classification: {
+				classificationPolicy: 'solid-occupancy-validity',
+				relocationPolicy: 'none',
+				validProbeCount,
+				invalidProbeCount: sampling.invalidProbeCount,
+				interiorProbeCount: occupancy.occupiedProbeCount,
+				exteriorProbeCount: validProbeCount,
+				occludingProbeCount: occupancy.occupiedProbeCount,
+				relocatedProbeCount: 0
+			},
+			sampling
 		};
 
 	};
@@ -1320,6 +1332,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		color.b /= safeSampleCount;
 
 		return {
+			selectedPixelCount: sampleCount,
+			selectedPixelRatio: roundMetric( sampleCount / Math.max( width * height, 1 ) ),
 			colorBias: {
 				redOverGreen: roundMetric( color.r / Math.max( color.g, 0.0001 ) ),
 				greenOverRed: roundMetric( color.g / Math.max( color.r, 0.0001 ) )
@@ -1467,7 +1481,29 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			leftReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
 			rightReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
 		};
+		const createNearDividerEdgeRegion = ( region, side ) => {
+
+			const width = region.x1 - region.x0;
+
+			return side === 'left' ? {
+				...region,
+				x0: Math.max( region.x0, region.x1 - width * 0.35 )
+			} : {
+				...region,
+				x1: Math.min( region.x1, region.x0 + width * 0.35 )
+			};
+
+		};
+		const surfaceCenterRegions = _lightProbeContext.leakFixture === null ? null : {
+			leftReceiverSurfaceCenter: createObjectCenterScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
+			rightReceiverSurfaceCenter: createObjectCenterScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
+		};
 		const surfaceSamples = surfaceRegions === null ? null : captureRegionArtifactMetrics( surfaceRegions );
+		const nearDividerEdgeSamples = surfaceRegions === null ? null : captureRegionArtifactMetrics( {
+			leftReceiverNearDividerEdge: createNearDividerEdgeRegion( surfaceRegions.leftReceiverSurface, 'left' ),
+			rightReceiverNearDividerEdge: createNearDividerEdgeRegion( surfaceRegions.rightReceiverSurface, 'right' )
+		} );
+		const surfaceCenterSamples = surfaceCenterRegions === null ? null : captureRegionArtifactMetrics( surfaceCenterRegions );
 		const maskedSamples = captureLeakReceiverMaskedMetrics();
 		const leftReceiver = regions.leftReceiver;
 		const rightReceiver = regions.rightReceiver;
@@ -1483,6 +1519,14 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			surfaceSamples.leftReceiverSurface.colorBias.greenOverRed,
 			surfaceSamples.rightReceiverSurface.colorBias.redOverGreen
 		);
+		const surfaceCenterWrongSideColorRatio = surfaceCenterSamples === null ? null : Math.max(
+			surfaceCenterSamples.leftReceiverSurfaceCenter.colorBias.greenOverRed,
+			surfaceCenterSamples.rightReceiverSurfaceCenter.colorBias.redOverGreen
+		);
+		const nearDividerEdgeWrongSideColorRatio = nearDividerEdgeSamples === null ? null : Math.max(
+			nearDividerEdgeSamples.leftReceiverNearDividerEdge.colorBias.greenOverRed,
+			nearDividerEdgeSamples.rightReceiverNearDividerEdge.colorBias.redOverGreen
+		);
 		const maskedWrongSideColorRatio = maskedSamples === null ? null : Math.max(
 			maskedSamples.leftReceiverMasked.colorBias.greenOverRed,
 			maskedSamples.rightReceiverMasked.colorBias.redOverGreen
@@ -1491,14 +1535,175 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			maskedSamples.leftReceiverMasked.colorBias.redOverGreen,
 			maskedSamples.rightReceiverMasked.colorBias.greenOverRed
 		);
+		const maskedVisiblePixelCount = maskedSamples === null ? null :
+			maskedSamples.leftReceiverMasked.selectedPixelCount + maskedSamples.rightReceiverMasked.selectedPixelCount;
+		const maskedVisiblePixelRatio = maskedSamples === null ? null : roundMetric(
+			maskedSamples.leftReceiverMasked.selectedPixelRatio + maskedSamples.rightReceiverMasked.selectedPixelRatio
+		);
 
 		return {
 			wrongSideColorRatio: roundMetric( wrongSideColorRatio ),
 			surfaceWrongSideColorRatio: surfaceWrongSideColorRatio === null ? null : roundMetric( surfaceWrongSideColorRatio ),
+			surfaceCenterWrongSideColorRatio: surfaceCenterWrongSideColorRatio === null ? null : roundMetric( surfaceCenterWrongSideColorRatio ),
+			nearDividerEdgeWrongSideColorRatio: nearDividerEdgeWrongSideColorRatio === null ? null : roundMetric( nearDividerEdgeWrongSideColorRatio ),
 			maskedWrongSideColorRatio: maskedWrongSideColorRatio === null ? null : roundMetric( maskedWrongSideColorRatio ),
+			maskedVisiblePixelCount,
+			maskedVisiblePixelRatio,
 			correctBounceRatio: roundMetric( correctBounceRatio ),
 			maskedCorrectBounceRatio: maskedCorrectBounceRatio === null ? null : roundMetric( maskedCorrectBounceRatio )
 		};
+
+	};
+
+	const createReceiverBoundaryDescriptor = receiverBoundaryLayerMask => ( {
+		receiverBoundaryLayerMask,
+		receiverBoundaryWeight: 1
+	} );
+
+	const captureReceiverIrradianceRenderMetrics = () => {
+
+		if ( _lightProbeContext.leakFixture === null || _lightProbeContext.probeGrid === null ) return null;
+
+		const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
+		const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
+		const previousOutputColorSpace = _lightProbeContext.renderer.outputColorSpace;
+		const leftMaterial = new THREE.MeshBasicNodeMaterial();
+		const rightMaterial = new THREE.MeshBasicNodeMaterial();
+
+		try {
+
+			leftMaterial.colorNode = _lightProbeContext.probeGrid.createIrradianceNode( createReceiverBoundaryDescriptor( 2 ) );
+			rightMaterial.colorNode = _lightProbeContext.probeGrid.createIrradianceNode( createReceiverBoundaryDescriptor( 4 ) );
+			leftMaterial.toneMapped = false;
+			rightMaterial.toneMapped = false;
+			_lightProbeContext.leakFixture.leftReceiver.material = leftMaterial;
+			_lightProbeContext.leakFixture.rightReceiver.material = rightMaterial;
+			const captureIrradianceCenterWrongRatio = ( outputColorSpace ) => {
+
+				_lightProbeContext.renderer.outputColorSpace = outputColorSpace;
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+				const regions = {
+					leftReceiverIrradianceCenter: createObjectCenterScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
+					rightReceiverIrradianceCenter: createObjectCenterScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
+				};
+				const samples = captureRegionArtifactMetrics( regions );
+
+				return roundMetric( Math.max(
+					samples.leftReceiverIrradianceCenter.colorBias.greenOverRed,
+					samples.rightReceiverIrradianceCenter.colorBias.redOverGreen
+				) );
+
+			};
+			const captureIrradianceMaskedWrongRatio = ( outputColorSpace ) => {
+
+				_lightProbeContext.renderer.outputColorSpace = outputColorSpace;
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+				const maskedSamples = captureLeakReceiverMaskedMetrics();
+
+				return roundMetric( Math.max(
+					maskedSamples.leftReceiverMasked.colorBias.greenOverRed,
+					maskedSamples.rightReceiverMasked.colorBias.redOverGreen
+				) );
+
+			};
+
+			return {
+				renderIrradianceCenterWrongRatio: captureIrradianceCenterWrongRatio( previousOutputColorSpace ),
+				renderLinearIrradianceCenterWrongRatio: captureIrradianceCenterWrongRatio( THREE.LinearSRGBColorSpace ),
+				renderIrradianceMaskedWrongRatio: captureIrradianceMaskedWrongRatio( previousOutputColorSpace ),
+				renderLinearIrradianceMaskedWrongRatio: captureIrradianceMaskedWrongRatio( THREE.LinearSRGBColorSpace )
+			};
+
+		} finally {
+
+			_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
+			_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
+			_lightProbeContext.renderer.outputColorSpace = previousOutputColorSpace;
+			leftMaterial.dispose();
+			rightMaterial.dispose();
+			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+		}
+
+	};
+
+	const captureReceiverLambertMaterialResponseMetrics = () => {
+
+		if ( _lightProbeContext.leakFixture === null || _lightProbeContext.probeGrid === null ) return null;
+
+		const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
+		const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
+		const previousOutputColorSpace = _lightProbeContext.renderer.outputColorSpace;
+		const leftMaterial = new THREE.MeshLambertNodeMaterial( {
+			color: previousLeftMaterial.color?.clone() ?? new THREE.Color( 0xffffff )
+		} );
+		const rightMaterial = new THREE.MeshLambertNodeMaterial( {
+			color: previousRightMaterial.color?.clone() ?? new THREE.Color( 0xffffff )
+		} );
+
+		try {
+
+			leftMaterial.lightsNode = _lightProbeContext.probeGrid.createLightsNode(
+				[ _lightProbeContext.directLight, _lightProbeContext.ambientLight ],
+				createReceiverBoundaryDescriptor( 2 )
+			);
+			rightMaterial.lightsNode = _lightProbeContext.probeGrid.createLightsNode(
+				[ _lightProbeContext.directLight, _lightProbeContext.ambientLight ],
+				createReceiverBoundaryDescriptor( 4 )
+			);
+			_lightProbeContext.leakFixture.leftReceiver.material = leftMaterial;
+			_lightProbeContext.leakFixture.rightReceiver.material = rightMaterial;
+			const captureMaskedWrongRatio = ( outputColorSpace ) => {
+
+				_lightProbeContext.renderer.outputColorSpace = outputColorSpace;
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+				const maskedSamples = captureLeakReceiverMaskedMetrics();
+
+				return roundMetric( Math.max(
+					maskedSamples.leftReceiverMasked.colorBias.greenOverRed,
+					maskedSamples.rightReceiverMasked.colorBias.redOverGreen
+				) );
+
+			};
+
+			return {
+				renderLambertMaskedWrongRatio: captureMaskedWrongRatio( previousOutputColorSpace ),
+				renderLinearLambertMaskedWrongRatio: captureMaskedWrongRatio( THREE.LinearSRGBColorSpace )
+			};
+
+		} finally {
+
+			_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
+			_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
+			_lightProbeContext.renderer.outputColorSpace = previousOutputColorSpace;
+			leftMaterial.dispose();
+			rightMaterial.dispose();
+			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+		}
+
+	};
+
+	const applyLeakFixtureReceiverMasks = () => {
+
+		if ( _lightProbeContext.leakFixture === null || _lightProbeContext.probeGrid === null ) return;
+
+		const leftLightsNode = _lightProbeContext.probeGrid.createLightsNode(
+			[ _lightProbeContext.directLight, _lightProbeContext.ambientLight ],
+			createReceiverBoundaryDescriptor( 2 )
+		);
+		const rightLightsNode = _lightProbeContext.probeGrid.createLightsNode(
+			[ _lightProbeContext.directLight, _lightProbeContext.ambientLight ],
+			createReceiverBoundaryDescriptor( 4 )
+		);
+
+		_lightProbeContext.leakFixture.leftReceiver.material.lightsNode = leftLightsNode;
+		_lightProbeContext.leakFixture.rightReceiver.material.lightsNode = rightLightsNode;
+		_lightProbeContext.leakFixture.leftReceiver.material.needsUpdate = true;
+		_lightProbeContext.leakFixture.rightReceiver.material.needsUpdate = true;
 
 	};
 
@@ -1878,6 +2083,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		_lightProbeContext,
 		captureCanvasSample,
 		captureLeakRegionMetrics,
+		captureReceiverIrradianceRenderMetrics,
 		createHarnessStateSnapshot,
 		createProbeVisibilitySnapshot,
 		evaluateIrradianceContract,
@@ -1991,6 +2197,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		};
 
+		const regionArea = region => region === null ? 0 : Math.max( region.x1 - region.x0, 0 ) * Math.max( region.y1 - region.y0, 0 );
+
 		const captureShaderNormalVariant = ( side, label ) => {
 
 			const material = createNormalMaterial( side );
@@ -2065,6 +2273,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				frontSideSample.leftReceiverSurface,
 				frontSideSample.rightReceiverSurface
 			].filter( surface => surface.matchesCpuNormal === true ).length;
+			const receiverSurfaceRegionAreaRatio = roundMetric(
+				receivers.reduce( ( sum, receiver ) => sum + regionArea( receiver.surfaceRegion ), 0 )
+			);
+			const minCameraDotCpuNormal = roundMetric( Math.min( ...receivers.map( receiver => receiver.cameraDotCpuNormal ) ) );
 
 			return {
 				available: true,
@@ -2073,7 +2285,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				frontFaceReceiverCount,
 				shaderNormalSampleCount: shaderNormalSamples.length,
 				frontSideVisibleReceiverCount,
-				frontSideCpuNormalConventionCount
+				frontSideCpuNormalConventionCount,
+				minCameraDotCpuNormal,
+				receiverSurfaceRegionAreaRatio
 			};
 
 		} finally {
@@ -2095,6 +2309,158 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		preToneMaskedCorrectBounceRatio: rendererMetrics.metrics.maskedCorrectBounceRatio
 	} );
 
+	const createReceiverMaterialAttributionFacts = () => {
+
+		const leftMaterial = _lightProbeContext.leakFixture?.leftReceiver?.material ?? null;
+		const rightMaterial = _lightProbeContext.leakFixture?.rightReceiver?.material ?? null;
+		const leftColor = leftMaterial?.color ?? null;
+		const rightColor = rightMaterial?.color ?? null;
+		const leftWrongSideRatio = leftColor !== null ? leftColor.g / Math.max( leftColor.r, 0.0001 ) : null;
+		const rightWrongSideRatio = rightColor !== null ? rightColor.r / Math.max( rightColor.g, 0.0001 ) : null;
+
+		return {
+			receiverMaterialType: _lightProbeContext.params.materialType,
+			receiverAlbedoWrongSideRatio: roundMetric( Math.max( leftWrongSideRatio ?? 0, rightWrongSideRatio ?? 0 ) ),
+			receiverRoughness: Number.isFinite( leftMaterial?.roughness ) ? roundMetric( leftMaterial.roughness ) : null,
+			receiverMetalness: Number.isFinite( leftMaterial?.metalness ) ? roundMetric( leftMaterial.metalness ) : null
+		};
+
+	};
+
+	const createReceiverSurfaceSamplingFacts = () => {
+
+		if ( _lightProbeContext.leakFixture === null ) {
+
+			return {
+				minCameraDotCpuNormal: null,
+				receiverSurfaceRegionAreaRatio: null
+			};
+
+		}
+
+		const receiverPosition = new THREE.Vector3();
+		const receiverQuaternion = new THREE.Quaternion();
+		const cpuNormal = new THREE.Vector3();
+		const cameraDirection = new THREE.Vector3();
+		const readCameraDotCpuNormal = mesh => {
+
+			mesh.updateWorldMatrix( true, false );
+			mesh.getWorldPosition( receiverPosition );
+			mesh.getWorldQuaternion( receiverQuaternion );
+			cpuNormal.set( 0, 0, 1 ).applyQuaternion( receiverQuaternion ).normalize();
+			cameraDirection.subVectors( _lightProbeContext.camera.position, receiverPosition ).normalize();
+
+			return cameraDirection.dot( cpuNormal );
+
+		};
+		const regionArea = region => region === null ? 0 : Math.max( region.x1 - region.x0, 0 ) * Math.max( region.y1 - region.y0, 0 );
+		const receivers = [
+			_lightProbeContext.leakFixture.leftReceiver,
+			_lightProbeContext.leakFixture.rightReceiver
+		];
+
+		return {
+			minCameraDotCpuNormal: roundMetric( Math.min( ...receivers.map( readCameraDotCpuNormal ) ) ),
+			receiverSurfaceRegionAreaRatio: roundMetric( receivers.reduce( ( sum, mesh ) =>
+				sum + regionArea( createObjectSurfaceScreenRegion( mesh ) ), 0 ) )
+		};
+
+	};
+
+	const createResidualAttributionRow = ( label, metrics, rendererMetrics, irradianceMetrics = null, materialFacts = null, lambertMetrics = null, surfaceSamplingFacts = null ) => ( {
+		label,
+		screenRegionWrongSideColorRatio: metrics.wrongSideColorRatio,
+		surfaceWrongSideColorRatio: metrics.surfaceWrongSideColorRatio,
+		surfaceCenterWrongSideColorRatio: metrics.surfaceCenterWrongSideColorRatio,
+		nearDividerEdgeWrongSideColorRatio: metrics.nearDividerEdgeWrongSideColorRatio,
+		maskedWrongSideColorRatio: metrics.maskedWrongSideColorRatio,
+		maskedVisiblePixelCount: metrics.maskedVisiblePixelCount,
+		maskedVisiblePixelRatio: metrics.maskedVisiblePixelRatio,
+		preToneMaskedWrongSideColorRatio: rendererMetrics.metrics.maskedWrongSideColorRatio,
+		...( irradianceMetrics !== null ? {
+			renderIrradianceCenterWrongRatio: irradianceMetrics.renderIrradianceCenterWrongRatio,
+			renderLinearIrradianceCenterWrongRatio: irradianceMetrics.renderLinearIrradianceCenterWrongRatio,
+			renderIrradianceMaskedWrongRatio: irradianceMetrics.renderIrradianceMaskedWrongRatio,
+			renderLinearIrradianceMaskedWrongRatio: irradianceMetrics.renderLinearIrradianceMaskedWrongRatio
+		} : {} ),
+		...( materialFacts !== null ? {
+			receiverMaterialType: materialFacts.receiverMaterialType,
+			receiverAlbedoWrongSideRatio: materialFacts.receiverAlbedoWrongSideRatio,
+			receiverRoughness: materialFacts.receiverRoughness,
+			receiverMetalness: materialFacts.receiverMetalness
+		} : {} ),
+		...( lambertMetrics !== null ? {
+			renderLambertMaskedWrongRatio: lambertMetrics.renderLambertMaskedWrongRatio,
+			renderLinearLambertMaskedWrongRatio: lambertMetrics.renderLinearLambertMaskedWrongRatio
+		} : {} ),
+		...( surfaceSamplingFacts !== null ? {
+			minCameraDotCpuNormal: surfaceSamplingFacts.minCameraDotCpuNormal,
+			receiverSurfaceRegionAreaRatio: surfaceSamplingFacts.receiverSurfaceRegionAreaRatio
+		} : {} )
+	} );
+
+	const createResidualAttributionFacts = ( rows ) => {
+
+		const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
+		const baseline = rowMap.get( 'sealed-wall-validity-weighted' );
+		const candidate = rowMap.get( 'sealed-wall-visibility-moments' );
+		const ratio = key => roundMetric( candidate[ key ] / Math.max( baseline[ key ], 0.0001 ) );
+
+		return {
+			attributionPolicy: 'rendered-region-source-ratios',
+			baselineLabel: baseline.label,
+			candidateLabel: candidate.label,
+			screenRegionResidualRatio: ratio( 'screenRegionWrongSideColorRatio' ),
+			surfaceResidualRatio: ratio( 'surfaceWrongSideColorRatio' ),
+			surfaceCenterResidualRatio: ratio( 'surfaceCenterWrongSideColorRatio' ),
+			maskedVisibleResidualRatio: ratio( 'maskedWrongSideColorRatio' ),
+			preToneMaskedResidualRatio: ratio( 'preToneMaskedWrongSideColorRatio' ),
+			candidateRenderIrradianceCenterWrongRatio: candidate.renderIrradianceCenterWrongRatio,
+			candidateRenderLinearIrradianceCenterWrongRatio: candidate.renderLinearIrradianceCenterWrongRatio,
+			candidateLinearIrradianceToMaskedVisibleRatio: roundMetric(
+				candidate.renderLinearIrradianceCenterWrongRatio / Math.max( candidate.maskedWrongSideColorRatio, 0.0001 )
+			),
+			candidateRenderIrradianceMaskedWrongRatio: candidate.renderIrradianceMaskedWrongRatio,
+			candidateRenderLinearIrradianceMaskedWrongRatio: candidate.renderLinearIrradianceMaskedWrongRatio,
+			candidateMaskedIrradianceToMaskedVisibleRatio: roundMetric(
+				candidate.renderLinearIrradianceMaskedWrongRatio / Math.max( candidate.maskedWrongSideColorRatio, 0.0001 )
+			),
+			candidateReceiverMaterialType: candidate.receiverMaterialType,
+			candidateReceiverAlbedoWrongSideRatio: candidate.receiverAlbedoWrongSideRatio,
+			candidateReceiverRoughness: candidate.receiverRoughness,
+			candidateReceiverMetalness: candidate.receiverMetalness,
+			candidatePreToneMaskedToAlbedoRatio: roundMetric(
+				candidate.preToneMaskedWrongSideColorRatio / Math.max( candidate.receiverAlbedoWrongSideRatio, 0.0001 )
+			),
+			candidateRenderLambertMaskedWrongRatio: candidate.renderLambertMaskedWrongRatio,
+			candidateRenderLinearLambertMaskedWrongRatio: candidate.renderLinearLambertMaskedWrongRatio,
+			candidateLinearLambertToLinearIrradianceRatio: roundMetric(
+				candidate.renderLinearLambertMaskedWrongRatio / Math.max( candidate.renderLinearIrradianceMaskedWrongRatio, 0.0001 )
+			),
+			candidatePreToneMaskedToLinearLambertRatio: roundMetric(
+				candidate.preToneMaskedWrongSideColorRatio / Math.max( candidate.renderLinearLambertMaskedWrongRatio, 0.0001 )
+			),
+			candidateNearDividerEdgeWrongSideColorRatio: candidate.nearDividerEdgeWrongSideColorRatio,
+			candidateNearDividerEdgeToSurfaceCenterRatio: roundMetric(
+				candidate.nearDividerEdgeWrongSideColorRatio / Math.max( candidate.surfaceCenterWrongSideColorRatio, 0.0001 )
+			),
+			candidateNearDividerEdgeToMaskedVisibleRatio: roundMetric(
+				candidate.nearDividerEdgeWrongSideColorRatio / Math.max( candidate.maskedWrongSideColorRatio, 0.0001 )
+			),
+			candidateMaskedVisiblePixelCount: candidate.maskedVisiblePixelCount,
+			candidateMaskedVisiblePixelRatio: candidate.maskedVisiblePixelRatio,
+			candidateMaskedVisibleToSurfaceCenterRatio: roundMetric(
+				candidate.maskedWrongSideColorRatio / Math.max( candidate.surfaceCenterWrongSideColorRatio, 0.0001 )
+			),
+			candidatePreToneMaskedToMaskedVisibleRatio: roundMetric(
+				candidate.preToneMaskedWrongSideColorRatio / Math.max( candidate.maskedWrongSideColorRatio, 0.0001 )
+			),
+			minCameraDotCpuNormal: candidate.minCameraDotCpuNormal,
+			receiverSurfaceRegionAreaRatio: candidate.receiverSurfaceRegionAreaRatio
+		};
+
+	};
+
 	const createLeakProofSettingsSnapshot = () => ( {
 		resolution: _lightProbeContext.params.resolution,
 		cubemapSize: _lightProbeContext.params.cubemapSize,
@@ -2111,6 +2477,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const previousState = createHarnessStateSnapshot();
 		const previousVisibility = createProbeVisibilitySnapshot();
 		const rows = [];
+		const residualAttributionRows = [];
 		let proofSettings = null;
 		let sampling = null;
 		const cases = [
@@ -2123,7 +2490,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			{
 				label: 'sealed-wall-visibility-moments',
 				leakReductionMode: 'normal',
-				useProbeValidity: true
+				useProbeValidity: true,
+				receiverScopedMask: true
 			}
 		];
 
@@ -2156,6 +2524,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 				}
 
+				if ( proofCase.receiverScopedMask === true ) applyLeakFixtureReceiverMasks();
+
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
 				if ( proofSettings === null ) proofSettings = createLeakProofSettingsSnapshot();
@@ -2168,12 +2538,33 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					toneMappingLabel: 'NoToneMapping',
 					outputColorSpace: THREE.LinearSRGBColorSpace
 				} );
+				const irradianceMetrics = proofCase.receiverScopedMask === true ?
+					captureReceiverIrradianceRenderMetrics() :
+					null;
+				const materialFacts = proofCase.receiverScopedMask === true ?
+					createReceiverMaterialAttributionFacts() :
+					null;
+				const lambertMetrics = proofCase.receiverScopedMask === true ?
+					captureReceiverLambertMaterialResponseMetrics() :
+					null;
+				const surfaceSamplingFacts = proofCase.receiverScopedMask === true ?
+					createReceiverSurfaceSamplingFacts() :
+					null;
 
 				rows.push( {
 					label: proofCase.label,
 					guardedVisibilityProofMode,
 					...createLeakProofRowMetrics( leakMetrics, preToneLeakMetrics )
 				} );
+				residualAttributionRows.push( createResidualAttributionRow(
+					proofCase.label,
+					leakMetrics,
+					preToneLeakMetrics,
+					irradianceMetrics,
+					materialFacts,
+					lambertMetrics,
+					surfaceSamplingFacts
+				) );
 
 			}
 
@@ -2188,6 +2579,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			proofSettings,
 			sampling,
 			rows,
+			residualAttribution: createResidualAttributionFacts( residualAttributionRows ),
 			restored: {
 				lightingMode: _lightProbeContext.params.lightingMode,
 				leakReductionMode: _lightProbeContext.params.leakReductionMode,
@@ -2334,11 +2726,17 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				normalBias: 0.75,
 				viewBias: 0.25,
 				leakReductionMode: 'normal',
-				probeValidity: new Float32Array( [ 1, 1, 1, 1, 1, 1, 1, 0 ] )
+				probeValidity: new Float32Array( [ 1, 1, 1, 1, 1, 1, 1, 0 ] ),
+				probeLayerMasks: new Uint32Array( [ 1, 3, 1, 3, 5, 1, 5, 1 ] )
 			} );
 			const invalidLeakReductionMode = captureSyncRejection( () => {
 
 				configuredGrid.setOptions( { leakReductionMode: 'distance' }, _lightProbeContext.renderer );
+
+			} );
+			const invalidProbeLayerMasks = captureSyncRejection( () => {
+
+				configuredGrid.setOptions( { probeLayerMasks: new Uint32Array( [ 1, 2 ] ) }, _lightProbeContext.renderer );
 
 			} );
 
@@ -2346,7 +2744,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				defaultSampling: defaultGrid.getSamplingInfo(),
 				configuredSampling: configuredGrid.getSamplingInfo(),
 				invalidLeakReductionModeRejected: invalidLeakReductionMode.rejected,
-				invalidLeakReductionModeMessage: invalidLeakReductionMode.message
+				invalidLeakReductionModeMessage: invalidLeakReductionMode.message,
+				invalidProbeLayerMasksRejected: invalidProbeLayerMasks.rejected,
+				invalidProbeLayerMasksMessage: invalidProbeLayerMasks.message
 			};
 
 			defaultGrid.dispose();

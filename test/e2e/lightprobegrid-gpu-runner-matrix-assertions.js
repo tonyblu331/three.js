@@ -1,5 +1,22 @@
 const hasNoFields = ( object, ...fields ) => fields.every( field => object[ field ] === undefined );
 
+const hasProbeClassificationFacts = probeOccupancy => {
+
+	const classification = probeOccupancy.classification;
+
+	return classification !== undefined &&
+		classification.classificationPolicy === 'solid-occupancy-validity' &&
+		classification.relocationPolicy === 'none' &&
+		classification.validProbeCount + classification.invalidProbeCount === probeOccupancy.totalProbes &&
+		classification.invalidProbeCount === probeOccupancy.occupiedProbeCount &&
+		classification.interiorProbeCount === probeOccupancy.occupiedProbeCount &&
+		classification.exteriorProbeCount === classification.validProbeCount &&
+		classification.occludingProbeCount === probeOccupancy.occupiedProbeCount &&
+		classification.relocatedProbeCount === 0 &&
+		hasNoFields( classification, 'probes', 'rows', 'occupiedProbes', 'relocatedProbes', 'brightnessDerivedValidity' );
+
+};
+
 const hasProbeOccupancyFacts = probeOccupancy =>
 	probeOccupancy.totalProbes === 64 &&
 	probeOccupancy.solidMeshCount >= 3 &&
@@ -8,6 +25,7 @@ const hasProbeOccupancyFacts = probeOccupancy =>
 	probeOccupancy.sampling.invalidProbeCount === probeOccupancy.occupiedProbeCount &&
 	Number.isInteger( probeOccupancy.occupiedProbeMeshHitCount ) &&
 	probeOccupancy.occupiedProbeMeshHitCount >= probeOccupancy.occupiedProbeCount &&
+	hasProbeClassificationFacts( probeOccupancy ) &&
 	hasNoFields( probeOccupancy, 'occupiedProbes' );
 
 const hasLeakProofFixtureFacts = leakProofFacts =>
@@ -42,6 +60,47 @@ const hasLeakProofRowFacts = row =>
 		'leakMetrics',
 		'preToneLeakMetrics'
 	);
+
+const hasResidualAttributionFacts = leakProofFacts => {
+
+	const attribution = leakProofFacts.residualAttribution;
+
+	return attribution !== undefined &&
+		attribution.attributionPolicy === 'rendered-region-source-ratios' &&
+		attribution.baselineLabel === 'sealed-wall-validity-weighted' &&
+		attribution.candidateLabel === 'sealed-wall-visibility-moments' &&
+		Number.isFinite( attribution.screenRegionResidualRatio ) &&
+		Number.isFinite( attribution.surfaceResidualRatio ) &&
+		Number.isFinite( attribution.surfaceCenterResidualRatio ) &&
+		Number.isFinite( attribution.maskedVisibleResidualRatio ) &&
+		Number.isFinite( attribution.preToneMaskedResidualRatio ) &&
+		Number.isFinite( attribution.candidateRenderIrradianceCenterWrongRatio ) &&
+		Number.isFinite( attribution.candidateRenderLinearIrradianceCenterWrongRatio ) &&
+		Number.isFinite( attribution.candidateLinearIrradianceToMaskedVisibleRatio ) &&
+		Number.isFinite( attribution.candidateRenderIrradianceMaskedWrongRatio ) &&
+		Number.isFinite( attribution.candidateRenderLinearIrradianceMaskedWrongRatio ) &&
+		Number.isFinite( attribution.candidateMaskedIrradianceToMaskedVisibleRatio ) &&
+		attribution.candidateReceiverMaterialType === 'standard' &&
+		Number.isFinite( attribution.candidateReceiverAlbedoWrongSideRatio ) &&
+		Number.isFinite( attribution.candidateReceiverRoughness ) &&
+		Number.isFinite( attribution.candidateReceiverMetalness ) &&
+		Number.isFinite( attribution.candidatePreToneMaskedToAlbedoRatio ) &&
+		Number.isFinite( attribution.candidateRenderLambertMaskedWrongRatio ) &&
+		Number.isFinite( attribution.candidateRenderLinearLambertMaskedWrongRatio ) &&
+		Number.isFinite( attribution.candidateLinearLambertToLinearIrradianceRatio ) &&
+		Number.isFinite( attribution.candidatePreToneMaskedToLinearLambertRatio ) &&
+		Number.isFinite( attribution.candidateNearDividerEdgeWrongSideColorRatio ) &&
+		Number.isFinite( attribution.candidateNearDividerEdgeToSurfaceCenterRatio ) &&
+		Number.isFinite( attribution.candidateNearDividerEdgeToMaskedVisibleRatio ) &&
+		Number.isInteger( attribution.candidateMaskedVisiblePixelCount ) &&
+		Number.isFinite( attribution.candidateMaskedVisiblePixelRatio ) &&
+		Number.isFinite( attribution.candidateMaskedVisibleToSurfaceCenterRatio ) &&
+		Number.isFinite( attribution.candidatePreToneMaskedToMaskedVisibleRatio ) &&
+		Number.isFinite( attribution.minCameraDotCpuNormal ) &&
+		Number.isFinite( attribution.receiverSurfaceRegionAreaRatio ) &&
+		hasNoFields( attribution, 'rows', 'samples', 'verdict', 'supported' );
+
+};
 
 const hasLeakProofRestorationFacts = leakProofFacts =>
 	leakProofFacts.restored.lightingMode === 'direct + probes' &&
@@ -80,6 +139,9 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 		`leak proof facts ${ row.label }: expected finite leak and bounce metrics.` );
 
 	}
+
+	assert( hasResidualAttributionFacts( leakProofFacts ),
+	'leak proof facts: expected compact residual attribution ratios without verdict payloads.' );
 
 	assert( hasLeakProofRestorationFacts( leakProofFacts ),
 	'leak proof facts: expected demo state and hidden fixture restoration.' );

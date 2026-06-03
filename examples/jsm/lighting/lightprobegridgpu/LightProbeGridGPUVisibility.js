@@ -1,4 +1,5 @@
 import {
+	DoubleSide,
 	MeshBasicNodeMaterial,
 	NodeMaterial
 } from 'three/webgpu';
@@ -65,6 +66,7 @@ export const createLightProbeGridGPUVisibilityDistanceMaterial = ( visibilityPro
 	const normalizedDistance = distance.div( visibilityMaxDistance ).clamp( 0, 1 );
 
 	material.colorNode = vec3( normalizedDistance );
+	material.side = DoubleSide;
 	material.toneMapped = false;
 
 	return material;
@@ -81,6 +83,7 @@ export const createLightProbeGridGPUVisibilityRepackMaterial = (
 	const pixelSize = float( 1 ).div( visibilityDepthResolution );
 	const halfPixel = pixelSize.mul( 0.5 );
 	const negativeHalfPixel = float( 0 ).sub( halfPixel );
+	const negativePixel = float( 0 ).sub( pixelSize );
 
 	const sampleRadialDistance = Fn( ( { octUv } ) => {
 
@@ -101,26 +104,42 @@ export const createLightProbeGridGPUVisibilityRepackMaterial = (
 		const sampleNegativeX = sampleRadialDistance( { octUv: center.add( vec2( negativeHalfPixel, 0 ) ) } );
 		const samplePositiveY = sampleRadialDistance( { octUv: center.add( vec2( 0, halfPixel ) ) } );
 		const sampleNegativeY = sampleRadialDistance( { octUv: center.add( vec2( 0, negativeHalfPixel ) ) } );
+		const sampleFullPositiveX = sampleRadialDistance( { octUv: center.add( vec2( pixelSize, 0 ) ) } );
+		const sampleFullNegativeX = sampleRadialDistance( { octUv: center.add( vec2( negativePixel, 0 ) ) } );
+		const sampleFullPositiveY = sampleRadialDistance( { octUv: center.add( vec2( 0, pixelSize ) ) } );
+		const sampleFullNegativeY = sampleRadialDistance( { octUv: center.add( vec2( 0, negativePixel ) ) } );
 		const hitSum = sampleCenter.z
 			.add( samplePositiveX.z )
 			.add( sampleNegativeX.z )
 			.add( samplePositiveY.z )
-			.add( sampleNegativeY.z );
+			.add( sampleNegativeY.z )
+			.add( sampleFullPositiveX.z )
+			.add( sampleFullNegativeX.z )
+			.add( sampleFullPositiveY.z )
+			.add( sampleFullNegativeY.z );
 		const safeHitSum = hitSum.max( 1 );
 		const meanDistance = sampleCenter.x.mul( sampleCenter.z )
 			.add( samplePositiveX.x.mul( samplePositiveX.z ) )
 			.add( sampleNegativeX.x.mul( sampleNegativeX.z ) )
 			.add( samplePositiveY.x.mul( samplePositiveY.z ) )
 			.add( sampleNegativeY.x.mul( sampleNegativeY.z ) )
+			.add( sampleFullPositiveX.x.mul( sampleFullPositiveX.z ) )
+			.add( sampleFullNegativeX.x.mul( sampleFullNegativeX.z ) )
+			.add( sampleFullPositiveY.x.mul( sampleFullPositiveY.z ) )
+			.add( sampleFullNegativeY.x.mul( sampleFullNegativeY.z ) )
 			.div( safeHitSum );
 		const meanSquaredDistance = sampleCenter.y.mul( sampleCenter.z )
 			.add( samplePositiveX.y.mul( samplePositiveX.z ) )
 			.add( sampleNegativeX.y.mul( sampleNegativeX.z ) )
 			.add( samplePositiveY.y.mul( samplePositiveY.z ) )
 			.add( sampleNegativeY.y.mul( sampleNegativeY.z ) )
+			.add( sampleFullPositiveX.y.mul( sampleFullPositiveX.z ) )
+			.add( sampleFullNegativeX.y.mul( sampleFullNegativeX.z ) )
+			.add( sampleFullPositiveY.y.mul( sampleFullPositiveY.z ) )
+			.add( sampleFullNegativeY.y.mul( sampleFullNegativeY.z ) )
 			.div( safeHitSum )
 			.add( visibilityMinVariance );
-		const hitConfidence = hitSum.div( 5 ).clamp( 0, 1 );
+		const hitConfidence = hitSum.div( 9 ).clamp( 0, 1 );
 
 		return vec4( meanDistance, meanSquaredDistance, hitConfidence, float( 0 ) );
 

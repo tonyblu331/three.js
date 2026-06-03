@@ -17,6 +17,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		proofReadbackSource,
 		gpuConstantsSource,
 		gpuAtlasSource,
+		gpuProbeOwnershipSource,
 		cpuShMathSource,
 		gpuProjectionSource,
 		gpuVisibilitySource,
@@ -34,6 +35,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		runnerRuntimeAssertionsSource,
 		webglExample,
 		lightProbeGridDocs,
+		proofEvalsDesignSource,
 		cubeTextureNodeSource,
 		webgpuBuildSource
 	] = await Promise.all( [
@@ -47,6 +49,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProofReadback.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js', 'utf8' ),
+		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProbeOwnership.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUCpuShMath.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUProjection.js', 'utf8' ),
 		fs.readFile( 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUVisibility.js', 'utf8' ),
@@ -64,6 +67,7 @@ export async function checkSmokeSourceInvariants( file, smokeHarness ) {
 		fs.readFile( 'test/e2e/lightprobegrid-gpu-runner-runtime-assertions.js', 'utf8' ),
 		fs.readFile( 'examples/webgl_lightprobes.html', 'utf8' ),
 		fs.readFile( 'docs/pages/LightProbeGrid.html.md', 'utf8' ),
+		fs.readFile( 'openspec/changes/lightprobegridgpu-research-proof-evals/design.md', 'utf8' ),
 		fs.readFile( 'src/nodes/accessors/CubeTextureNode.js', 'utf8' ),
 		fs.readFile( 'build/three.webgpu.js', 'utf8' )
 	] );
@@ -109,8 +113,9 @@ ${ runnerRuntimeAssertionsSource }`;
 
 	const requireSourceContract = ( message, checks ) => {
 
-		requireSource( checks.every( ( { sourceText, tokens = [] } ) =>
-			tokens.every( token => sourceText.includes( token ) )
+		requireSource( checks.every( ( { sourceText, tokens = [], absent = [] } ) =>
+			tokens.every( token => sourceText.includes( token ) ) &&
+			absent.every( token => sourceText.includes( token ) === false )
 		), message );
 
 	};
@@ -136,6 +141,8 @@ ${ runnerRuntimeAssertionsSource }`;
 			artifactSource.includes( 'leak-proof-facts.json' ) &&
 			artifactSource.includes( 'const createLeakProofArtifact = leakProofFacts =>' ) &&
 			artifactSource.includes( 'validateLeakProofArtifact( file, leakProofArtifact )' ) &&
+			artifactSource.includes( 'groundTruth: {' ) &&
+			artifactSource.includes( 'wrongSideLeakTarget: 0' ) &&
 			artifactSource.includes( 'baseline.guardedVisibilityProofMode === \'off\'' ) &&
 			artifactSource.includes( 'candidate.guardedVisibilityProofMode === \'guarded\'' ) &&
 			artifactSource.includes( 'proofSettings.resolution === 4' ) &&
@@ -166,7 +173,10 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofGatesSource.includes( 'summary.gates.every( hasCompactGateShape )' ) &&
 			proofGatesSource.includes( 'const hasSupportedRequiredGates = ( summary, requiredSupportedGateIds ) =>' ) &&
 			proofGatesSource.includes( 'hasSupportedRequiredGates( summary, requiredSupportedGateIds )' ) &&
-			proofGatesSource.includes( 'if ( facts.visibilityWeighting.wrongSideEscapedCount > 0 ) return true;' ) &&
+			proofGatesSource.includes( 'visibilityWeighting.noWrongSideEscape' ) &&
+			proofGatesSource.includes( 'SEALED_WALL_GROUND_TRUTH_WRONG_SIDE_LEAK = 0' ) &&
+			proofGatesSource.includes( 'preToneMaskedWrongSideResidualLeakRatio' ) &&
+			proofGatesSource.includes( 'supportMode === \'equals\'' ) &&
 			proofGatesSource.includes( 'const hasCompactProofSummarySize = summary =>' ) &&
 			proofGatesSource.includes( 'hasCompactProofSummarySize( summary )' ) &&
 			artifactSource.includes( 'createLightProbeProofReport' ) === false &&
@@ -282,6 +292,55 @@ ${ runnerRuntimeAssertionsSource }`;
 			gpuConstantsSource.includes( 'atlas: \'render-pass\'' ) &&
 			gpuConstantsSource.includes( 'update: \'full\'' ),
 		'LightProbeGridGPU must expose benchmark memory metadata and current backend labels.'
+	);
+
+	requireSource(
+		example.includes( 'createProbeLayerMaskData' ) &&
+			example.includes( 'createLightProbeGridGPUProbeOwnershipAssignment' ) &&
+			example.includes( 'probeOwnershipAssignmentFacts = ownershipAssignment.assignmentFacts' ) &&
+			example.includes( 'layerRuleName: \'cornell-left\'' ) &&
+			example.includes( 'layerRuleName: \'cornell-right\'' ) &&
+			example.includes( 'return ownershipAssignment.probeLayerMasks' ) &&
+			example.includes( 'probeOptions.probeLayerMasks = createProbeLayerMaskData( params.resolution )' ) &&
+			browserHarnessSource.includes( 'probeLayerMasks: new Uint32Array' ) &&
+			browserHarnessSource.includes( 'invalidProbeLayerMasksRejected' ) &&
+			runnerCoreAssertionsSource.includes( 'samplingControls.configuredSampling.probeMeta.probeLayerMaskMode === \'custom\'' ) &&
+			runnerCoreAssertionsSource.includes( 'invalidProbeLayerMasksRejected' ),
+		'Probe layer masks must be produced by the ownership adapter as default-compatible side metadata and covered by sampling-control assertions.'
+	);
+
+	requireSource(
+		proofEvalsDesignSource.includes( '### Phase 94: Layer / Region Rule Binding SDD' ) &&
+			proofEvalsDesignSource.includes( 'A layer rule names an ownership class, but it does not select probes by itself.' ) &&
+			proofEvalsDesignSource.includes( 'regionRules[ i ].layerRuleName' ) &&
+			proofEvalsDesignSource.includes( 'boundLayerRuleCount' ) &&
+			proofEvalsDesignSource.includes( 'unboundLayerRuleCount' ) &&
+			proofEvalsDesignSource.includes( 'two arrays where only one performs classification' ),
+		'LightProbeGridGPU ownership adapter SDD must preserve the layer/region binding contract before any prototype can claim two generic classifiers.'
+	);
+
+	requireSource(
+		proofEvalsDesignSource.includes( '### Phase 97: Residual Decision Boundary SDD' ) &&
+			proofEvalsDesignSource.includes( 'the residual must not be reframed as an unresolved probe-escape proof gate' ) &&
+			proofEvalsDesignSource.includes( 'candidateRenderLinearIrradianceCenterWrongRatio = 0' ) &&
+			proofEvalsDesignSource.includes( 'candidateRenderLinearIrradianceMaskedWrongRatio = 0.5037' ) &&
+			proofEvalsDesignSource.includes( 'candidateRenderLinearLambertMaskedWrongRatio = 0.6565' ) &&
+			proofEvalsDesignSource.includes( 'candidateNearDividerEdgeToMaskedVisibleRatio = 1.1981' ) &&
+			proofEvalsDesignSource.includes( 'Wrong-side probe escape as the residual owner' ) &&
+			proofEvalsDesignSource.includes( 'Do not prototype from these facts alone.' ),
+		'LightProbeGridGPU residual SDD must classify the remaining zero-oracle gate from measured residual facts without reopening wrong-side escape, threshold tuning, or payload-only prototypes.'
+	);
+
+	requireSource(
+		gpuProbeOwnershipSource.includes( 'createLightProbeGridGPUProbeOwnershipAssignment' ) &&
+			gpuProbeOwnershipSource.includes( 'getLightProbeGridGPUProbeCoord' ) &&
+			gpuProbeOwnershipSource.includes( 'rule.layerRuleName !== undefined ? layerRuleMap.get( rule.layerRuleName ) : null' ) &&
+			gpuProbeOwnershipSource.includes( 'boundLayerRuleCount' ) &&
+			gpuProbeOwnershipSource.includes( 'unboundLayerRuleCount' ) &&
+			gpuProbeOwnershipSource.includes( 'assignmentFacts' ) &&
+			gpuProbeOwnershipSource.includes( 'readRenderTargetPixels' ) === false &&
+			gpuProbeOwnershipSource.includes( 'residualAttribution' ) === false,
+		'LightProbeGridGPU ownership adapter must stay setup-only, bind region rules to layer ownership classes, and avoid proof/runtime readback dependencies.'
 	);
 
 	requireSource(
@@ -527,7 +586,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofGatesSource.includes( 'const hasReceiverSurfaceAgreement = ( facts, surfaceCpuRenderDelta ) =>' ) &&
 			proofGatesSource.includes( 'const hasBakedShMixedColorRisk = facts =>' ) &&
 			proofGatesSource.includes( 'const hasNoBakedShMixedColorRisk = facts =>' ) &&
-			proofGatesSource.includes( 'const hasSealedWallThresholdSupport = ( actual, threshold ) =>' ) &&
+			proofGatesSource.includes( 'const hasSealedWallThresholdSupport = ( actual, threshold, supportMode = \'minimum\' ) =>' ) &&
 			proofGatesSource.includes( 'const counts = gates.reduce( ( result, gate ) =>' ) &&
 			! proofGatesSource.includes( 'gates.filter( gate => gate.status === \'SUPPORTED\' )' ) &&
 			! proofGatesSource.includes( 'gates.filter( gate => gate.status === \'OPEN\' )' ) &&
@@ -564,7 +623,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofGatesSource.includes( 'const bakedShMixedColorRisk = hasBakedShMixedColorRisk( facts )' ) &&
 			proofGatesSource.includes( 'const shMixedColorRiskPass = hasNoBakedShMixedColorRisk( facts )' ) &&
 			proofGatesSource.includes( 'pass: shMixedColorRiskPass' ) &&
-			proofGatesSource.includes( 'const sealedWallGatePass = hasSealedWallThresholdSupport( actual, threshold )' ) &&
+			proofGatesSource.includes( 'const sealedWallGatePass = hasSealedWallThresholdSupport( actual, threshold, supportMode )' ) &&
 			proofGatesSource.includes( 'pass: sealedWallGatePass' ) &&
 			! proofGatesSource.includes( 'isLightProbeGrid:' ) &&
 			! proofGatesSource.includes( 'visibilityLabel:' ) &&
@@ -576,7 +635,7 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	const atlasPathStart = source.indexOf( '\n\t_createAtlasIrradianceNode() {' );
-	const atlasPathEnd = source.indexOf( '_createManualIrradianceNode()', atlasPathStart );
+	const atlasPathEnd = source.indexOf( '_createManualIrradianceNode( options = {} )', atlasPathStart );
 	const atlasPathSource = source.slice( atlasPathStart, atlasPathEnd );
 
 	requireSource(
@@ -602,6 +661,16 @@ ${ runnerRuntimeAssertionsSource }`;
 					'receiverSurfaceQuadratureDiagnostic',
 					'surfaceRuntimeWrongRatioMax',
 					'renderSurfaceWrongRatio',
+					'renderSurfaceCenterWrongRatio',
+					'renderIrradianceCenterWrongRatio',
+					'renderLinearIrradianceCenterWrongRatio',
+					'centerRuntimeWrongRatioMax',
+					'createReceiverBoundaryDescriptor',
+					'createIrradianceNode( createReceiverBoundaryDescriptor( 2 ) )',
+					'createIrradianceNode( createReceiverBoundaryDescriptor( 4 ) )',
+					'receiverBoundaryWeight: 1',
+					'applyLeakFixtureReceiverMasks',
+					'receiverScopedMask: true',
 					'_getPackedAtlasLayer',
 					'comparableReceiverCount',
 					'wrongMinusCorrectSuppression',
@@ -623,8 +692,35 @@ ${ runnerRuntimeAssertionsSource }`;
 					'sealed receiver normal convention diagnostic',
 					'receiverNormal.frontFaceShaderAgreement',
 					'deriveReceiverSurfaceDelta',
+					'createReceiverSurfaceEvidence',
 					'receiverSurface.cpuRenderAgreement',
 					'shContribution.noBakedMixedColorRisk'
+				]
+			}
+		]
+	);
+
+	requireSourceContract(
+		'Visibility distance bake must capture double-sided occluders and use bounded cross-bin dilation so moment evidence does not depend on mesh front-face orientation or exact-bin center hits alone.',
+		[
+			{
+				sourceText: gpuVisibilitySource,
+				tokens: [
+					'DoubleSide',
+					'material.side = DoubleSide',
+					'createLightProbeGridGPUVisibilityDistanceMaterial',
+					'const sampleFullPositiveX = sampleRadialDistance',
+					'const sampleFullNegativeX = sampleRadialDistance',
+					'const sampleFullPositiveY = sampleRadialDistance',
+					'const sampleFullNegativeY = sampleRadialDistance',
+					'const hitConfidence = hitSum.div( 9 ).clamp( 0, 1 );'
+				],
+				absent: [
+					'sampleFullPositiveXPositiveY',
+					'sampleFullNegativeXNegativeY',
+					'readRenderTargetPixels',
+					'readPixels',
+					'Data3DTexture'
 				]
 			}
 		]
@@ -807,7 +903,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			! runnerVisibilityAssertionsSource.includes( 'sealedReceiverNormalDiagnostic.shaderNormalSamples.length' ) &&
 			runnerVisibilityAssertionsSource.includes( 'const hasReceiverNormalFacts = diagnostic =>' ) &&
 			runnerVisibilityAssertionsSource.includes( 'hasReceiverNormalFacts( sealedReceiverNormalDiagnostic )' ) &&
-			runnerVisibilityAssertionsSource.includes( '\'receivers\', \'shaderNormalSamples\', \'summary\'' ) &&
+			runnerVisibilityAssertionsSource.includes( '\'status\', \'proofBoundary\', \'missingReason\', \'receivers\', \'shaderNormalSamples\', \'summary\'' ) &&
 			runnerVisibilityAssertionsSource.includes( 'const hasReceiverSurfaceFacts = surface =>' ) &&
 			runnerVisibilityAssertionsSource.includes( 'hasReceiverSurfaceFacts( surface )' ) &&
 			runnerVisibilityAssertionsSource.includes( '\'fixtureMode\'' ) &&
@@ -868,6 +964,62 @@ ${ runnerRuntimeAssertionsSource }`;
 			! shDiagnosticsSource.includes( 'visibilityWeight: row.visibilityWeight' ) &&
 			! shDiagnosticsSource.includes( 'receiverDiagnostics = [' ) &&
 			! shDiagnosticsSource.includes( 'receiverDiagnostics.reduce' ) &&
+			! shDiagnosticsSource.includes( 'visibilityWeightFloor' ) &&
+			! shDiagnosticsSource.includes( 'visibilityAggregate.totalWeight / visibilityWeightFloor' ) &&
+			shDiagnosticsSource.includes( 'const visibilityMass = Math.max(' ) &&
+			shDiagnosticsSource.includes( 'visibilityAggregate.totalWeight / Math.max( scalarAggregate.totalWeight, 0.0001 )' ) &&
+			shDiagnosticsSource.includes( 'visibilityIrradiance.r * visibilityMass' ) &&
+			! proofGatesSource.includes( 'facts.shContribution.visibilityWrongRatioMean ?? 0,' ) &&
+			proofGatesSource.includes( '( facts.shContribution.runtimeWrongRatioMean ?? 0 ) >= 0.25' ) &&
+			proofGatesSource.includes( 'const hasNoWrongSideEscape = facts =>' ) &&
+			proofGatesSource.includes( 'const createWrongSideEscapeEvidence = facts => ( {' ) &&
+			proofGatesSource.includes( 'visibilityDepthResolution: facts.visibilityWeighting.visibilityDepthResolution' ) &&
+			proofGatesSource.includes( 'visibilityBypassEscapeCount: facts.visibilityWeighting.visibilityBypassEscapeCount' ) &&
+			proofGatesSource.includes( 'frontEdgeBypassEscapeCount: facts.visibilityWeighting.frontEdgeBypassEscapeCount' ) &&
+			proofGatesSource.includes( 'angularResolution: facts.visibilityWeighting.angularResolution' ) &&
+			proofGatesSource.includes( 'momentFilter: facts.visibilityWeighting.momentFilter' ) &&
+			proofGatesSource.includes( 'borderPolicy: facts.visibilityWeighting.borderPolicy' ) &&
+			proofGatesSource.includes( 'momentHitProbeCount: facts.visibilityWeighting.momentHitProbeCount' ) &&
+			! proofGatesSource.includes( 'adjacentFallback' ) &&
+			! proofGatesSource.includes( 'weakCrush' ) &&
+			! proofGatesSource.includes( 'receiverBeforeMeanEscapeCount' ) &&
+			! proofGatesSource.includes( 'highChebyshevEscapeCount' ) &&
+			! visibilityStudySource.includes( 'readLightProbeGridGPUVisibilityMomentPixel' ) &&
+			! visibilityStudySource.includes( 'weakCrush' ) &&
+			! visibilityStudySource.includes( 'receiverBeforeMeanEscapeCount' ) &&
+			! visibilityStudySource.includes( 'highChebyshevEscapeCount' ) &&
+			visibilityStudySource.includes( 'visibilityRepresentation' ) &&
+			visibilityStudySource.includes( 'cardinal-dilated-9-tap-moments' ) &&
+			visibilityStudySource.includes( 'clamped-oct-uv-no-gutter' ) &&
+			runnerVisibilityAssertionsSource.includes( 'hasVisibilityRepresentationFacts' ) &&
+			runnerVisibilityAssertionsSource.includes( 'hasReceiverScopedShapingFacts' ) &&
+			runnerVisibilityAssertionsSource.includes( 'hasBoundaryOwnershipShapingFacts' ) &&
+			runnerVisibilityAssertionsSource.includes( 'receiver-scoped-probe-layer-mask' ) &&
+			runnerVisibilityAssertionsSource.includes( 'default-bit-plus-side-bit' ) &&
+			runnerVisibilityAssertionsSource.includes( 'shapedWrongSideEscapedCount === 0' ) &&
+			proofGatesSource.includes( 'receiverScopedShaping.shapedWrongSideEscapedCount === 0' ) &&
+			proofGatesSource.includes( 'correctSideBasePreservationRatio >= 0.999' ) &&
+			proofGatesSource.includes( 'wrongSideBaseExclusionRatio >= 0.999' ) &&
+			proofGatesSource.includes( 'receiverScopedShaping: facts.visibilityWeighting.receiverScopedShaping' ) &&
+			proofGatesSource.includes( 'boundaryOwnershipShaping: facts.visibilityWeighting.boundaryOwnershipShaping' ) &&
+			visibilityStudySource.includes( 'summarizeReceiverScopedShaping' ) &&
+			visibilityStudySource.includes( 'receiverScopedShaping' ) &&
+			visibilityStudySource.includes( 'summarizeBoundaryOwnershipShaping' ) &&
+			visibilityStudySource.includes( '_lightProbeContext.probeOwnershipAssignmentFacts' ) &&
+			visibilityStudySource.includes( 'boundaryOwnershipShaping' ) &&
+			visibilityStudySource.includes( 'boundaryWrongSideExcludedCount' ) &&
+			visibilityStudySource.includes( 'boundaryCorrectSidePreservationRatio' ) &&
+			visibilityStudySource.includes( 'probeLayerMaskPolicy: \'default-bit-plus-side-bit\'' ) &&
+			visibilityStudySource.includes( 'correctSideBasePreservationRatio' ) &&
+			visibilityStudySource.includes( 'wrongSideVisibilityExclusionRatio' ) &&
+			proofGatesSource.includes( 'receiverScopedShaping: {' ) &&
+			proofGatesSource.includes( 'shapedWrongSideEscapedCount: sealedVisibilityWeightingDiagnostic.receiverScopedShaping.shapedWrongSideEscapedCount' ) &&
+			! visibilityStudySource.includes( 'createVisibilityFallbackEvaluation' ) &&
+			! visibilityStudySource.includes( 'adjacentFallback' ) &&
+			proofGatesSource.includes( 'id: \'visibilityWeighting.noWrongSideEscape\'' ) &&
+			proofGatesSource.includes( 'const createBakedShMixedColorRiskEvidence = facts => ( {' ) &&
+			proofGatesSource.includes( 'runtimeWrongRatioMean: facts.shContribution.runtimeWrongRatioMean' ) &&
+			! /const createBakedShMixedColorRiskEvidence[\s\S]*wrongSideEscapedCount: facts\.visibilityWeighting\.wrongSideEscapedCount[\s\S]*const hasNoWrongSideEscape/.test( proofGatesSource ) &&
 			! receiverDiagnosticsSource.includes( 'runtimeDebugUnavailable' ) &&
 			! receiverDiagnosticsSource.includes( 'sampleKind:' ) &&
 			! receiverDiagnosticsSource.includes( 'sampleLabel:' ) &&
@@ -880,7 +1032,20 @@ ${ runnerRuntimeAssertionsSource }`;
 			! receiverDiagnosticsSource.includes( 'surfaceRuntimeWrongRatioMean' ) &&
 			receiverDiagnosticsSource.includes( 'surfaceRuntimeWrongRatioMax' ) &&
 			receiverDiagnosticsSource.includes( 'renderSurfaceWrongRatio' ) &&
+			receiverDiagnosticsSource.includes( 'renderSurfaceCenterWrongRatio' ) &&
+			receiverDiagnosticsSource.includes( 'renderIrradianceCenterWrongRatio' ) &&
+			receiverDiagnosticsSource.includes( 'renderLinearIrradianceCenterWrongRatio' ) &&
+			receiverDiagnosticsSource.includes( 'centerRuntimeWrongRatioMax' ) &&
 			proofGatesSource.includes( 'const deriveReceiverSurfaceDelta = receiverSurface =>' ) &&
+			proofGatesSource.includes( 'const createReceiverSurfaceEvidence = ( receiverSurface, surfaceCpuRenderDelta ) => ( {' ) &&
+			proofGatesSource.includes( 'renderSurfaceWrongRatio: receiverSurface.renderSurfaceWrongRatio' ) &&
+			proofGatesSource.includes( 'renderSurfaceCenterWrongRatio: receiverSurface.renderSurfaceCenterWrongRatio' ) &&
+			proofGatesSource.includes( 'renderIrradianceCenterWrongRatio: receiverSurface.renderIrradianceCenterWrongRatio' ) &&
+			proofGatesSource.includes( 'renderLinearIrradianceCenterWrongRatio: receiverSurface.renderLinearIrradianceCenterWrongRatio' ) &&
+			proofGatesSource.includes( 'centerRuntimeWrongRatioMax: receiverSurface.centerRuntimeWrongRatioMax' ) &&
+			proofGatesSource.includes( 'displayIrradianceCenterCpuRenderDelta' ) &&
+			proofGatesSource.includes( 'surfaceRuntimeWrongRatioMax: receiverSurface.surfaceRuntimeWrongRatioMax' ) &&
+			proofGatesSource.includes( 'actual: receiverSurfaceEvidence' ) &&
 			proofGatesSource.includes( 'deriveReceiverSurfaceDelta( facts.receiverSurface )' ) &&
 			runnerVisibilityAssertionsSource.includes( '\'surfaceCpuRenderDelta\'' ) &&
 			! receiverDiagnosticsSource.includes( 'renderMaskedWrongRatio' ) &&
@@ -975,8 +1140,16 @@ ${ runnerRuntimeAssertionsSource }`;
 			exampleSource.includes( 'containsPoint' ) &&
 			exampleSource.includes( 'probeIndex' ) &&
 			browserHarnessSource.includes( 'occupiedProbeMeshHitCount' ) &&
+			browserHarnessSource.includes( 'classificationPolicy: \'solid-occupancy-validity\'' ) &&
+			browserHarnessSource.includes( 'relocationPolicy: \'none\'' ) &&
 			! browserHarnessSource.includes( '..._lightProbeContext.collectProbeOccupancy' ) &&
+			! browserHarnessSource.includes( 'classificationRows' ) &&
+			! browserHarnessSource.includes( 'relocatedProbes' ) &&
+			! browserHarnessSource.includes( 'brightnessDerivedValidity' ) &&
 			runnerMatrixAssertionsSource.includes( 'const hasNoFields = ( object, ...fields )' ) &&
+			runnerMatrixAssertionsSource.includes( 'hasProbeClassificationFacts' ) &&
+			runnerMatrixAssertionsSource.includes( 'classification.relocatedProbeCount === 0' ) &&
+			runnerMatrixAssertionsSource.includes( '\'relocatedProbes\', \'brightnessDerivedValidity\'' ) &&
 			runnerMatrixAssertionsSource.includes( 'hasNoFields( probeOccupancy, \'occupiedProbes\' )' ),
 		'Cornell harness must diagnose probe centers that land inside solid scene geometry while exposing compact occupancy facts to the runner.'
 	);
@@ -1000,6 +1173,24 @@ ${ runnerRuntimeAssertionsSource }`;
 					'sealed-wall-validity-weighted',
 					'sealed-wall-visibility-moments',
 					'pre-tone-linear-output-masked-visible-pixels',
+					'createResidualAttributionFacts',
+					'residualAttribution',
+					'rendered-region-source-ratios',
+					'candidateRenderLinearIrradianceCenterWrongRatio',
+					'candidateLinearIrradianceToMaskedVisibleRatio',
+					'candidateRenderLinearIrradianceMaskedWrongRatio',
+					'candidateMaskedIrradianceToMaskedVisibleRatio',
+					'candidateReceiverAlbedoWrongSideRatio',
+					'candidatePreToneMaskedToAlbedoRatio',
+					'candidateRenderLinearLambertMaskedWrongRatio',
+					'candidatePreToneMaskedToLinearLambertRatio',
+					'candidateNearDividerEdgeWrongSideColorRatio',
+					'candidateNearDividerEdgeToSurfaceCenterRatio',
+					'candidateMaskedVisiblePixelCount',
+					'minCameraDotCpuNormal',
+					'receiverSurfaceRegionAreaRatio',
+					'candidateMaskedVisibleToSurfaceCenterRatio',
+					'candidatePreToneMaskedToMaskedVisibleRatio',
 					'correctBounceRatio',
 					'preToneMaskedWrongSideColorRatio',
 					'preToneMaskedCorrectBounceRatio',
@@ -1042,6 +1233,17 @@ ${ runnerRuntimeAssertionsSource }`;
 			proofGatesSource.includes( 'const createSealedWallProofFacts = leakProofFacts =>' ) &&
 			proofGatesSource.includes( 'baseline: createSealedWallRowFacts( rows.get( \'sealed-wall-validity-weighted\' ) )' ) &&
 			proofGatesSource.includes( 'candidate: createSealedWallRowFacts( rows.get( \'sealed-wall-visibility-moments\' ) )' ) &&
+			proofGatesSource.includes( 'residualAttribution: leakProofFacts.residualAttribution' ) &&
+			proofGatesSource.includes( 'candidateLinearIrradianceToMaskedVisibleRatio: sealedWall.residualAttribution.candidateLinearIrradianceToMaskedVisibleRatio' ) &&
+			proofGatesSource.includes( 'candidateMaskedIrradianceToMaskedVisibleRatio: sealedWall.residualAttribution.candidateMaskedIrradianceToMaskedVisibleRatio' ) &&
+			proofGatesSource.includes( 'candidateReceiverAlbedoWrongSideRatio: sealedWall.residualAttribution.candidateReceiverAlbedoWrongSideRatio' ) &&
+			proofGatesSource.includes( 'candidatePreToneMaskedToAlbedoRatio: sealedWall.residualAttribution.candidatePreToneMaskedToAlbedoRatio' ) &&
+			proofGatesSource.includes( 'candidatePreToneMaskedToLinearLambertRatio: sealedWall.residualAttribution.candidatePreToneMaskedToLinearLambertRatio' ) &&
+			proofGatesSource.includes( 'candidateNearDividerEdgeToSurfaceCenterRatio: sealedWall.residualAttribution.candidateNearDividerEdgeToSurfaceCenterRatio' ) &&
+			proofGatesSource.includes( 'candidateMaskedVisibleToSurfaceCenterRatio: sealedWall.residualAttribution.candidateMaskedVisibleToSurfaceCenterRatio' ) &&
+			proofGatesSource.includes( 'minCameraDotCpuNormal: sealedWall.residualAttribution.minCameraDotCpuNormal' ) &&
+			proofGatesSource.includes( 'receiverSurfaceRegionAreaRatio: sealedWall.residualAttribution.receiverSurfaceRegionAreaRatio' ) &&
+			proofGatesSource.includes( 'candidatePreToneMaskedToMaskedVisibleRatio: sealedWall.residualAttribution.candidatePreToneMaskedToMaskedVisibleRatio' ) &&
 			proofGatesSource.includes( 'const deriveSealedWallVisibilityFacts =' ) &&
 			proofGatesSource.includes( 'const sealedWallVisibilityFacts = deriveSealedWallVisibilityFacts( facts.sealedWall )' ) &&
 			proofGatesSource.includes( 'const actual = sealedWallVisibilityFacts[ metric ]' ) &&
@@ -1061,6 +1263,25 @@ ${ runnerRuntimeAssertionsSource }`;
 			runnerMatrixAssertionsSource.includes( '\'maskedReceiverRegionMetricMode\'' ) &&
 			runnerMatrixAssertionsSource.includes( '\'leakMetrics\'' ) &&
 			runnerMatrixAssertionsSource.includes( '\'preToneLeakMetrics\'' ) &&
+			runnerMatrixAssertionsSource.includes( 'const hasResidualAttributionFacts = leakProofFacts =>' ) &&
+			runnerMatrixAssertionsSource.includes( 'attribution.attributionPolicy === \'rendered-region-source-ratios\'' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateRenderLinearIrradianceCenterWrongRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateLinearIrradianceToMaskedVisibleRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateRenderLinearIrradianceMaskedWrongRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateMaskedIrradianceToMaskedVisibleRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'attribution.candidateReceiverMaterialType === \'standard\'' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateReceiverAlbedoWrongSideRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidatePreToneMaskedToAlbedoRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateRenderLinearLambertMaskedWrongRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidatePreToneMaskedToLinearLambertRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateNearDividerEdgeWrongSideColorRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateNearDividerEdgeToSurfaceCenterRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isInteger( attribution.candidateMaskedVisiblePixelCount )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.minCameraDotCpuNormal )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.receiverSurfaceRegionAreaRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidateMaskedVisibleToSurfaceCenterRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'Number.isFinite( attribution.candidatePreToneMaskedToMaskedVisibleRatio )' ) &&
+			runnerMatrixAssertionsSource.includes( 'hasNoFields( attribution, \'rows\', \'samples\', \'verdict\', \'supported\' )' ) &&
 			runnerMatrixAssertionsSource.includes( 'const hasLeakProofRestorationFacts = leakProofFacts =>' ) &&
 			runnerMatrixAssertionsSource.includes( 'hasLeakProofRestorationFacts( leakProofFacts )' ),
 		'Leak proof facts must keep promotion verdicts and nested metric snapshots out of the harness; sealed-wall gates own support thresholds.'
@@ -1091,6 +1312,7 @@ ${ runnerRuntimeAssertionsSource }`;
 			source.includes( '_safeNormalize' ) &&
 			source.includes( 'cameraPosition.sub( positionWorld )' ) &&
 			source.includes( 'probePosition.sub( positionWorld )' ) &&
+			source.includes( 'positionWorld.sub( probePosition )' ) &&
 			source.includes( '.length().max( 0.0001 )' ) &&
 			exampleSource.includes( 'normalBias: 0.5' ) &&
 			exampleSource.includes( 'viewBias: 0' ),
@@ -1098,18 +1320,41 @@ ${ runnerRuntimeAssertionsSource }`;
 	);
 
 	requireSource(
-		source.includes( 'this.leakReductionMode = this._validateLeakReductionMode' ) &&
+			source.includes( 'this.leakReductionMode = this._validateLeakReductionMode' ) &&
 			source.includes( 'this.probeValiditySource = this._validateProbeValidity' ) &&
+			source.includes( 'this.probeLayerMaskSource = this._validateProbeLayerMasks' ) &&
+			source.includes( 'hasProbeLayerMasksOption' ) &&
+			source.includes( 'options.probeLayerMasks' ) &&
 			source.includes( 'this.probeValidityTexture' ) &&
+			source.includes( 'resolveReceiverLayerMaskNode' ) &&
+			source.includes( 'createIrradianceNode( options = {} )' ) &&
+			source.includes( 'createLightsNode( sceneLights = [], options = {} )' ) &&
+			source.includes( 'this.createIrradianceNode( options )' ) &&
+			source.includes( 'receiverLayerMaskScope: \'grid-default-or-node-input\'' ) &&
+			source.includes( 'resolveReceiverBoundaryWeightNode' ) &&
+			source.includes( 'selectReceiverLayerMaskWGSL' ) &&
+			source.includes( 'return select( receiverLayerMask, receiverBoundaryLayerMask, receiverBoundaryWeight >= 0.5 );' ) &&
+			source.includes( 'receiverLayerCompatibilityWGSL' ) &&
+			source.includes( 'return select( 0.0, 1.0, ( probeLayerMask & receiverLayerMask ) != 0u );' ) &&
+			source.includes( 'const receiverLayerMask = resolveReceiverLayerMaskNode( options.receiverLayerMask, this.receiverLayerMask )' ) &&
+			source.includes( 'const receiverBoundaryLayerMask = resolveReceiverLayerMaskNode( options.receiverBoundaryLayerMask, receiverLayerMask )' ) &&
+			source.includes( 'const receiverBoundaryWeight = resolveReceiverBoundaryWeightNode( options.receiverBoundaryWeight )' ) &&
+			source.includes( 'const effectiveReceiverLayerMask = selectReceiverLayerMaskWGSL( {' ) &&
+			source.includes( '_validateProbeLayerMasks( probeLayerMasks, totalProbes )' ) &&
+			source.includes( 'probeLayerMasks length must equal resolution^3' ) &&
+			source.includes( 'probeLayerMasks values must be integer masks between 0 and 0xFFFFFF' ) &&
 			source.includes( '_createProbeValidityTexture()' ) &&
 			source.includes( 'const recreateTexture = this.probeValidityTexture === null' ) &&
 			source.includes( 'this.probeValidityTexture.image.data' ) &&
+			source.includes( 'const layerMask = this.probeLayerMaskSource === null ? DEFAULT_PROBE_LAYER_MASK : this.probeLayerMaskSource[ i ]' ) &&
+			source.includes( 'probeLayerMaskMode: this.probeLayerMaskSource === null ? \'constant\' : \'custom\'' ) &&
 			source.includes( 'getSamplingInfo()' ) &&
 			source.includes( '_usesWeightedProbeSampling()' ) &&
 			source.includes( 'invalidProbeCount: this.invalidProbeCount' ) &&
 			source.includes( 'probeValidityMode: this.probeValiditySource === null ? \'constant\' : \'custom\'' ) &&
 			source.includes( 'wrapShading' ) &&
 			source.includes( 'validityWeight' ) &&
+			source.includes( 'probeLayerMask: meta.z.toUint()' ) &&
 			source.includes( 'textureLoad( this.probeValidityTexture' ) &&
 			gpuAtlasSource.includes( 'PACKED_SH_COEFFICIENT_LAYOUT[ 6 ]' ) &&
 			gpuAtlasSource.includes( 'validity.x' ) &&

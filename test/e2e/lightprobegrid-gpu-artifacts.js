@@ -25,6 +25,9 @@ const getSmokeResult = ( smokeResults, step ) => {
 
 const createLeakProofArtifact = leakProofFacts => ( {
 	fixtureMode: leakProofFacts.fixtureMode,
+	groundTruth: {
+		wrongSideLeakTarget: 0
+	},
 	proofSettings: leakProofFacts.proofSettings,
 	sampling: {
 		weightedProbeSampling: leakProofFacts.sampling.weightedProbeSampling,
@@ -38,7 +41,8 @@ const createLeakProofArtifact = leakProofFacts => ( {
 		correctBounceRatio: row.correctBounceRatio,
 		preToneMaskedWrongSideColorRatio: row.preToneMaskedWrongSideColorRatio,
 		preToneMaskedCorrectBounceRatio: row.preToneMaskedCorrectBounceRatio
-	} ) )
+	} ) ),
+	residualAttribution: leakProofFacts.residualAttribution
 } );
 
 const validateLeakProofArtifact = ( file, artifact ) => {
@@ -47,12 +51,15 @@ const validateLeakProofArtifact = ( file, artifact ) => {
 	const rowLabels = new Set( rows.map( row => row.label ) );
 	const baseline = rows.find( row => row.label === 'sealed-wall-validity-weighted' );
 	const candidate = rows.find( row => row.label === 'sealed-wall-visibility-moments' );
+	const groundTruth = artifact.groundTruth || {};
 	const proofSettings = artifact.proofSettings || {};
 	const sampling = artifact.sampling || {};
 	const samplingKeys = Object.keys( sampling );
+	const residualAttribution = artifact.residualAttribution || {};
 
 	assertLightProbeProof( file,
 		artifact.fixtureMode === 'sealed-wall' &&
+		groundTruth.wrongSideLeakTarget === 0 &&
 		Array.isArray( artifact.rows ) &&
 		rows.length === 2 &&
 		proofSettings.resolution === 4 &&
@@ -86,6 +93,41 @@ const validateLeakProofArtifact = ( file, artifact ) => {
 			`leak proof artifact ${ row.label }: expected finite raw leak and bounce metrics.` );
 
 	}
+
+	assertLightProbeProof( file,
+		residualAttribution.attributionPolicy === 'rendered-region-source-ratios' &&
+		residualAttribution.baselineLabel === 'sealed-wall-validity-weighted' &&
+		residualAttribution.candidateLabel === 'sealed-wall-visibility-moments' &&
+		Number.isFinite( residualAttribution.screenRegionResidualRatio ) &&
+		Number.isFinite( residualAttribution.surfaceResidualRatio ) &&
+		Number.isFinite( residualAttribution.surfaceCenterResidualRatio ) &&
+		Number.isFinite( residualAttribution.maskedVisibleResidualRatio ) &&
+		Number.isFinite( residualAttribution.preToneMaskedResidualRatio ) &&
+		Number.isFinite( residualAttribution.candidateRenderIrradianceCenterWrongRatio ) &&
+		Number.isFinite( residualAttribution.candidateRenderLinearIrradianceCenterWrongRatio ) &&
+		Number.isFinite( residualAttribution.candidateLinearIrradianceToMaskedVisibleRatio ) &&
+		Number.isFinite( residualAttribution.candidateRenderIrradianceMaskedWrongRatio ) &&
+		Number.isFinite( residualAttribution.candidateRenderLinearIrradianceMaskedWrongRatio ) &&
+		Number.isFinite( residualAttribution.candidateMaskedIrradianceToMaskedVisibleRatio ) &&
+		residualAttribution.candidateReceiverMaterialType === 'standard' &&
+		Number.isFinite( residualAttribution.candidateReceiverAlbedoWrongSideRatio ) &&
+		Number.isFinite( residualAttribution.candidateReceiverRoughness ) &&
+		Number.isFinite( residualAttribution.candidateReceiverMetalness ) &&
+		Number.isFinite( residualAttribution.candidatePreToneMaskedToAlbedoRatio ) &&
+		Number.isFinite( residualAttribution.candidateRenderLambertMaskedWrongRatio ) &&
+		Number.isFinite( residualAttribution.candidateRenderLinearLambertMaskedWrongRatio ) &&
+		Number.isFinite( residualAttribution.candidateLinearLambertToLinearIrradianceRatio ) &&
+		Number.isFinite( residualAttribution.candidatePreToneMaskedToLinearLambertRatio ) &&
+		Number.isFinite( residualAttribution.candidateNearDividerEdgeWrongSideColorRatio ) &&
+		Number.isFinite( residualAttribution.candidateNearDividerEdgeToSurfaceCenterRatio ) &&
+		Number.isFinite( residualAttribution.candidateNearDividerEdgeToMaskedVisibleRatio ) &&
+		Number.isInteger( residualAttribution.candidateMaskedVisiblePixelCount ) &&
+		Number.isFinite( residualAttribution.candidateMaskedVisiblePixelRatio ) &&
+		Number.isFinite( residualAttribution.candidateMaskedVisibleToSurfaceCenterRatio ) &&
+		Number.isFinite( residualAttribution.candidatePreToneMaskedToMaskedVisibleRatio ) &&
+		Number.isFinite( residualAttribution.minCameraDotCpuNormal ) &&
+		Number.isFinite( residualAttribution.receiverSurfaceRegionAreaRatio ),
+		'leak proof artifact: expected compact residual attribution ratios.' );
 
 };
 
