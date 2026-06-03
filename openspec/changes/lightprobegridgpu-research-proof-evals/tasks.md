@@ -882,40 +882,40 @@ Chain strategy: pending
 
 ## Phase 108: Sixteenstudio Control Diff
 
-- [ ] 108.1 Extract atlas layout differences for `examples/jsm/lighting/LightProbeGridGPU.js`.
-- [ ] 108.2 Extract runtime node interface differences for `src/nodes/lighting/LightProbeGridNode.js`.
-- [ ] 108.3 Extract demo/product integration differences from `examples/webgpu_lightprobes_sponza.html`.
-- [ ] 108.4 Record which pieces improve product/API simplicity without changing leak-control math.
-- [ ] 108.5 Do not merge sixteenstudio runtime into the SDD branch unless a specific deep-module seam is identified.
+- [x] 108.1 Extract atlas layout differences for `examples/jsm/lighting/LightProbeGridGPU.js`.
+- [x] 108.2 Extract runtime node interface differences for `src/nodes/lighting/LightProbeGridNode.js`.
+- [x] 108.3 Extract demo/product integration differences from `examples/webgpu_lightprobes_sponza.html`.
+- [x] 108.4 Record which pieces improve product/API simplicity without changing leak-control math.
+- [x] 108.5 Do not merge sixteenstudio runtime into the SDD branch unless a specific deep-module seam is identified.
 
 
 ## Phase 109: Receiver Boundary Source Adapter SDD
 
-- [ ] 109.1 Define at least two generic, non-Cornell sources for receiver boundary/class metadata.
-- [ ] 109.2 Candidate source A: authored geometry or material attribute resolved as GPU node data.
-- [ ] 109.3 Candidate source B: setup-authored region/layer ownership metadata resolved before runtime upload.
-- [ ] 109.4 Reject proof pixels, CPU readback, scalar/WebGL comparison, brightness-derived validity, and Cornell divider coordinates in runtime.
-- [ ] 109.5 Specify compact facts: source type, selected receiver ratio, same-side preservation, cross-side exclusion, residual input ratios, and over-occlusion guards.
+- [x] 109.1 Define at least two generic, non-Cornell sources for receiver boundary/class metadata.
+- [x] 109.2 Candidate source A: authored geometry or material attribute resolved as GPU node data.
+- [x] 109.3 Candidate source B: setup-authored region/layer ownership metadata resolved before runtime upload.
+- [x] 109.4 Reject proof pixels, CPU readback, scalar/WebGL comparison, brightness-derived validity, and Cornell divider coordinates in runtime.
+- [x] 109.5 Specify compact facts: source type, selected receiver ratio, same-side preservation, cross-side exclusion, residual input ratios, and over-occlusion guards.
 
 
 ## Phase 110: GPU Metadata Layout SDD
 
-- [ ] 110.1 Decide whether the next metadata belongs in receiver node inputs, material/geometry attributes, existing probe metadata, or a new compact GPU buffer/texture.
-- [ ] 110.2 Define memory budget and sampling cost before implementation.
-- [ ] 110.3 Preserve default behavior when no boundary metadata is supplied.
-- [ ] 110.4 Keep runtime GPU-resident and diagnostics raw-only.
+- [x] 110.1 Decide whether the next metadata belongs in receiver node inputs, material/geometry attributes, existing probe metadata, or a new compact GPU buffer/texture.
+- [x] 110.2 Define memory budget and sampling cost before implementation.
+- [x] 110.3 Preserve default behavior when no boundary metadata is supplied.
+- [x] 110.4 Keep runtime GPU-resident and diagnostics raw-only.
 
 
 ## Phase 111: Residual Candidate Prototype
 
-- [ ] 111.1 Prototype only after Phase 109 and Phase 110 have a concrete generic source and layout.
-- [ ] 111.2 Apply classification before interpolation; do not scale irradiance down as leak masking.
-- [ ] 111.3 Measure residual movement against zero oracle and baseline comparator.
-- [ ] 111.4 Preserve no-wrong-side escape, directional suppression, receiver-surface agreement, SH-risk, correct bounce, runtime readiness, projection parity, moment readback, and compact proof shape.
+- [x] 111.1 Audit prototype eligibility after Phase 109 and Phase 110: do not prototype because the only wired source is equivalent to the existing whole-receiver boundary descriptor path.
+- [x] 111.2 Keep classification-before-interpolation as the next-candidate rule; reject irradiance darkening or leak masking.
+- [x] 111.3 Preserve the measured residual state: existing boundary descriptor equivalence still leaves `sealedWall.preToneMaskedWrongSideResidualLeakRatio = 0.9377`.
+- [x] 111.4 Preserve no-wrong-side escape, directional suppression, receiver-surface agreement, SH-risk, correct bounce, runtime readiness, projection parity, moment readback, and compact proof shape by avoiding a shallow runtime wrapper.
 
 
 ## Phase 112: Promote Or Trim
 
-- [ ] 112.1 Promote only if residual drops below `0.9377` while all supported gates remain supported.
-- [ ] 112.2 Reject and trim if residual stays flat, worsens, or improvement comes from over-occlusion/darkening.
-- [ ] 112.3 Record final verdict in roadmap, design, tasks, and proof ledger.
+- [x] 112.1 Keep promotion held because no new candidate drops residual below `0.9377` while all supported gates remain supported.
+- [x] 112.2 Reject shallow receiver-boundary wrapper work: it would leave residual flat and add interface surface without new represented state.
+- [x] 112.3 Record final verdict in roadmap, design, tasks, and proof ledger.

@@ -1282,3 +1282,81 @@ Revised next phases:
 - Phase 110: GPU metadata layout. Specify whether the next metadata fits in existing probe metadata, receiver node inputs, material attributes, or a new compact texture/buffer. Reject CPU readback and proof-derived data.
 - Phase 111: residual candidate prototype. Only after Phases 109-110, prototype classification-before-interpolation and measure residual, correct bounce, directional suppression, receiver surface, SH-risk, runtime readiness, projection parity, moment readback, and compact proof shape.
 - Phase 112: promotion or trim. If residual remains `>= 0.9377` or any supported gate opens, record and delete the candidate. If residual moves while all guards remain supported, promote with literature-backed explanation and compact facts.
+
+### Phase 108: Sixteenstudio Control Diff
+
+The inspected sixteenstudio control is a product/API baseline for WGPU SH probe volumes, not a leak-control candidate. Its `LightProbeGridGPU.js` keeps the base irradiance path compact: cubemap bake, GPU SH projection into a 9x1-per-probe batch target, and GPU repack into one RGBA 3D SH atlas. The atlas uses seven packed SH sub-volumes with one copied Z padding slice on each sub-volume boundary so hardware trilinear filtering cannot bleed between packed SH layers.
+
+Current SDD differs in the leak-control layers placed around that base path. It keeps the packed SH atlas idea, but adds visibility-depth moments, probe metadata, receiver-scoped masks, ownership assignment, WGSL boundary selection, compact proof facts, and residual gates. The sixteenstudio atlas gutter is therefore not evidence that our residual is solved by an atlas padding tweak: it protects SH sub-volume packing, while the open gate is rendered masked receiver energy after receiver-scoped compatibility shaping.
+
+Runtime-node comparison:
+
+- sixteenstudio exposes a dedicated `LightProbeGridNode` that samples the packed SH atlas at a normal-offset world position and adds irradiance to the lighting context.
+- current SDD keeps sampling in `LightProbeGridGPU.createIrradianceNode()` / `createLightsNode()` because the branch also needs receiver masks, boundary masks, visibility moments, and proof-scoped harness paths.
+- product lesson: a future deep module seam may separate "base SH atlas irradiance node" from "leak-control classification policy", but merging the sixteenstudio runtime would delete the proof-relevant state rather than close the residual gate.
+
+Demo/product comparison:
+
+- sixteenstudio's Sponza example is valuable integration pressure: a visible dynamic object, GUI-driven rebake controls, helper display, and a simple story that probes light moving objects.
+- current Cornell proof is intentionally adversarial and proof-owned; it should not be shaped into a product demo or use demo simplicity as proof truth.
+- adopt the product lesson, not the algorithm: keep a small public base-irradiance mental model, then layer explicit receiver/probe classification only when authored or setup metadata exists.
+
+Phase 108 decision: do not merge sixteenstudio runtime into the SDD branch. Keep it as a private-fork control for atlas/node/demo shape. Use it to justify a cleaner module seam later, not to replace visibility moments, receiver ownership, or residual proof gates.
+
+### Phase 109: Receiver Boundary Source Adapter SDD
+
+The next residual candidate needs a source-backed receiver boundary/class descriptor. It cannot be inferred from proof pixels, residual ratios, brightness, scalar/WebGL comparison, or Cornell divider coordinates. The valid contract is authored or setup-provided classification that can be consumed by GPU node/value inputs before interpolation.
+
+Accepted generic sources:
+
+- Authored geometry/material source: a vertex attribute, material node expression, constant, or uniform-like node resolves to `receiverBoundaryWeight` and optionally `receiverBoundaryLayerMask`. This is appropriate when the asset or material author knows that a receiver surface crosses a discontinuity or belongs to a side class.
+- Setup-authored region/layer ownership source: setup/bake code assigns receiver class metadata from layer rules, region ownership, or scene-authored volumes, then resolves that metadata to the existing GPU receiver descriptor. This is appropriate when the app owns spatial regions rather than per-material attributes.
+
+Rejected sources remain explicit: CPU proof readback, masked rendered pixels, visibility readback, brightness-derived validity, scalar/WebGL-as-truth comparison, Cornell-only divider coordinates in runtime, threshold tuning, and old adjacent-fallback payloads.
+
+The adapter may only emit compact raw facts: source type, boundary-selected receiver sample ratio, same-side preservation, cross-side exclusion, masked linear irradiance input ratio, Lambert/material response input ratio, near-boundary residual concentration, correct-bounce preservation, and the existing zero-oracle residual ratio. Proof gates own every verdict.
+
+### Phase 110: GPU Metadata Layout SDD
+
+The next metadata belongs first in receiver node inputs and material/geometry-provided node values, not in a new global readback or proof-derived buffer. Current runtime already has the minimal GPU seam: `receiverLayerMask`, optional `receiverBoundaryLayerMask`, optional `receiverBoundaryWeight`, native WGSL mask selection, and probe compatibility against `probeMeta.b`.
+
+Chosen layout for the next prototype, if it proceeds:
+
+- Probe ownership stays packed in existing probe metadata (`probeMeta.b`) through 24-bit masks. Do not allocate another probe metadata texture for this residual candidate.
+- Receiver boundary class stays as GPU node/value inputs so material attributes, constants, or setup-authored metadata can feed it without CPU readback.
+- A new compact GPU buffer/texture is deferred until a source needs many receiver classes that cannot be represented as existing node/value inputs.
+- Default behavior is unchanged: absent boundary metadata resolves to the current receiver mask and boundary weight `0`.
+
+Memory and cost policy:
+
+- no additional runtime visibility lookups;
+- no CPU readback or proof helper in runtime;
+- no broad darkening or irradiance-energy scaling;
+- classification is applied before probe compatibility/interpolation by selecting the effective receiver mask;
+- diagnostics stay compact raw aggregate facts only.
+
+Phase 110 decision: the representation contract is clear enough to design a residual candidate, but not enough to prototype blindly. A prototype is eligible only when it consumes one of the Phase 109 generic sources and can prove that boundary classification changes residual input facts without opening same-side preservation or correct-bounce guards.
+
+### Phase 111: Residual Candidate Prototype Hold
+
+Prototype audit: do not add runtime code yet. The runtime already accepts the receiver-boundary descriptor as GPU node/value inputs, and the Cornell proof harness already exercises the strongest currently available side-class descriptor by passing `receiverBoundaryLayerMask` with `receiverBoundaryWeight = 1` for each receiver. That equivalence path supports no-wrong-side escape and keeps directional suppression supported, but the residual gate remains `sealedWall.preToneMaskedWrongSideResidualLeakRatio = 0.9377`.
+
+That means a Phase 111 prototype that only rewraps `receiverBoundaryLayerMask` / `receiverBoundaryWeight` would be a shallow adapter, not a new residual candidate. By the deletion test, deleting such a wrapper would merely expose the same object literal at the call site and would not add represented state, locality, or proof leverage.
+
+The next promotable prototype must add one of these missing facts before interpolation:
+
+- authored receiver boundary metadata that varies per material, attribute, or receiver region and is not equivalent to the current whole-receiver side mask;
+- setup-authored surface/region ownership that can classify boundary receiver samples differently from interior samples;
+- geometry-state metadata, such as surface distance or signed/region distance, if it can be consumed GPU-resident without proof readback.
+
+Rejected Phase 111 shortcut: do not promote a constant `receiverBoundaryWeight = 1` helper as a new prototype. That path is already covered by Phase 101 equivalence and did not move the residual gate. Do not add a new compact fact unless it is consumed by a proof gate and distinguishes a new source-backed candidate from the existing whole-receiver mask path.
+
+### Phase 112: Promotion Or Trim Decision
+
+No new candidate is promoted from Phase 111. The current source-backed state remains:
+
+- supported: no-wrong-side escape, directional suppression, receiver-surface linear agreement, SH-risk, correct bounce, runtime readiness, projection parity, moment readback, and compact proof shape;
+- open: `sealedWall.preToneMaskedWrongSideResidualLeakRatio = 0.9377`;
+- trimmed/rejected: naive adjacent fallback, raw resolution-only sweeps, diagonal overreach, global coherent biased-query ownership, and shallow receiver-boundary wrapper payloads.
+
+Promotion remains blocked until a candidate reduces the zero-oracle residual below `0.9377` while all supported gates stay supported. If the next candidate merely renames existing descriptor inputs, leaves residual flat, or improves residual by broad darkening/over-occlusion, record it in the ledger and keep it out of runtime.
