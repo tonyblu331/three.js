@@ -2,9 +2,17 @@ import { runLightProbeGridGpuCoreSmokeAssertions } from './lightprobegrid-gpu-ru
 import { runLightProbeGridGpuMatrixSmokeAssertions } from './lightprobegrid-gpu-runner-matrix-assertions.js';
 import { runLightProbeGridGpuProofGateAssertions } from './lightprobegrid-gpu-proof-gates.js';
 import { runLightProbeGridGpuRuntimeSmokeAssertions } from './lightprobegrid-gpu-runner-runtime-assertions.js';
+import { runLightProbeGridGpuSourceInvariantAssertions } from './lightprobegrid-gpu-source-invariants.js';
 import { runLightProbeGridGpuVisibilitySmokeAssertions } from './lightprobegrid-gpu-runner-visibility-assertions.js';
 
 export async function runSmokeHarness( page, file, smokeHarness ) {
+
+	const traceE2E = process.env.THREEJS_E2E_TRACE === '1';
+	const trace = message => {
+
+		if ( traceE2E ) console.log( `[E2E trace] ${ message }` );
+
+	};
 
 	await page.evaluate( ( file, smokeHarness ) => {
 
@@ -103,6 +111,8 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 
 	};
 
+	runLightProbeGridGpuSourceInvariantAssertions( { assert } );
+
 	const waitUntilReady = async ( step ) => {
 
 		for ( let i = 0; i < 240; i ++ ) {
@@ -135,14 +145,18 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 
 	const results = [];
 
+	trace( `${ file}: wait initial ready` );
 	await waitUntilReady( 'initial' );
 
+	trace( `${ file}: get initial metrics` );
 	const initial = await getMetrics();
 	assertCommonMetrics( assert, initial, 'initial' );
 
+	trace( `${ file}: inspect probe positions` );
 	const positions = await call( 'inspectProbePositions' );
 	assertProbePositions( assert, positions );
 
+	trace( `${ file}: rebake` );
 	await call( 'rebake' );
 	const rebaked = await getMetrics();
 	assertCommonMetrics( assert, rebaked, 'rebake' );
@@ -160,9 +174,13 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 
 	if ( smokeHarness.capabilities?.includes( 'proof-contracts' ) === true ) {
 
+		trace( `${ file}: core assertions` );
 		await runLightProbeGridGpuCoreSmokeAssertions( { call, assert, results } );
+		trace( `${ file}: visibility assertions` );
 		await runLightProbeGridGpuVisibilitySmokeAssertions( { call, assert, results } );
+		trace( `${ file}: matrix assertions` );
 		await runLightProbeGridGpuMatrixSmokeAssertions( { call, assert, results } );
+		trace( `${ file}: runtime assertions` );
 		await runLightProbeGridGpuRuntimeSmokeAssertions( {
 			call,
 			callRejects,
@@ -172,13 +190,17 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 			assert,
 			results
 		} );
+		trace( `${ file}: proof gate assertions` );
 		runLightProbeGridGpuProofGateAssertions( { assert, results } );
 
 	}
 
 	if ( smokeHarness.capabilities?.includes( 'sealed-wall-leak' ) === true && await hasMethod( 'captureLeakProofFacts' ) ) {
 
-		const leakProofFacts = await call( 'captureLeakProofFacts' );
+		const existingLeakProofResult = results.find( result => result.step === 'leak proof facts' );
+		trace( `${ file}: ${ existingLeakProofResult === undefined ? 'capture' : 'reuse' } leak proof facts` );
+		const leakProofFacts = existingLeakProofResult?.leakProofFacts ?? await call( 'captureLeakProofFacts' );
+		trace( `${ file}: assert leak proof facts` );
 		assertLeakProofFacts( assert, leakProofFacts );
 		results.push( { step: 'sealed-wall leak proof', leakProofFacts } );
 

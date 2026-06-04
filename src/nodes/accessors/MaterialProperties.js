@@ -38,7 +38,7 @@ export const materialEnvRotation = /*@__PURE__*/ uniform( new Matrix4() ).onRefe
 
 } ).onObjectUpdate( function ( { material, scene } ) {
 
-	const rotation = ( scene.environment !== null && material.envMap === null ) ? scene.environmentRotation : material.envMapRotation;
+	const rotation = ( scene !== null && scene.environment !== null && material !== null && material.envMap === null ) ? scene.environmentRotation : material?.envMapRotation;
 
 	if ( rotation ) {
 

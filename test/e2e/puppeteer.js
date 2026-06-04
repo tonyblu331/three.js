@@ -6,6 +6,32 @@ import { smokeHarnesses } from './lightprobegrid-gpu-smoke-config.js';
 import * as fs from 'fs/promises';
 import { createServer } from '../../utils/server.js';
 
+const portArgIndex = process.argv.indexOf( '--port' );
+const userDataDirArgIndex = process.argv.indexOf( '--user-data-dir' );
+const consumedArgIndexes = new Set();
+
+if ( portArgIndex !== - 1 ) {
+
+	consumedArgIndexes.add( portArgIndex );
+	consumedArgIndexes.add( portArgIndex + 1 );
+
+}
+
+if ( userDataDirArgIndex !== - 1 ) {
+
+	consumedArgIndexes.add( userDataDirArgIndex );
+	consumedArgIndexes.add( userDataDirArgIndex + 1 );
+
+}
+
+const runnerArgs = process.argv.filter( ( _, index ) => consumedArgIndexes.has( index ) === false );
+const configuredPort = process.env.THREEJS_E2E_PORT ?? (
+	portArgIndex === - 1 ? undefined : process.argv[ portArgIndex + 1 ]
+);
+const configuredUserDataDir = process.env.THREEJS_E2E_USER_DATA_DIR ?? (
+	userDataDirArgIndex === - 1 ? undefined : process.argv[ userDataDirArgIndex + 1 ]
+);
+
 const server = createServer();
 
 const exceptionList = [
@@ -75,7 +101,7 @@ const exceptionList = [
 
 /* Configuration */
 
-const port = 1234;
+const port = Number.parseInt( configuredPort ?? '1234', 10 );
 const pixelThreshold = 0.1; // threshold error in one pixel
 const maxDifferentPixels = 0.1; // at most 0.1% different pixels
 
@@ -90,10 +116,23 @@ const width = 400;
 const height = 250;
 const viewScale = 2;
 const jpgQuality = 95;
+const userDataDir = configuredUserDataDir ?? './.puppeteer_profile';
+const traceE2E = process.env.THREEJS_E2E_TRACE === '1';
+
+if ( Number.isInteger( port ) === false || port <= 0 ) {
+
+	throw new Error( `Invalid E2E port: ${ configuredPort }` );
+
+}
 
 console.red = msg => console.log( `\x1b[31m${msg}\x1b[39m` );
 console.green = msg => console.log( `\x1b[32m${msg}\x1b[39m` );
 console.yellow = msg => console.log( `\x1b[33m${msg}\x1b[39m` );
+const trace = message => {
+
+	if ( traceE2E ) console.log( `[E2E trace] ${ message }` );
+
+};
 
 let browser;
 
@@ -143,21 +182,21 @@ async function main() {
 
 	let argvIndex = 2;
 
-	if ( process.argv[ argvIndex ] === '--webgpu' ) {
+	if ( runnerArgs[ argvIndex ] === '--webgpu' ) {
 
 		isWebGPU = true;
 		argvIndex ++;
 
 	}
 
-	if ( process.argv[ argvIndex ] === '--make' ) {
+	if ( runnerArgs[ argvIndex ] === '--make' ) {
 
 		isMakeScreenshot = true;
 		argvIndex ++;
 
 	}
 
-	const exactList = process.argv.slice( argvIndex )
+	const exactList = runnerArgs.slice( argvIndex )
 		.map( f => f.replace( '.html', '' ) );
 
 	const isExactList = exactList.length !== 0;
@@ -214,7 +253,11 @@ async function main() {
 		'--enable-features=Vulkan',
 		'--disable-vulkan-surface',
 		'--ignore-gpu-blocklist',
+		'--disable-background-networking',
+		'--disable-component-update',
+		'--disable-domain-reliability',
 		'--disable-gpu-driver-bug-workarounds',
+		'--disable-sync',
 		'--no-sandbox'
 	];
 
@@ -227,7 +270,7 @@ async function main() {
 		defaultViewport: viewport,
 		handleSIGINT: false,
 		protocolTimeout: 0,
-		userDataDir: './.puppeteer_profile'
+		userDataDir
 	};
 
 	/* Prepare injections */
@@ -252,9 +295,13 @@ async function main() {
 
 	const launchPage = async () => {
 
+		trace( `launching browser with profile ${ userDataDir }` );
 		browser = await puppeteer.launch( launchOptions );
+		trace( 'browser launched' );
 		const page = await browser.newPage();
+		trace( 'page created' );
 		await preparePage( page, injection, builds, errorMessagesCache );
+		trace( 'page prepared' );
 		return page;
 
 	};
@@ -445,15 +492,19 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 		try {
 
 			const smokeHarness = smokeHarnesses[ file ];
-			const query = smokeHarness !== undefined ? `?${ smokeHarness.query }` : '';
+			const queryParts = smokeHarness !== undefined ? [ smokeHarness.query ] : [];
+			if ( traceE2E ) queryParts.push( 'traceE2E=1' );
+			const query = queryParts.length > 0 ? `?${ queryParts.join( '&' ) }` : '';
 			const example = smokeHarness?.example !== undefined ?
 				smokeHarness.example.replace( /^examples\//, '' ).replace( /\.html$/, '' ) :
 				`${ file }`;
 
+			trace( `loading ${ file }` );
 			await page.goto( `http://localhost:${ port }/examples/${ example }.html${ query }`, {
 				waitUntil: 'networkidle0',
 				timeout: networkTimeout * 60000
 			} );
+			trace( `loaded ${ file }` );
 
 		} catch ( e ) {
 
@@ -466,11 +517,13 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 			/* Render page */
 
 			await page.evaluate( cleanPage );
+			trace( `cleaned ${ file }` );
 
 			await page.waitForNetworkIdle( {
 				timeout: networkTimeout * 60000,
 				idleTime: idleTime * 1000
 			} );
+			trace( `network idle ${ file }` );
 
 			await page.evaluate( async ( renderTimeout, parseTime ) => {
 
@@ -505,6 +558,7 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 				} );
 
 			}, renderTimeout, page.pageSize / 1024 / 1024 * parseTime * 1000 );
+			trace( `render wait complete ${ file }` );
 
 		} catch ( e ) {
 
@@ -523,8 +577,10 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 		const smokeResults = isMakeScreenshot === false && smokeHarnesses[ file ] !== undefined ?
 			await runSmokeHarness( page, file, smokeHarnesses[ file ] ) :
 			null;
+		trace( `smoke harness complete ${ file }` );
 
 		const screenshot = ( await Image.read( await page.screenshot() ) ).scale( 1 / viewScale );
+		trace( `screenshot captured ${ file }` );
 
 		if ( page.error !== undefined ) throw new Error( page.error );
 
@@ -533,6 +589,7 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 		if ( smokeResults !== null ) {
 
 			await writeLightProbeGridGpuCommonEvalArtifact( file, smokeHarnesses[ file ], smokeResults, screenshot );
+			trace( `artifact written ${ file }` );
 
 		}
 
@@ -553,6 +610,7 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 			try {
 
 				expected = await Image.read( `examples/screenshots/${ file }.jpg` );
+				trace( `expected screenshot loaded ${ file }` );
 
 			} catch ( e ) {
 
@@ -569,6 +627,7 @@ async function checkFile( ctx, failedScreenshots, cleanPage, isMakeScreenshot, f
 			try {
 
 				numDifferentPixels = expected.compare( screenshot, diff, pixelThreshold );
+				trace( `screenshot diff complete ${ file }` );
 
 			} catch ( e ) {
 

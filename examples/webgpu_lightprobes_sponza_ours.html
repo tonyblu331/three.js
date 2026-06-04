@@ -38,7 +38,7 @@
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 			import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
-			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPUProof.js';
+			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPU.js';
 
 			const MODEL_INDEX_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/model-index.json';
 			const SAMPLE_ASSETS_BASE_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
@@ -180,6 +180,7 @@
 					lightAzimuth: - 45,
 					lightElevation: 55,
 					lightIntensity: 50.0,
+					probeIntensity: 6.0,
 					shadows: true,
 					dynamicSphere: true
 				};
@@ -272,7 +273,7 @@
 									resolution: params.countX,
 									cubemapSize: 32,
 									projectionPrecision: 'half float',
-									probeIntensity: 1,
+									probeIntensity: params.probeIntensity,
 									normalBias: 0.5,
 									viewBias: 0,
 									leakReductionMode: 'normal',
@@ -395,6 +396,11 @@
 					scheduleRebake();
 
 				} );
+				gui.add( params, 'probeIntensity', 0, 32, 0.5 ).name( 'Probe Intensity' ).onChange( ( value ) => {
+
+					if ( probes ) probes.probeIntensity.value = value;
+
+				} );
 				gui.add( params, 'shadows' ).name( 'Shadows' ).onChange( ( value ) => {
 
 					setShadowsEnabled( value );
@@ -452,7 +458,7 @@
 							const probeCount = Number.isFinite( resolution ) ? resolution ** 3 : 0;
 
 							return {
-								implementation: 'ours-sponza-proof',
+								implementation: 'ours-sponza',
 								status: bakeStatus,
 								bakeError: lastBakeError,
 								bakeCount,
@@ -494,6 +500,24 @@
 						async rebake() {
 
 							await bakeWithSettings();
+
+						},
+						setDisplayOptions( options = {} ) {
+
+							if ( options.probesEnabled !== undefined ) {
+
+								params.enabled = options.probesEnabled === true;
+								if ( probes ) probes.visible = params.enabled;
+								if ( probes ) probes.probeIntensity.value = params.enabled ? params.probeIntensity : 0;
+
+							}
+
+							if ( options.showProbes !== undefined ) {
+
+								params.showProbes = options.showProbes === true;
+								if ( probesHelper ) probesHelper.visible = params.showProbes;
+
+							}
 
 						}
 					};

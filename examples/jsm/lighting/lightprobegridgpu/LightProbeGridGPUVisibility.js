@@ -34,7 +34,10 @@ import {
 	VISIBILITY_DEPTH_MAX_DISTANCE,
 	VISIBILITY_DEPTH_RESOLUTION,
 	VISIBILITY_DISTANCE_BIAS,
-	VISIBILITY_MIN_VARIANCE
+	VISIBILITY_MIN_VARIANCE,
+	VISIBILITY_MOMENT_FILTER_TAP_COUNT,
+	VISIBILITY_OCTAHEDRAL_NORMALIZE_EPSILON,
+	RECEIVER_BOUNDARY_SELECTION_THRESHOLD
 } from './LightProbeGridGPUConstants.js';
 
 const disposeLightProbeGridGPUVisibilityResource = ( resource ) => {
@@ -54,7 +57,7 @@ export const getLightProbeGridGPUVisibilityLoadCoord = ( coord, direction, resol
 	const nx = resolution.x ?? resolution;
 	const ny = resolution.y ?? resolution;
 	const probeIndex = int( coord.x ).add( int( coord.y ).mul( nx ) ).add( int( coord.z ).mul( nx * ny ) );
-	const denominator = direction.x.abs().add( direction.y.abs() ).add( direction.z.abs() ).max( 0.0001 );
+	const denominator = direction.x.abs().add( direction.y.abs() ).add( direction.z.abs() ).max( VISIBILITY_OCTAHEDRAL_NORMALIZE_EPSILON );
 	const octX = direction.x.div( denominator ).toVar();
 	const octY = direction.y.div( denominator ).toVar();
 
@@ -131,7 +134,7 @@ const selectReceiverLayerMaskWGSL = wgslFn( `
 		receiverBoundaryWeight: f32
 	) -> u32 {
 
-		return select( receiverLayerMask, receiverBoundaryLayerMask, receiverBoundaryWeight >= 0.5 );
+		return select( receiverLayerMask, receiverBoundaryLayerMask, receiverBoundaryWeight >= ${ RECEIVER_BOUNDARY_SELECTION_THRESHOLD.toFixed( 1 ) } );
 
 	}
 ` );
@@ -154,6 +157,7 @@ export const createLightProbeGridGPUVisibilitySamplingState = ( {
 	receiverLayerMask: receiverLayerMaskOption,
 	receiverBoundaryLayerMask: receiverBoundaryLayerMaskOption,
 	receiverBoundaryWeight: receiverBoundaryWeightOption,
+	receiverBoundaryMode: receiverBoundaryModeOption,
 	defaultReceiverLayerMask,
 	safeNormalize
 } ) => {
@@ -163,11 +167,35 @@ export const createLightProbeGridGPUVisibilitySamplingState = ( {
 	const receiverLayerMask = resolveReceiverLayerMaskNode( receiverLayerMaskOption, defaultReceiverLayerMask );
 	const receiverBoundaryLayerMask = resolveReceiverLayerMaskNode( receiverBoundaryLayerMaskOption, receiverLayerMask );
 	const receiverBoundaryWeight = resolveReceiverBoundaryWeightNode( receiverBoundaryWeightOption );
+	const receiverBoundaryMode = receiverBoundaryModeOption === 'blend' ? 'blend' : 'select';
 	const effectiveReceiverLayerMask = selectReceiverLayerMaskWGSL( {
 		receiverLayerMask,
 		receiverBoundaryLayerMask,
 		receiverBoundaryWeight
 	} );
+	const getReceiverLayerCompatibility = probeLayerMask => {
+
+		if ( receiverBoundaryMode === 'blend' ) {
+
+			const defaultCompatibility = lightProbeGridGPUReceiverLayerCompatibility( {
+				probeLayerMask,
+				receiverLayerMask
+			} );
+			const boundaryCompatibility = lightProbeGridGPUReceiverLayerCompatibility( {
+				probeLayerMask,
+				receiverLayerMask: receiverBoundaryLayerMask
+			} );
+
+			return defaultCompatibility.mul( float( 1 ).sub( receiverBoundaryWeight ) ).add( boundaryCompatibility.mul( receiverBoundaryWeight ) );
+
+		}
+
+		return lightProbeGridGPUReceiverLayerCompatibility( {
+			probeLayerMask,
+			receiverLayerMask: effectiveReceiverLayerMask
+		} );
+
+	};
 	const loadVisibilityMoment = useGuardedVisibility ? ( coord, direction ) => {
 
 		const dir = safeNormalize( direction );
@@ -178,6 +206,8 @@ export const createLightProbeGridGPUVisibilitySamplingState = ( {
 	return {
 		useGuardedVisibility,
 		effectiveReceiverLayerMask,
+		receiverBoundaryMode,
+		getReceiverLayerCompatibility,
 		loadVisibilityMoment
 	};
 
@@ -427,7 +457,7 @@ export const createLightProbeGridGPUVisibilityRepackMaterial = (
 			.add( sampleFullNegativeY.y.mul( sampleFullNegativeY.z ) )
 			.div( safeHitSum )
 			.add( visibilityMinVariance );
-		const hitConfidence = hitSum.div( 9 ).clamp( 0, 1 );
+		const hitConfidence = hitSum.div( VISIBILITY_MOMENT_FILTER_TAP_COUNT ).clamp( 0, 1 );
 
 		return vec4( meanDistance, meanSquaredDistance, hitConfidence, float( 0 ) );
 

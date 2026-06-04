@@ -6,8 +6,8 @@ export const smokeHarnesses = {
 		query: 'testHarness',
 		global: '__webgpuLightProbeGridCornell',
 		example: 'examples/webgpu_lightprobes_cornell.html',
-		source: 'examples/jsm/lighting/LightProbeGridGPUProof.js',
-		implementation: 'ours-cornell-proof',
+		source: 'examples/jsm/lighting/LightProbeGridGPU.js',
+		implementation: 'ours-cornell',
 		imageRegionSet: 'cornell',
 		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma', 'sealed-wall-leak', 'proof-contracts' ]
 	},
@@ -16,7 +16,7 @@ export const smokeHarnesses = {
 		global: '__webgpuLightProbeGridCornell',
 		example: 'examples/webgpu_lightprobes_cornell.html',
 		source: 'examples/jsm/lighting/LightProbeGridGPU.js',
-		implementation: 'sixteenstudio-reference-cornell',
+		implementation: 'ours-cornell-legacy-query',
 		imageRegionSet: 'cornell',
 		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma', 'sealed-wall-leak' ]
 	},
@@ -25,7 +25,7 @@ export const smokeHarnesses = {
 		global: '__webgpuLightProbeGridSponzaControl',
 		example: 'examples/webgpu_lightprobes_sponza.html',
 		source: 'examples/jsm/lighting/LightProbeGridGPU.js',
-		implementation: 'sixteenstudio-reference-sponza',
+		implementation: 'ours-sponza-control',
 		imageRegionSet: 'sponza',
 		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma' ]
 	},
@@ -33,8 +33,8 @@ export const smokeHarnesses = {
 		query: 'testHarness',
 		global: '__webgpuLightProbeGridSponzaControl',
 		example: 'examples/webgpu_lightprobes_sponza_ours.html',
-		source: 'examples/jsm/lighting/LightProbeGridGPUProof.js',
-		implementation: 'ours-sponza-proof',
+		source: 'examples/jsm/lighting/LightProbeGridGPU.js',
+		implementation: 'ours-sponza',
 		imageRegionSet: 'sponza',
 		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma' ]
 	}

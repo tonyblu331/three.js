@@ -4,8 +4,8 @@ import { createLightProbeGridGPUShDiagnostics } from './LightProbeGridGPUShDiagn
 import {
 	readLightProbeGridGPUProbeCoefficients,
 	readLightProbeGridGPUVisibilityMoment
-} from './lightprobegridgpu/LightProbeGridGPUProofReadback.js';
-import { getLightProbeGridGPUProbeIndex } from './lightprobegridgpu/LightProbeGridGPUAtlas.js';
+} from './LightProbeGridGPUReadback.js';
+import { getLightProbeGridGPUProbeIndex } from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js';
 
 export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) {
 
@@ -161,9 +161,9 @@ export function createLightProbeGridGPUVisibilityWeightingStudy( dependencies ) 
 			} );
 			await _lightProbeContext.recreateAndBakeRequired( `visibility weighting diagnostic ${ fixtureMode }` );
 
-			if ( typeof _lightProbeContext.probeGrid._setGuardedVisibilityProofMode === 'function' ) {
+			if ( typeof _lightProbeContext.probeGrid._setGuardedVisibilityMode === 'function' ) {
 
-				_lightProbeContext.probeGrid._setGuardedVisibilityProofMode( 'guarded' );
+				_lightProbeContext.probeGrid._setGuardedVisibilityMode( 'guarded' );
 				_lightProbeContext.syncProbeGridBindings();
 
 			}

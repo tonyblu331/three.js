@@ -41,12 +41,10 @@
 
 			import { Inspector } from 'three/addons/inspector/Inspector.js';
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-			import { LightProbeGridGPU as ProofLightProbeGridGPU } from './jsm/lighting/LightProbeGridGPUProof.js';
-			import { LightProbeGrid as SixteenStudioLightProbeGridGPU } from './jsm/lighting/LightProbeGridGPU.js';
+			import { LightProbeGridGPU } from './jsm/lighting/LightProbeGridGPU.js';
 			import { createLightProbeGridGPUExampleGUI } from './jsm/lighting/LightProbeGridGPUExampleGUI.js';
-			import { createLightProbeGridGPUTestHarness } from './jsm/lighting/LightProbeGridGPUTestHarness.js';
-			import { createLightProbeGridGPUProbeOwnershipAssignment } from './jsm/lighting/lightprobegridgpu/LightProbeGridGPUProbeOwnership.js';
-			import { LightProbeGridHelper as SixteenStudioLightProbeGridHelper } from './jsm/helpers/LightProbeGridHelperGPU.js';
+			import { createLightProbeGridGPUTestHarness } from '../test/e2e/lightprobegridgpu/LightProbeGridGPUTestHarness.js';
+			import { createLightProbeGridGPUProbeOwnershipAssignment } from '../test/e2e/lightprobegridgpu/LightProbeGridGPUProbeOwnership.js';
 			import WebGPU from 'three/addons/capabilities/WebGPU.js';
 
 			let renderer, scene, camera, controls;
@@ -63,7 +61,7 @@
 			const gridMin = new THREE.Vector3( - 2.6, 0.35, - 2.6 );
 			const gridMax = new THREE.Vector3( 2.6, 4.35, 2.6 );
 			const queryParams = new URLSearchParams( window.location.search );
-			const implementationMode = queryParams.get( 'implementation' ) === 'sixteenstudio' ? 'sixteenstudio' : 'proof';
+			const implementationMode = queryParams.get( 'implementation' ) === 'sixteenstudio' ? 'sixteenstudio' : 'ours';
 
 			const directLightIntensity = 40;
 			const ambientLightIntensity = 0.05;
@@ -236,7 +234,7 @@
 				renderer.toneMapping = THREE.ACESFilmicToneMapping;
 				renderer.toneMappingExposure = 1.0;
 				renderer.shadowMap.enabled = true;
-				renderer.inspector = new Inspector();
+				if ( queryParams.has( 'testHarness' ) === false ) renderer.inspector = new Inspector();
 				document.body.appendChild( renderer.domElement );
 
 				await renderer.init();
@@ -256,7 +254,7 @@
 
 				createCornellBox();
 				createProbeResources();
-				createLightProbeGridGPUExampleGUI( readLightProbeGridExampleContext );
+				if ( queryParams.has( 'testHarness' ) === false ) createLightProbeGridGPUExampleGUI( readLightProbeGridExampleContext );
 				createLightProbeGridGPUTestHarness( readLightProbeGridExampleContext );
 
 				window.addEventListener( 'resize', onWindowResize );
@@ -600,7 +598,7 @@
 
 			function createProbeSourceMapData( resolution = params.resolution, probeValidity = createProbeValidityData( resolution ) ) {
 
-				// CPU/report-only source map for proof diagnostics. Do not pass this into LightProbeGridGPU runtime options.
+				// CPU/report-only source map for validation diagnostics. Do not pass this into LightProbeGridGPU runtime options.
 
 				const totalProbes = resolution * resolution * resolution;
 				const sources = new Float32Array( totalProbes );
@@ -730,6 +728,7 @@
 					normalBias: params.normalBias,
 					viewBias: params.viewBias,
 					leakReductionMode: params.leakReductionMode,
+					enableVisibility: true,
 					renderer
 				};
 
@@ -738,7 +737,7 @@
 
 				probeGrid = implementationMode === 'sixteenstudio' ?
 					createSixteenStudioProbeGrid( probeOptions ) :
-					new ProofLightProbeGridGPU( gridMin, gridMax, probeOptions );
+					new LightProbeGridGPU( gridMin, gridMax, probeOptions );
 
 				scene.add( probeGrid );
 				params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
@@ -808,91 +807,7 @@
 
 			function createSixteenStudioProbeGrid( probeOptions ) {
 
-				const gridSize = gridMax.clone().sub( gridMin );
-				const gridCenter = gridMin.clone().add( gridMax ).multiplyScalar( 0.5 );
-				const proofDelegate = new ProofLightProbeGridGPU( gridMin, gridMax, probeOptions );
-				const grid = new SixteenStudioLightProbeGridGPU(
-					gridSize.x,
-					gridSize.y,
-					gridSize.z,
-					params.resolution,
-					params.resolution,
-					params.resolution
-				);
-				const bakeSixteenStudioGrid = grid.bake.bind( grid );
-				const disposeSixteenStudioGrid = grid.dispose.bind( grid );
-				let proofInternalsActive = false;
-
-				grid.position.copy( gridCenter );
-				grid.activeProjectionPrecision = 'half-linear';
-				grid.probeIntensity = uniformCompatibilityValue( params.probeIntensity );
-				grid.createHelper = () => new SixteenStudioLightProbeGridHelper( grid, 0.12 );
-				grid.createIrradianceNode = options => proofDelegate.createIrradianceNode( options );
-				grid.createLightsNode = ( sceneLights, options ) => proofInternalsActive === true ?
-					proofDelegate.createLightsNode( sceneLights, options ) :
-					null;
-				grid.setOptions = ( options, renderer ) => proofDelegate.setOptions( options, renderer );
-
-				grid.setHelperDebugMode = () => {};
-
-				grid.setHelperDepthMode = () => {};
-
-				for ( const key of [
-					'visibilityDepthTarget',
-					'visibilityDepthResolution',
-					'visibilityDepthMode',
-					'visibilityDepthWeighting',
-					'probeValidityTexture',
-					'probeValidityTextureWidth',
-					'probeValidityTextureHeight',
-					'totalProbes'
-				] ) {
-
-					Object.defineProperty( grid, key, {
-						get: () => proofDelegate[ key ],
-						configurable: true
-					} );
-
-				}
-
-				grid.getPrecisionInfo = renderer => proofDelegate.getPrecisionInfo( renderer );
-				grid.getSamplingInfo = () => proofDelegate.getSamplingInfo();
-				grid.getMemoryInfo = () => proofDelegate.getMemoryInfo();
-				grid.getVisibilityDepthInfo = () => proofDelegate.getVisibilityDepthInfo();
-
-				grid._setGuardedVisibilityProofMode = mode => {
-
-					proofInternalsActive = true;
-					return proofDelegate._setGuardedVisibilityProofMode( mode );
-
-				};
-
-				grid.bake = async ( renderer, scene, options = {} ) => {
-
-					const timings = bakeSixteenStudioGrid( renderer, scene, options ) ?? {};
-					const proofTimings = await proofDelegate.bake( renderer, scene, options );
-					return {
-						...proofTimings,
-						...timings,
-						visibilityDepthMode: proofTimings?.visibilityDepthMode ?? timings?.visibilityDepthMode
-					};
-
-				};
-
-				grid.dispose = () => {
-
-					disposeSixteenStudioGrid();
-					proofDelegate.dispose();
-
-				};
-
-				return grid;
-
-			}
-
-			function uniformCompatibilityValue( value ) {
-
-				return { value };
+				return new LightProbeGridGPU( gridMin, gridMax, probeOptions );
 
 			}
 

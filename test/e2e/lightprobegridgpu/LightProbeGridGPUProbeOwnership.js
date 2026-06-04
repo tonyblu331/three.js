@@ -5,10 +5,10 @@ import {
 
 import {
 	DEFAULT_PROBE_LAYER_MASK
-} from './LightProbeGridGPUConstants.js';
+} from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js';
 import {
 	getLightProbeGridGPUProbeCoord
-} from './LightProbeGridGPUAtlas.js';
+} from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js';
 
 const MAX_PROBE_LAYER_MASK = 0xFFFFFF;
 

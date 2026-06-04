@@ -1,6 +1,6 @@
 import { Vector3 } from 'three/webgpu';
 
-import { SH_COEFFICIENTS } from './LightProbeGridGPUConstants.js';
+import { SH_COEFFICIENTS } from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js';
 
 const createCoefficientSet = () => Array.from( { length: SH_COEFFICIENTS }, () => ( { r: 0, g: 0, b: 0 } ) );
 

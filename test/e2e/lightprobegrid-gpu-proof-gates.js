@@ -1,6 +1,7 @@
 const MAX_PROOF_GATE_COUNT = 16;
 const MAX_PROOF_SUMMARY_BYTES = 6000;
 const SEALED_WALL_GROUND_TRUTH_WRONG_SIDE_LEAK = 0;
+const PROOF_GATE_RATIO_DENOMINATOR_EPSILON = 0.0001;
 
 export function isMomentBackedVisibility( info ) {
 
@@ -203,8 +204,12 @@ const deriveSealedWallVisibilityFacts = ( sealedWallFacts ) => {
 	const readPreToneMaskedWrongSide = row => row.preToneMaskedWrongSideColorRatio;
 	const readCorrectBounce = row => row.correctBounceRatio;
 	const readPreToneMaskedCorrectBounce = row => row.preToneMaskedCorrectBounceRatio;
-	const ratio = read => roundMetric( read( candidate ) / Math.max( read( baseline ), 0.0001 ) );
-	const improvementRatio = read => roundMetric( ( read( baseline ) - read( candidate ) ) / Math.max( read( baseline ), 0.0001 ) );
+	const ratio = read => roundMetric(
+		read( candidate ) / Math.max( read( baseline ), PROOF_GATE_RATIO_DENOMINATOR_EPSILON )
+	);
+	const improvementRatio = read => roundMetric(
+		( read( baseline ) - read( candidate ) ) / Math.max( read( baseline ), PROOF_GATE_RATIO_DENOMINATOR_EPSILON )
+	);
 
 	return {
 		preToneMaskedWrongSideImprovement: improvementRatio( readPreToneMaskedWrongSide ),

@@ -22,23 +22,23 @@ import {
 	PACKED_SH_COEFFICIENT_LAYOUT,
 	PACKED_SH_TEXTURES,
 	SH_COEFFICIENTS
-} from './LightProbeGridGPUConstants.js';
+} from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js';
 import {
 	getLightProbeGridGPUPackedAtlasLayer,
 	getLightProbeGridGPUProbeCoord
-} from './LightProbeGridGPUAtlas.js';
+} from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUAtlas.js';
 
-const decodeLightProbeGridGPUProofReadbackValue = ( value, data ) => data instanceof Uint16Array ?
+const decodeLightProbeGridGPUReadbackValue = ( value, data ) => data instanceof Uint16Array ?
 	DataUtils.fromHalfFloat( value ) :
 	value;
 
 const readLightProbeGridGPURenderTargetPixel = ( renderer, target, x, y, layer ) => renderer.readRenderTargetPixelsAsync( target, x, y, 1, 1, 0, layer );
 
-const decodeLightProbeGridGPUProofReadbackPixel = ( data ) => [
-	decodeLightProbeGridGPUProofReadbackValue( data[ 0 ], data ),
-	decodeLightProbeGridGPUProofReadbackValue( data[ 1 ], data ),
-	decodeLightProbeGridGPUProofReadbackValue( data[ 2 ], data ),
-	decodeLightProbeGridGPUProofReadbackValue( data[ 3 ], data )
+const decodeLightProbeGridGPUReadbackPixel = ( data ) => [
+	decodeLightProbeGridGPUReadbackValue( data[ 0 ], data ),
+	decodeLightProbeGridGPUReadbackValue( data[ 1 ], data ),
+	decodeLightProbeGridGPUReadbackValue( data[ 2 ], data ),
+	decodeLightProbeGridGPUReadbackValue( data[ 3 ], data )
 ];
 
 const decodeLightProbeGridGPUVisibilityMoment = ( data, varianceFloor ) => {
@@ -48,7 +48,7 @@ const decodeLightProbeGridGPUVisibilityMoment = ( data, varianceFloor ) => {
 		meanSquaredDistance,
 		hitConfidence,
 		backfaceConfidence
-	] = decodeLightProbeGridGPUProofReadbackPixel( data );
+	] = decodeLightProbeGridGPUReadbackPixel( data );
 	const variance = meanSquaredDistance - meanDistance * meanDistance;
 
 	return {
@@ -150,7 +150,7 @@ export async function readLightProbeGridGPUDecodedPackedAtlasPixel( renderer, gr
 	const layer = getLightProbeGridGPUPackedAtlasLayer( address.textureIndex, address.gridZ, grid.paddedSlices );
 	const data = await readLightProbeGridGPURenderTargetPixel( renderer, grid.atlasTarget, address.x, address.y, layer );
 
-	return decodeLightProbeGridGPUProofReadbackPixel( data );
+	return decodeLightProbeGridGPUReadbackPixel( data );
 
 }
 

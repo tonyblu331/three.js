@@ -187,6 +187,10 @@ export async function runLightProbeGridGpuCoreSmokeAssertions( context ) {
 	const samplingControls = await call( 'inspectSamplingControls' );
 	assert( samplingControls.defaultSampling.leakReductionMode === 'off',
 		'sampling controls: expected class default to preserve unweighted sampling.' );
+	assert( samplingControls.defaultSampling.probeMeta.receiverBoundaryLayerMaskDefault === 'receiverLayerMask' &&
+		samplingControls.defaultSampling.probeMeta.receiverBoundaryWeightDefault === 0 &&
+		samplingControls.defaultSampling.probeMeta.receiverBoundarySelector === 'receiverBoundaryWeight >= 0.5',
+	'sampling controls: expected absent receiver-boundary metadata to preserve the receiver mask path.' );
 	assert( samplingControls.configuredSampling.normalBias === 0.75 &&
 		samplingControls.configuredSampling.viewBias === 0.25 &&
 		samplingControls.configuredSampling.leakReductionMode === 'normal' &&

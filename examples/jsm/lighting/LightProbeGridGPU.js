@@ -68,7 +68,6 @@ import {
 import {
 	createLightProbeGridGPUVisibilitySamplingState,
 	getLightProbeGridGPUMomentVisibility,
-	lightProbeGridGPUReceiverLayerCompatibility,
 	LightProbeGridGPUVisibilityRuntime
 } from './lightprobegridgpu/LightProbeGridGPUVisibility.js';
 import {
@@ -816,7 +815,10 @@ class LightProbeGridGPU extends Object3D {
 				defaultLayerMask: DEFAULT_PROBE_LAYER_MASK,
 				probeLayerMaskMode: this.probeLayerMaskSource === null ? 'constant' : 'custom',
 				receiverLayerMask: this.receiverLayerMask.value,
-				receiverLayerMaskScope: 'grid-default-or-node-input'
+				receiverLayerMaskScope: 'grid-default-or-node-input',
+				receiverBoundaryLayerMaskDefault: 'receiverLayerMask',
+				receiverBoundaryWeightDefault: 0,
+				receiverBoundarySelector: 'receiverBoundaryWeight >= 0.5'
 			},
 			visibilityDepthMode: this.visibilityDepthMode,
 			visibilityDepthResolution: this.visibilityDepthResolution,
@@ -904,11 +906,14 @@ class LightProbeGridGPU extends Object3D {
 	 * value at or above `0.5` selects `receiverBoundaryLayerMask` before probe
 	 * interpolation. Continuous boundary coverage should be converted to an
 	 * explicit receiver class before passing it here.
+	 * Set `receiverBoundaryMode` to `'blend'` only when the authored weight is
+	 * meant to blend layer compatibility instead of selecting a discrete mask.
 	 *
 	 * @param {Object} [options] - Receiver sampling options.
 	 * @param {?number|Node} [options.receiverLayerMask] - Default receiver ownership mask.
 	 * @param {?number|Node} [options.receiverBoundaryLayerMask] - Boundary receiver ownership mask.
 	 * @param {?number|Node} [options.receiverBoundaryWeight] - Saturated boundary-class selector.
+	 * @param {'select'|'blend'} [options.receiverBoundaryMode='select'] - Boundary mask compatibility mode.
 	 * @return {Node} The irradiance sampling node.
 	 */
 	createIrradianceNode( options = {} ) {
@@ -1000,6 +1005,7 @@ class LightProbeGridGPU extends Object3D {
 			receiverLayerMask: options.receiverLayerMask,
 			receiverBoundaryLayerMask: options.receiverBoundaryLayerMask,
 			receiverBoundaryWeight: options.receiverBoundaryWeight,
+			receiverBoundaryMode: options.receiverBoundaryMode,
 			defaultReceiverLayerMask: this.receiverLayerMask,
 			safeNormalize: ( vector ) => this._safeNormalize( vector )
 		} );
@@ -1054,6 +1060,7 @@ class LightProbeGridGPU extends Object3D {
 			const debugProbeBaseWeights = [];
 			const debugProbeVisibilityWeights = [];
 			const debugProbeVisibilities = [];
+			const debugProbeIrradiance = [];
 			const debugProbeIndices = [];
 			const totalWeight = float( 0 ).toVar();
 			const baseWeight = float( 0 ).toVar();
@@ -1081,6 +1088,7 @@ class LightProbeGridGPU extends Object3D {
 				debugProbeBaseWeights.push( float( 0 ).toVar() );
 				debugProbeVisibilityWeights.push( float( 0 ).toVar() );
 				debugProbeVisibilities.push( float( 0 ).toVar() );
+				debugProbeIrradiance.push( vec3( 0 ).toVar() );
 				debugProbeIndices.push( float( 0 ).toVar() );
 
 			}
@@ -1097,14 +1105,20 @@ class LightProbeGridGPU extends Object3D {
 				const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
 				const validityWeight = meta.x.max( PROBE_VALIDITY_FLOOR );
 				const confidenceWeight = meta.y.clamp( 0, 1 );
-				const sameLayer = lightProbeGridGPUReceiverLayerCompatibility( {
-					probeLayerMask: meta.z.toUint(),
-					receiverLayerMask: visibilitySampling.effectiveReceiverLayerMask
-				} );
+				const sameLayer = visibilitySampling.getReceiverLayerCompatibility( meta.z.toUint() );
 				const kernelOffset = positionWorld.sub( probePosition ).div( probeSpacing.max( vec3( 0.0001 ) ) );
 				const compatibleKernel = visibilitySampling.useGuardedVisibility ? kernelOffset.dot( kernelOffset ).negate().exp2() : float( 1 );
 				const layerCompatibility = visibilitySampling.useGuardedVisibility ? sameLayer : float( 1 );
 				const base = trilinearWeight.mul( normalWeight ).mul( validityWeight ).mul( confidenceWeight ).mul( layerCompatibility ).mul( compatibleKernel );
+				const probeIrradiance = this._evaluatePackedSH(
+					sample[ 0 ],
+					sample[ 1 ],
+					sample[ 2 ],
+					sample[ 3 ],
+					sample[ 4 ],
+					sample[ 5 ],
+					sample[ 6 ]
+				).mul( this.probeIntensity );
 				const visibility = float( 1 ).toVar();
 
 				if ( visibilitySampling.useGuardedVisibility ) {
@@ -1134,6 +1148,7 @@ class LightProbeGridGPU extends Object3D {
 				debugProbeBaseWeights[ debugSlot ].assign( base );
 				debugProbeVisibilityWeights[ debugSlot ].assign( weight );
 				debugProbeVisibilities[ debugSlot ].assign( visibility );
+				debugProbeIrradiance[ debugSlot ].assign( probeIrradiance );
 				debugProbeIndices[ debugSlot ].assign( probeIndex.toFloat() );
 
 				for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
@@ -1163,6 +1178,24 @@ class LightProbeGridGPU extends Object3D {
 			const safeWeight = totalWeight.max( 0.0001 );
 			const safeBaseWeight = baseWeight.max( 0.0001 );
 			const visibilityMass = visibilitySampling.useGuardedVisibility ? totalWeight.div( baseWeight.max( 0.0001 ) ).clamp( 0, 1 ) : float( 1 );
+			const scalarCoefficientAccumulator = this._evaluatePackedSH(
+				scalarSamples[ 0 ],
+				scalarSamples[ 1 ],
+				scalarSamples[ 2 ],
+				scalarSamples[ 3 ],
+				scalarSamples[ 4 ],
+				scalarSamples[ 5 ],
+				scalarSamples[ 6 ]
+			).mul( this.probeIntensity );
+			const visibilityCoefficientAccumulator = this._evaluatePackedSH(
+				weightedSamples[ 0 ],
+				weightedSamples[ 1 ],
+				weightedSamples[ 2 ],
+				weightedSamples[ 3 ],
+				weightedSamples[ 4 ],
+				weightedSamples[ 5 ],
+				weightedSamples[ 6 ]
+			).mul( this.probeIntensity );
 			const scalarIrradiance = this._evaluatePackedSH(
 				scalarSamples[ 0 ].div( safeBaseWeight ),
 				scalarSamples[ 1 ].div( safeBaseWeight ),
@@ -1204,6 +1237,7 @@ class LightProbeGridGPU extends Object3D {
 				if ( debugMode === `neighbor${ i }BaseWeight` ) return vec3( debugProbeBaseWeights[ i ] );
 				if ( debugMode === `neighbor${ i }VisibilityWeight` ) return vec3( debugProbeVisibilityWeights[ i ] );
 				if ( debugMode === `neighbor${ i }Visibility` ) return vec3( debugProbeVisibilities[ i ] );
+				if ( debugMode === `neighbor${ i }Irradiance` ) return debugProbeIrradiance[ i ];
 				if ( debugMode === `neighbor${ i }ProbeIndex` ) return vec3( debugProbeIndices[ i ].div( probeIndexScale ) );
 
 			}
@@ -1211,6 +1245,8 @@ class LightProbeGridGPU extends Object3D {
 			if ( debugMode === 'scalarWeight' ) return vec3( baseWeight );
 			if ( debugMode === 'visibilityWeight' ) return vec3( totalWeight );
 			if ( debugMode === 'visibilityMix' || debugMode === 'visibilityOverScalar' ) return vec3( visibilityMass );
+			if ( debugMode === 'scalarCoefficientAccumulator' ) return scalarCoefficientAccumulator;
+			if ( debugMode === 'visibilityCoefficientAccumulator' ) return visibilityCoefficientAccumulator;
 			if ( debugMode === 'scalarIrradiance' ) return scalarIrradiance;
 			if ( debugMode === 'visibilityIrradiance' ) return visibilityIrradiance;
 
