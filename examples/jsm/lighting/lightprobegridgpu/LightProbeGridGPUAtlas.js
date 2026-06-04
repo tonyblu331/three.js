@@ -47,13 +47,28 @@ export const getLightProbeGridGPUPackedAtlasCenterSampleZ = (
 	atlasPadding = ATLAS_PADDING
 ) => ( getLightProbeGridGPUPackedAtlasLayer( textureIndex, gridZ, paddedSlices, atlasPadding ) + 0.5 ) / atlasDepth;
 
-export const getLightProbeGridGPUProbeIndex = ( x, y, z, resolution ) => x + y * resolution + z * resolution * resolution;
+export const getLightProbeGridGPUResolutionX = ( resolution ) => resolution.x ?? resolution;
+
+export const getLightProbeGridGPUResolutionY = ( resolution ) => resolution.y ?? resolution;
+
+export const getLightProbeGridGPUResolutionZ = ( resolution ) => resolution.z ?? resolution;
+
+export const getLightProbeGridGPUProbeIndex = ( x, y, z, resolution ) => {
+
+	const nx = getLightProbeGridGPUResolutionX( resolution );
+	const ny = getLightProbeGridGPUResolutionY( resolution );
+
+	return x + y * nx + z * nx * ny;
+
+};
 
 export const getLightProbeGridGPUProbeCoord = ( probeIndex, resolution ) => {
 
-	const z = Math.floor( probeIndex / ( resolution * resolution ) );
-	const y = Math.floor( probeIndex / resolution ) % resolution;
-	const x = probeIndex % resolution;
+	const nx = getLightProbeGridGPUResolutionX( resolution );
+	const ny = getLightProbeGridGPUResolutionY( resolution );
+	const z = Math.floor( probeIndex / ( nx * ny ) );
+	const y = Math.floor( probeIndex / nx ) % ny;
+	const x = probeIndex % nx;
 
 	return { x, y, z };
 
@@ -98,10 +113,11 @@ export const createLightProbeGridGPUAtlasRepackMaterial = (
 	const repack = Fn( () => {
 
 		const nx = int( repackResolution.x );
+		const ny = int( repackResolution.y );
 		const ix = int( floor( viewportCoordinate.x ) );
 		const iy = int( floor( viewportCoordinate.y ) );
 		const iz = int( repackSliceZ );
-		const probeIndex = ix.add( iy.mul( nx ) ).add( iz.mul( nx.mul( nx ) ) );
+		const probeIndex = ix.add( iy.mul( nx ) ).add( iz.mul( nx.mul( ny ) ) );
 		const coefficients = [
 			loadCoefficient( 0, probeIndex ),
 			loadCoefficient( 1, probeIndex ),

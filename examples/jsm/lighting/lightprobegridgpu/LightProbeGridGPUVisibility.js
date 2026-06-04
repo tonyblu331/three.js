@@ -1,7 +1,13 @@
 import {
+	CubeCamera,
+	CubeRenderTarget,
 	DoubleSide,
 	MeshBasicNodeMaterial,
-	NodeMaterial
+	NearestFilter,
+	NodeMaterial,
+	RenderTarget3D,
+	RGBAFormat,
+	Vector3
 } from 'three/webgpu';
 import {
 	clamp,
@@ -11,16 +17,43 @@ import {
 	If,
 	int,
 	ivec3,
+	max,
+	nodeObject,
 	positionWorld,
+	texture3D,
+	uniform,
 	uv,
+	uint,
 	vec2,
 	vec3,
-	vec4
+	vec4,
+	wgslFn
 } from 'three/tsl';
+
+import {
+	VISIBILITY_DEPTH_MAX_DISTANCE,
+	VISIBILITY_DEPTH_RESOLUTION,
+	VISIBILITY_DISTANCE_BIAS,
+	VISIBILITY_MIN_VARIANCE
+} from './LightProbeGridGPUConstants.js';
+
+const disposeLightProbeGridGPUVisibilityResource = ( resource ) => {
+
+	if ( resource !== null ) resource.dispose();
+
+};
+
+const disposeLightProbeGridGPUVisibilityFullscreenMesh = ( mesh ) => {
+
+	if ( mesh !== null ) mesh.geometry.dispose();
+
+};
 
 export const getLightProbeGridGPUVisibilityLoadCoord = ( coord, direction, resolution, visibilityDepthResolution ) => {
 
-	const probeIndex = int( coord.x ).add( int( coord.y ).mul( resolution ) ).add( int( coord.z ).mul( resolution * resolution ) );
+	const nx = resolution.x ?? resolution;
+	const ny = resolution.y ?? resolution;
+	const probeIndex = int( coord.x ).add( int( coord.y ).mul( nx ) ).add( int( coord.z ).mul( nx * ny ) );
 	const denominator = direction.x.abs().add( direction.y.abs() ).add( direction.z.abs() ).max( 0.0001 );
 	const octX = direction.x.div( denominator ).toVar();
 	const octY = direction.y.div( denominator ).toVar();
@@ -72,6 +105,261 @@ export const createLightProbeGridGPUVisibilityDistanceMaterial = ( visibilityPro
 	return material;
 
 };
+
+const resolveReceiverLayerMaskNode = ( receiverLayerMask, defaultReceiverLayerMask ) => {
+
+	if ( receiverLayerMask === undefined || receiverLayerMask === null ) return defaultReceiverLayerMask;
+	if ( typeof receiverLayerMask === 'number' ) return uint( receiverLayerMask );
+
+	return nodeObject( receiverLayerMask ).toUint();
+
+};
+
+const resolveReceiverBoundaryWeightNode = ( receiverBoundaryWeight ) => {
+
+	if ( receiverBoundaryWeight === undefined || receiverBoundaryWeight === null ) return float( 0 );
+	if ( typeof receiverBoundaryWeight === 'number' ) return float( receiverBoundaryWeight ).clamp( 0, 1 );
+
+	return nodeObject( receiverBoundaryWeight ).toFloat().clamp( 0, 1 );
+
+};
+
+const selectReceiverLayerMaskWGSL = wgslFn( `
+	fn selectReceiverLayerMask(
+		receiverLayerMask: u32,
+		receiverBoundaryLayerMask: u32,
+		receiverBoundaryWeight: f32
+	) -> u32 {
+
+		return select( receiverLayerMask, receiverBoundaryLayerMask, receiverBoundaryWeight >= 0.5 );
+
+	}
+` );
+
+export const lightProbeGridGPUReceiverLayerCompatibility = wgslFn( `
+	fn lightProbeGridGPUReceiverLayerCompatibility(
+		probeLayerMask: u32,
+		receiverLayerMask: u32
+	) -> f32 {
+
+		return select( 0.0, 1.0, ( probeLayerMask & receiverLayerMask ) != 0u );
+
+	}
+` );
+
+export const createLightProbeGridGPUVisibilitySamplingState = ( {
+	visibility,
+	guardedVisibilityMode,
+	resolution,
+	receiverLayerMask: receiverLayerMaskOption,
+	receiverBoundaryLayerMask: receiverBoundaryLayerMaskOption,
+	receiverBoundaryWeight: receiverBoundaryWeightOption,
+	defaultReceiverLayerMask,
+	safeNormalize
+} ) => {
+
+	const useGuardedVisibility = guardedVisibilityMode === 'guarded' && visibility.depthTarget !== null;
+	const visibilityLoad = useGuardedVisibility ? texture3D( visibility.depthTarget.texture ).setSampler( false ) : null;
+	const receiverLayerMask = resolveReceiverLayerMaskNode( receiverLayerMaskOption, defaultReceiverLayerMask );
+	const receiverBoundaryLayerMask = resolveReceiverLayerMaskNode( receiverBoundaryLayerMaskOption, receiverLayerMask );
+	const receiverBoundaryWeight = resolveReceiverBoundaryWeightNode( receiverBoundaryWeightOption );
+	const effectiveReceiverLayerMask = selectReceiverLayerMaskWGSL( {
+		receiverLayerMask,
+		receiverBoundaryLayerMask,
+		receiverBoundaryWeight
+	} );
+	const loadVisibilityMoment = useGuardedVisibility ? ( coord, direction ) => {
+
+		const dir = safeNormalize( direction );
+		return visibilityLoad.load( getLightProbeGridGPUVisibilityLoadCoord( coord, dir, resolution, visibility.depthResolution ) );
+
+	} : null;
+
+	return {
+		useGuardedVisibility,
+		effectiveReceiverLayerMask,
+		loadVisibilityMoment
+	};
+
+};
+
+export const getLightProbeGridGPUMomentVisibility = ( {
+	moment,
+	receiverDistance,
+	visibilityBias,
+	visibilityDepthWeighting
+} ) => {
+
+	const variance = max( moment.y.sub( moment.x.mul( moment.x ) ), VISIBILITY_MIN_VARIANCE );
+	const delta = max( receiverDistance.sub( moment.x ).sub( visibilityBias ), 0 );
+	const chebyshev = variance.div( variance.add( delta.mul( delta ) ) );
+	const hitConfidence = moment.z.clamp( 0, 1 );
+	const momentVisibility = float( 1 ).sub( hitConfidence ).add( chebyshev.mul( hitConfidence ) ).clamp( 0, 1 );
+	const visibilityMix = visibilityDepthWeighting.clamp( 0, 1 );
+
+	return float( 1 ).sub( visibilityMix ).add( momentVisibility.mul( visibilityMix ) ).clamp( 0, 1 );
+
+};
+
+export class LightProbeGridGPUVisibilityRuntime {
+
+	constructor( enabled = false ) {
+
+		this.enabled = enabled === true;
+		this.depthResolution = VISIBILITY_DEPTH_RESOLUTION;
+		this.depthTarget = null;
+		this.distanceTarget = null;
+		this.distanceCamera = null;
+		this.distanceMaterial = null;
+		this.repackScene = null;
+		this.repackCamera = null;
+		this.repackMesh = null;
+		this.repackMaterial = null;
+		this.repackProbeIndex = uniform( 0 );
+		this.probePosition = uniform( new Vector3() );
+		this.probeSpacing = uniform( 1 );
+		this.maxDistance = uniform( VISIBILITY_DEPTH_MAX_DISTANCE );
+		this.bias = uniform( VISIBILITY_DISTANCE_BIAS );
+		this.depthWeighting = uniform( 1 );
+		this.depthMode = 'not-baked';
+		this.cubemapMs = 0;
+		this.repackMs = 0;
+
+	}
+
+	setEnabled( enabled ) {
+
+		this.enabled = enabled === true;
+
+	}
+
+	dispose() {
+
+		disposeLightProbeGridGPUVisibilityFullscreenMesh( this.repackMesh );
+		disposeLightProbeGridGPUVisibilityResource( this.depthTarget );
+		disposeLightProbeGridGPUVisibilityResource( this.distanceTarget );
+		disposeLightProbeGridGPUVisibilityResource( this.distanceMaterial );
+		disposeLightProbeGridGPUVisibilityResource( this.repackMaterial );
+
+		this.depthTarget = null;
+		this.distanceTarget = null;
+		this.distanceCamera = null;
+		this.distanceMaterial = null;
+		this.repackScene = null;
+		this.repackCamera = null;
+		this.repackMesh = null;
+		this.repackMaterial = null;
+		this.depthMode = 'not-baked';
+		this.cubemapMs = 0;
+		this.repackMs = 0;
+
+	}
+
+	createResources( {
+		cubemapSize,
+		textureType,
+		totalProbes,
+		createFullscreenPass
+	} ) {
+
+		if ( this.enabled === false ) return;
+
+		this.distanceTarget = new CubeRenderTarget( cubemapSize, {
+			type: textureType,
+			generateMipmaps: false
+		} );
+		this.distanceCamera = new CubeCamera( 0.05, VISIBILITY_DEPTH_MAX_DISTANCE, this.distanceTarget );
+		this.depthTarget = new RenderTarget3D(
+			this.depthResolution,
+			this.depthResolution,
+			totalProbes,
+			{
+				format: RGBAFormat,
+				type: textureType,
+				minFilter: NearestFilter,
+				magFilter: NearestFilter,
+				generateMipmaps: false,
+				depthBuffer: false
+			}
+		);
+		this.distanceMaterial = createLightProbeGridGPUVisibilityDistanceMaterial(
+			this.probePosition,
+			this.maxDistance
+		);
+		this.repackMaterial = createLightProbeGridGPUVisibilityRepackMaterial(
+			this.distanceTarget.texture,
+			this.maxDistance,
+			this.depthResolution,
+			VISIBILITY_MIN_VARIANCE
+		);
+
+		const pass = createFullscreenPass( this.repackMaterial );
+		this.repackCamera = pass.camera;
+		this.repackMesh = pass.mesh;
+		this.repackScene = pass.scene;
+
+	}
+
+	beginProbeCapture( probePosition, probeSpacing ) {
+
+		if ( this.enabled === false ) return;
+
+		this.distanceCamera.position.copy( probePosition );
+		this.probePosition.value.copy( probePosition );
+		this.probeSpacing.value = probeSpacing;
+
+	}
+
+	renderDistanceCapture( renderer, scene, restoreMaterial ) {
+
+		const autoClear = renderer.autoClear;
+
+		renderer.autoClear = true;
+		scene.overrideMaterial = this.distanceMaterial;
+		this.distanceCamera.update( renderer, scene );
+		scene.overrideMaterial = restoreMaterial;
+		renderer.autoClear = autoClear;
+
+	}
+
+	repackDepth( renderer, probeIndex ) {
+
+		this.depthTarget.viewport.set( 0, 0, this.depthResolution, this.depthResolution );
+		this.depthTarget.scissor.set( 0, 0, this.depthResolution, this.depthResolution );
+		this.depthTarget.scissorTest = false;
+		this.repackProbeIndex.value = probeIndex;
+
+		renderer.autoClear = false;
+		renderer.setRenderTarget( this.depthTarget, probeIndex );
+		renderer.render( this.repackScene, this.repackCamera );
+		this.depthMode = 'moments';
+
+	}
+
+	getMemoryInfo( rgbaBytes, cubemapBytes, totalProbes ) {
+
+		return {
+			visibilityDepthBytes: this.depthTarget !== null ?
+				this.depthResolution * this.depthResolution * totalProbes * rgbaBytes :
+				0,
+			visibilityDistanceBytes: this.distanceTarget !== null ? cubemapBytes : 0
+		};
+
+	}
+
+	getDepthInfo( memory ) {
+
+		const available = this.depthTarget !== null && this.depthMode === 'moments';
+
+		return {
+			available,
+			mode: this.depthMode,
+			bytes: available ? memory.visibilityDepthBytes : 0
+		};
+
+	}
+
+}
 
 export const createLightProbeGridGPUVisibilityRepackMaterial = (
 	visibilityDistanceTexture,

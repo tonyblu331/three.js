@@ -38,7 +38,7 @@
 			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 			import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
-			import { LightProbeGrid } from 'three/addons/lighting/LightProbeGridGPU.js';
+			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPU.js';
 			import { LightProbeGridHelper } from 'three/addons/helpers/LightProbeGridHelperGPU.js';
 
 			const MODEL_INDEX_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/model-index.json';
@@ -144,7 +144,6 @@
 				const modelCenter = _box.getCenter( _center ).clone();
 				const targetY = modelCenter.y + modelSize.y * 0.2;
 				const lightBaseDistance = Math.max( modelSize.x, modelSize.z );
-				const probeFar = Math.max( modelSize.x, modelSize.y, modelSize.z ) * 2.0;
 				let rebakeTimer = null;
 				let isBaking = false;
 				let bakeQueued = false;
@@ -256,11 +255,17 @@
 							// referenced by the lighting pipeline.
 							if ( ! probes ) {
 
-								probes = new LightProbeGrid(
-									params.sizeX, params.sizeY, params.sizeZ,
-									params.countX, params.countY, params.countZ
+								const halfSize = new THREE.Vector3( params.sizeX, params.sizeY, params.sizeZ ).multiplyScalar( 0.5 );
+								const center = new THREE.Vector3( params.boundsX, params.boundsY, params.boundsZ );
+
+								probes = new LightProbeGridGPU(
+									center.clone().sub( halfSize ),
+									center.clone().add( halfSize ),
+									{
+										resolution: new THREE.Vector3( params.countX, params.countY, params.countZ ),
+										cubemapSize: 32
+									}
 								);
-								probes.position.set( params.boundsX, params.boundsY, params.boundsZ );
 								scene.add( probes );
 
 							}
@@ -268,11 +273,7 @@
 							// Keep the dynamic sphere out of the bake so it isn't burned into the probes.
 							if ( movingSphere ) movingSphere.visible = false;
 
-							probes.bake( renderer, scene, {
-								cubemapSize: 32,
-								near: 0.05,
-								far: probeFar
-							} );
+							probes.bake( renderer, scene );
 							bakeCount ++;
 							probes.visible = params.enabled;
 
@@ -400,7 +401,7 @@
 							const probeCount = resolution ? resolution.x * resolution.y * resolution.z : 0;
 
 							return {
-								implementation: 'sixteenstudio-reference-sponza',
+								implementation: 'ours-sponza-control',
 								status: bakeStatus,
 								bakeError: lastBakeError,
 								bakeCount,
@@ -427,7 +428,9 @@
 								]
 							].map( ( index ) => {
 
-								probes.getProbePosition( index[ 0 ], index[ 1 ], index[ 2 ], sampleProbe );
+								const probeIndex = index[ 0 ] + index[ 1 ] * resolution.x + index[ 2 ] * resolution.x * resolution.y;
+
+								probes.getProbePosition( probeIndex, sampleProbe );
 
 								return {
 									index,
@@ -442,6 +445,23 @@
 						async rebake() {
 
 							await bakeWithSettings();
+
+						},
+						setDisplayOptions( options = {} ) {
+
+							if ( options.probesEnabled !== undefined ) {
+
+								params.enabled = options.probesEnabled === true;
+								if ( probes ) probes.visible = params.enabled;
+
+							}
+
+							if ( options.showProbes !== undefined ) {
+
+								params.showProbes = options.showProbes === true;
+								if ( probesHelper ) probesHelper.visible = params.showProbes;
+
+							}
 
 						}
 					};

@@ -10,7 +10,7 @@ import {
 import { Fn, float, instanceIndex, int, normalWorld, texture3D, uniform, varying, vec3 } from 'three/tsl';
 
 /**
- * Visualizes a `LightProbeGrid` by rendering a sphere at each probe position,
+ * Visualizes a `LightProbeGridGPU` by rendering a sphere at each probe position,
  * shaded with the probe's L2 spherical harmonics.
  *
  * Uses a single `InstancedMesh` draw call for all probes.
@@ -31,7 +31,7 @@ class LightProbeGridHelper extends InstancedMesh {
 	/**
 	 * Constructs a new irradiance probe grid helper.
 	 *
-	 * @param {LightProbeGrid} probes - The probe grid to visualize.
+	 * @param {LightProbeGridGPU} probes - The probe grid to visualize.
 	 * @param {number} [sphereSize=0.12] - The radius of each probe sphere.
 	 */
 	constructor( probes, sphereSize = 0.12 ) {
@@ -112,7 +112,7 @@ class LightProbeGridHelper extends InstancedMesh {
 		/**
 		 * The probe grid to visualize.
 		 *
-		 * @type {LightProbeGrid}
+		 * @type {LightProbeGridGPU}
 		 */
 		this.probes = probes;
 
@@ -156,7 +156,7 @@ class LightProbeGridHelper extends InstancedMesh {
 
 				for ( let ix = 0; ix < res.x; ix ++ ) {
 
-					probes.getProbePosition( ix, iy, iz, probePos );
+					probes.getProbePosition( ix + iy * res.x + iz * res.x * res.y, probePos );
 					matrix.makeTranslation( probePos.x, probePos.y, probePos.z );
 					this.setMatrixAt( i, matrix );
 
