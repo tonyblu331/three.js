@@ -11,15 +11,6 @@ export const smokeHarnesses = {
 		imageRegionSet: 'cornell',
 		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma', 'sealed-wall-leak', 'proof-contracts' ]
 	},
-	webgpu_lightprobes_cornell_sixteenstudio: {
-		query: 'testHarness&implementation=sixteenstudio',
-		global: '__webgpuLightProbeGridCornell',
-		example: 'examples/webgpu_lightprobes_cornell.html',
-		source: 'examples/jsm/lighting/LightProbeGridGPU.js',
-		implementation: 'ours-cornell-legacy-query',
-		imageRegionSet: 'cornell',
-		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma', 'sealed-wall-leak' ]
-	},
 	webgpu_lightprobes_sponza: {
 		query: 'testHarness',
 		global: '__webgpuLightProbeGridSponzaControl',

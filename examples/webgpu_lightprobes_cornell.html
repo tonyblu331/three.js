@@ -61,7 +61,6 @@
 			const gridMin = new THREE.Vector3( - 2.6, 0.35, - 2.6 );
 			const gridMax = new THREE.Vector3( 2.6, 4.35, 2.6 );
 			const queryParams = new URLSearchParams( window.location.search );
-			const implementationMode = queryParams.get( 'implementation' ) === 'sixteenstudio' ? 'sixteenstudio' : 'ours';
 
 			const directLightIntensity = 40;
 			const ambientLightIntensity = 0.05;
@@ -735,9 +734,7 @@
 				if ( params.useProbeValidity ) probeOptions.probeValidity = createProbeValidityData( params.resolution );
 				probeOptions.probeLayerMasks = createProbeLayerMaskData( params.resolution );
 
-				probeGrid = implementationMode === 'sixteenstudio' ?
-					createSixteenStudioProbeGrid( probeOptions ) :
-					new LightProbeGridGPU( gridMin, gridMax, probeOptions );
+				probeGrid = new LightProbeGridGPU( gridMin, gridMax, probeOptions );
 
 				scene.add( probeGrid );
 				params.activeProjectionPrecision = probeGrid.activeProjectionPrecision;
@@ -804,13 +801,6 @@
 				applyLightingMode();
 
 			}
-
-			function createSixteenStudioProbeGrid( probeOptions ) {
-
-				return new LightProbeGridGPU( gridMin, gridMax, probeOptions );
-
-			}
-
 
 			async function recreateAndBake( bakeOptions = {} ) {
 

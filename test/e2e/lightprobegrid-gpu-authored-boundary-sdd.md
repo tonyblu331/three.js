@@ -445,12 +445,28 @@ Focused Cornell proof reports:
   `0.7359` (`delta = 0.1541`);
 - `probeSideCoefficientVerdict =
   candidate-has-mixed-probe-side-l0-result`.
+- occupied-support exclusion removes right occupied support (`4 -> 0`) and
+  changes the right support hash to `fnv1a32:f8c29295`, but the right
+  wrong/correct ratio still does not improve enough (`0.5818 -> 0.5907`,
+  `delta = 0.0089`);
+- probe-side lane verdict is
+  `candidate-needs-relocation-after-probe-side-classification`.
+- a proof-only L0 relocation oracle over non-occupied boundary probes finds a
+  bilateral coefficient win:
+  - left wrong/correct `0.8599 -> 0.664`, `delta = -0.1959`;
+  - right wrong/correct `0.5818 -> 0.2158`, `delta = -0.366`;
+  - both classified supports have `classifiedOccupiedSupportCount = 0`;
+  - selected supports are far from the receiver samples
+    (`left classifiedMeanDistanceSq = 13.189`, `right = 13.6172`);
+  - `relocationOracleVerdict =
+    oracle-finds-bilateral-l0-relocation-candidate`.
 
 This proves the next lane can change probe identity bilaterally without receiver
 mask reweighting. It does not prove product viability. The coefficient gate
-rejects default-overlap exclusion as a product candidate because the right side
-gets worse and still samples occupied probes. The next candidate must add
-probe-side relocation or occupied-support exclusion before any render gate.
+rejects classification-only candidates because the right side does not produce a
+wrong-side L0 win even after occupied-support exclusion. The next candidate must
+model a non-oracle relocation/placement rule before any render gate. The oracle
+proves the atlas contains useful support; it must not become runtime logic.
 
 ## Policy Guards
 

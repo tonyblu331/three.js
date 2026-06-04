@@ -7,7 +7,6 @@ sealed-wall checks and Sponza render controls.
 
 - `examples/webgpu_lightprobes_cornell.html`
   - default: `ours-cornell`
-  - `?implementation=sixteenstudio`: `ours-cornell-legacy-query`
 - `examples/webgpu_lightprobes_sponza.html`
   - `ours-sponza-control`
 - `examples/webgpu_lightprobes_sponza_ours.html`
@@ -18,7 +17,7 @@ sealed-wall checks and Sponza render controls.
 ## Running
 
 ```sh
-node test/e2e/puppeteer.js --webgpu webgpu_lightprobes_cornell webgpu_lightprobes_cornell_sixteenstudio webgpu_lightprobes_sponza webgpu_lightprobes_sponza_ours
+node test/e2e/puppeteer.js --webgpu webgpu_lightprobes_cornell webgpu_lightprobes_sponza webgpu_lightprobes_sponza_ours
 ```
 
 The common eval artifact is written to:
@@ -33,8 +32,8 @@ The common eval artifact is written to:
   validity-weighted and visibility-moments leak ratios.
 - Sponza rows are visual/runtime controls and do not expose sealed-wall leak
   proof ratios.
-- The legacy Cornell query renders through the canonical runtime; it is retained
-  only for old smoke harness compatibility.
+- The Cornell example has a single canonical runtime path; the old
+  `implementation=sixteenstudio` alias was removed with the duplicate wrapper.
 
 ## Residual Research
 

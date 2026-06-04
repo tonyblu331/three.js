@@ -4609,6 +4609,154 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			};
 
 		};
+		const createProbeSideRelocationOracleAttribution = async () => {
+
+			const readProbeL0Facts = async ( probe, side ) => {
+
+				const coefficients = await readLightProbeGridGPUProbeCoefficients(
+					_lightProbeContext.renderer,
+					_lightProbeContext.probeGrid,
+					probe.probeIndex,
+					resolution
+				);
+				const correctSideMean = side === 'left' ? coefficients.l0Irradiance.r : coefficients.l0Irradiance.g;
+				const wrongSideMean = side === 'left' ? coefficients.l0Irradiance.g : coefficients.l0Irradiance.r;
+
+				return {
+					...probe,
+					correctSideMean: roundMetric( correctSideMean ),
+					wrongSideMean: roundMetric( wrongSideMean ),
+					wrongToCorrectRatio: roundMetric( wrongSideMean / Math.max(
+						correctSideMean,
+						PROOF_RATIO_DENOMINATOR_EPSILON
+					) )
+				};
+
+			};
+			const createRelocationSideFacts = async ( side, position, boundaryMask ) => {
+
+				const defaultCandidates = createNearestSupportCandidates( position, defaultMask, assignment.probeLayerMasks );
+				const boundaryCandidates = createNearestSupportCandidates( position, boundaryMask, assignment.probeLayerMasks );
+				const defaultSupport = defaultCandidates.slice( 0, supportSize );
+				const defaultSupportIndices = new Set( defaultSupport.map( probe => probe.probeIndex ) );
+				const relocationCandidatePool = boundaryCandidates.filter( probe =>
+					defaultSupportIndices.has( probe.probeIndex ) === false &&
+					probe.occupied === false
+				);
+				const scoredCandidates = await Promise.all( relocationCandidatePool.map( probe => readProbeL0Facts( probe, side ) ) );
+				const relocatedSupport = scoredCandidates
+					.sort( ( a, b ) => a.wrongToCorrectRatio - b.wrongToCorrectRatio || a.distanceSq - b.distanceSq )
+					.slice( 0, supportSize );
+				const supportRank = createSupportRankFacts( {
+					side,
+					boundaryMask,
+					defaultCandidates,
+					classifiedCandidates: scoredCandidates,
+					defaultSupport,
+					classifiedSupport: relocatedSupport,
+					probeLayerMasks: assignment.probeLayerMasks
+				} );
+				const hasIdentityChange = supportRank.blockerVerdict === 'side-has-setup-identity-change';
+				const coefficientComparison = await readSupportCoefficientComparison( defaultSupport, relocatedSupport, side, hasIdentityChange );
+
+				return {
+					...supportRank,
+					relocationCandidatePoolCount: relocationCandidatePool.length,
+					relocationRankingPolicy: 'non-occupied-boundary-probe-lowest-l0-wrong-to-correct',
+					coefficientComparison
+				};
+
+			};
+			const left = await createRelocationSideFacts( 'left', leftReceiverPoint, leftBoundaryMask );
+			const right = await createRelocationSideFacts( 'right', rightReceiverPoint, rightBoundaryMask );
+			const hasBilateralIdentityChange = left.blockerVerdict === 'side-has-setup-identity-change' &&
+				right.blockerVerdict === 'side-has-setup-identity-change';
+			const hasCompleteNonOccupiedSupport = left.classifiedOccupiedSupportCount === 0 &&
+				right.classifiedOccupiedSupportCount === 0 &&
+				left.classifiedCandidateCount >= supportSize &&
+				right.classifiedCandidateCount >= supportSize;
+			const hasBilateralCoefficientWin =
+				left.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0' &&
+				right.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0';
+
+			return {
+				attributionPolicy: 'probe-side-relocation-l0-oracle',
+				proofBoundary: 'cpu-oracle-support-rank-and-l0-attribution-only',
+				coefficientPolicy: 'packed-atlas-l0-support-mean',
+				candidateShape: 'non-occupied-boundary-probe-l0-ranked-relocation-oracle',
+				receiverPointPolicy: 'world-bounds-near-divider-edge',
+				leftBoundaryLayerMask: leftBoundaryMask,
+				rightBoundaryLayerMask: rightBoundaryMask,
+				left,
+				right,
+				relocationOracleVerdict: hasBilateralIdentityChange && hasCompleteNonOccupiedSupport && hasBilateralCoefficientWin ?
+					'oracle-finds-bilateral-l0-relocation-candidate' :
+					'oracle-fails-bilateral-l0-relocation-candidate'
+			};
+
+		};
+		const createProbeSideRelocationProxyAttribution = async () => {
+
+			const createProxySideFacts = async ( side, position, boundaryMask ) => {
+
+				const defaultCandidates = createNearestSupportCandidates( position, defaultMask, assignment.probeLayerMasks );
+				const boundaryCandidates = createNearestSupportCandidates( position, boundaryMask, assignment.probeLayerMasks );
+				const defaultSupport = defaultCandidates.slice( 0, supportSize );
+				const defaultSupportIndices = new Set( defaultSupport.map( probe => probe.probeIndex ) );
+				const relocationCandidatePool = boundaryCandidates.filter( probe =>
+					defaultSupportIndices.has( probe.probeIndex ) === false &&
+					probe.occupied === false
+				);
+				const proxyCandidates = [ ...relocationCandidatePool ].sort( ( a, b ) => b.distanceSq - a.distanceSq );
+				const relocatedSupport = proxyCandidates.slice( 0, supportSize );
+				const supportRank = createSupportRankFacts( {
+					side,
+					boundaryMask,
+					defaultCandidates,
+					classifiedCandidates: proxyCandidates,
+					defaultSupport,
+					classifiedSupport: relocatedSupport,
+					probeLayerMasks: assignment.probeLayerMasks
+				} );
+				const hasIdentityChange = supportRank.blockerVerdict === 'side-has-setup-identity-change';
+				const coefficientComparison = await readSupportCoefficientComparison( defaultSupport, relocatedSupport, side, hasIdentityChange );
+
+				return {
+					...supportRank,
+					relocationCandidatePoolCount: relocationCandidatePool.length,
+					relocationRankingPolicy: 'non-occupied-boundary-probe-farthest-from-receiver-edge',
+					coefficientComparison
+				};
+
+			};
+			const left = await createProxySideFacts( 'left', leftReceiverPoint, leftBoundaryMask );
+			const right = await createProxySideFacts( 'right', rightReceiverPoint, rightBoundaryMask );
+			const hasBilateralIdentityChange = left.blockerVerdict === 'side-has-setup-identity-change' &&
+				right.blockerVerdict === 'side-has-setup-identity-change';
+			const hasCompleteNonOccupiedSupport = left.classifiedOccupiedSupportCount === 0 &&
+				right.classifiedOccupiedSupportCount === 0 &&
+				left.classifiedCandidateCount >= supportSize &&
+				right.classifiedCandidateCount >= supportSize;
+			const hasBilateralCoefficientWin =
+				left.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0' &&
+				right.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0';
+
+			return {
+				attributionPolicy: 'probe-side-relocation-distance-proxy',
+				proofBoundary: 'cpu-support-rank-and-l0-attribution-only',
+				coefficientPolicy: 'packed-atlas-l0-support-mean',
+				candidateShape: 'non-occupied-boundary-probe-distance-ranked-relocation-proxy',
+				receiverPointPolicy: 'world-bounds-near-divider-edge',
+				leftBoundaryLayerMask: leftBoundaryMask,
+				rightBoundaryLayerMask: rightBoundaryMask,
+				left,
+				right,
+				relocationProxyVerdict: hasBilateralIdentityChange && hasCompleteNonOccupiedSupport && hasBilateralCoefficientWin ?
+					'proxy-finds-bilateral-l0-relocation-candidate' :
+					'proxy-fails-bilateral-l0-relocation-candidate'
+			};
+
+		};
 		const captureSetupClassificationIrradianceDelta = () => {
 
 			if ( typeof _lightProbeContext.probeGrid._createManualIrradianceDebugNode !== 'function' ) return null;
@@ -4760,6 +4908,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			debugDescriptorCompatibility: createDebugDescriptorCompatibilityAttribution( renderGuard, finalIrradianceDebug ),
 			sideSymmetryAttribution: createSideSymmetryAttribution(),
 			probeSideClassificationAttribution: await createProbeSideClassificationAttribution(),
+			probeSideRelocationOracleAttribution: await createProbeSideRelocationOracleAttribution(),
+			probeSideRelocationProxyAttribution: await createProbeSideRelocationProxyAttribution(),
 			setupClassificationIrradianceDelta: captureSetupClassificationIrradianceDelta(),
 			candidates
 		};

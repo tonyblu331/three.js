@@ -621,6 +621,58 @@ const hasProbeSideClassificationAttributionFacts = attribution =>
 	) &&
 	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
 
+const hasProbeSideRelocationOracleSideFacts = side =>
+	hasSetupSideSupportRankFacts( side ) &&
+	Number.isInteger( side.relocationCandidatePoolCount ) &&
+	side.relocationCandidatePoolCount >= side.classifiedCandidateCount &&
+	side.relocationRankingPolicy === 'non-occupied-boundary-probe-lowest-l0-wrong-to-correct' &&
+	hasSetupSideCoefficientComparisonFacts( side.coefficientComparison );
+
+const hasProbeSideRelocationOracleAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-l0-oracle' &&
+	attribution.proofBoundary === 'cpu-oracle-support-rank-and-l0-attribution-only' &&
+	attribution.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
+	attribution.candidateShape === 'non-occupied-boundary-probe-l0-ranked-relocation-oracle' &&
+	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasProbeSideRelocationOracleSideFacts( attribution.left ) &&
+	hasProbeSideRelocationOracleSideFacts( attribution.right ) &&
+	attribution.left.side === 'left' &&
+	attribution.right.side === 'right' &&
+	(
+		attribution.relocationOracleVerdict === 'oracle-finds-bilateral-l0-relocation-candidate' ||
+		attribution.relocationOracleVerdict === 'oracle-fails-bilateral-l0-relocation-candidate'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasProbeSideRelocationProxySideFacts = side =>
+	hasSetupSideSupportRankFacts( side ) &&
+	Number.isInteger( side.relocationCandidatePoolCount ) &&
+	side.relocationCandidatePoolCount >= side.classifiedCandidateCount &&
+	side.relocationRankingPolicy === 'non-occupied-boundary-probe-farthest-from-receiver-edge' &&
+	hasSetupSideCoefficientComparisonFacts( side.coefficientComparison );
+
+const hasProbeSideRelocationProxyAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-distance-proxy' &&
+	attribution.proofBoundary === 'cpu-support-rank-and-l0-attribution-only' &&
+	attribution.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
+	attribution.candidateShape === 'non-occupied-boundary-probe-distance-ranked-relocation-proxy' &&
+	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasProbeSideRelocationProxySideFacts( attribution.left ) &&
+	hasProbeSideRelocationProxySideFacts( attribution.right ) &&
+	attribution.left.side === 'left' &&
+	attribution.right.side === 'right' &&
+	(
+		attribution.relocationProxyVerdict === 'proxy-finds-bilateral-l0-relocation-candidate' ||
+		attribution.relocationProxyVerdict === 'proxy-fails-bilateral-l0-relocation-candidate'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
 const hasSetupSideCoefficientProofDependencyFacts = proof =>
 	proof !== undefined &&
 	proof.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
@@ -865,6 +917,8 @@ const hasSetupSideProbeClassificationAttributionFacts = leakProofFacts => {
 		hasSetupSideDebugDescriptorCompatibilityAttributionFacts( attribution.debugDescriptorCompatibility ) &&
 		hasSetupSideSymmetryAttributionFacts( attribution.sideSymmetryAttribution ) &&
 		hasProbeSideClassificationAttributionFacts( attribution.probeSideClassificationAttribution ) &&
+		hasProbeSideRelocationOracleAttributionFacts( attribution.probeSideRelocationOracleAttribution ) &&
+		hasProbeSideRelocationProxyAttributionFacts( attribution.probeSideRelocationProxyAttribution ) &&
 		hasSetupSideClassificationIrradianceDeltaFacts( attribution.setupClassificationIrradianceDelta ) &&
 		Array.isArray( attribution.candidates ) &&
 		attribution.candidates.length === 2 &&

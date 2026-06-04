@@ -219,7 +219,9 @@ flowchart LR
 - [x] Gate 3: resolve side symmetry and archive setup-side classification as a product candidate.
 - [x] Start probe-side classification / relocation lane after setup-side archive.
 - [x] Add coefficient attribution for the probe-side bilateral identity candidate.
-- [ ] Add relocation / occupied-support exclusion candidate after mixed probe-side L0 result.
+- [x] Add occupied-support exclusion candidate after mixed probe-side L0 result.
+- [x] Add proof-only relocation / placement oracle after classification-only probe-side failure.
+- [ ] Derive non-oracle relocation / placement rule from the L0 oracle evidence.
 - [x] Name receiver-boundary selector threshold, visibility moment tap count, and octahedral normalization epsilon.
 - [x] Split remaining proof/harness epsilons into semantic constants or policy facts.
 - [x] Add source invariants forbidding Cornell divider coordinates, proof pixels, scalar/WebGL truth, and CPU readback in runtime leak control.
@@ -244,9 +246,9 @@ Current decision:
 - Keep `LightProbeGridGPUProbeOwnership.js` proof-scoped.
 - Do not add another receiver-source mode.
 - Do not promote authored-boundary examples as leak-control product proof.
-- Next work is relocation or occupied-support exclusion for the probe-side lane.
-  Default-overlap exclusion changes identity bilaterally but has a mixed L0
-  result.
+- Next work is deriving a non-oracle relocation / placement rule. The L0 oracle
+  proves useful support exists, but it is CPU/readback proof evidence, not
+  product logic.
 
 Why:
 
@@ -270,6 +272,8 @@ Why:
 - Gate 3 support-rank attribution rejects both tested setup-side variants: overlap changes left but right stays fixed; strict changes right but leaves left with `classifiedCandidateCount = 0`. Verdict: `archive-setup-side-classification-left-only`.
 - Probe-side default-overlap exclusion produces bilateral identity change: left `8/8`, right `8/8`. It is still only proof-positive for identity, not product-positive: left mean distance rises to `11.174`, right mean distance rises to `6.6154`, and right classified support still has `4` occupied probes.
 - Probe-side L0 attribution is mixed: left wrong/correct improves `0.8599 -> 0.6683`, but right worsens `0.5818 -> 0.7359`; verdict is `candidate-has-mixed-probe-side-l0-result`.
+- Occupied-support exclusion removes right occupied support (`4 -> 0`) but still misses the L0 gate: right wrong/correct is `0.5818 -> 0.5907`, delta `+0.0089`; lane verdict is `candidate-needs-relocation-after-probe-side-classification`.
+- Proof-only relocation oracle finds a bilateral L0 win over non-occupied boundary probes: left `0.8599 -> 0.664`, right `0.5818 -> 0.2158`, both occupied counts `0`. It pays high distance (`13.189` left, `13.6172` right), so it proves existence, not product readiness.
 - Cross-side coefficient contrast exists (`4.4402x`), but current receiver-side support selection does not expose it safely.
 - Source invariants now run with the smoke harness and forbid Cornell divider coordinates, proof pixel regions, scalar/WebGL truth claims, and CPU readback in runtime leak-control sources.
 - Remaining proof/harness epsilon values are named as semantic constants and surfaced as `proofPolicyFacts`.
@@ -277,9 +281,10 @@ Why:
 
 Next concrete task:
 
-- Add a proof-only relocation / occupied-support exclusion candidate for the
-  probe-side lane. It must preserve complete support, change identity
-  bilaterally, and improve wrong/correct L0 on both sides before any render gate.
+- Derive a non-oracle relocation / placement rule that approximates the L0
+  oracle without CPU readback or proof pixels. It must preserve complete support,
+  keep occupied support at `0`, change identity bilaterally, and improve
+  wrong/correct L0 on both sides before any render gate.
 
 Promotion gate:
 
