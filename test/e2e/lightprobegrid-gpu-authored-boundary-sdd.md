@@ -9,8 +9,10 @@ Reframed.
 The authored receiver-boundary source seam is proven as a GPU-resident input
 path, but it is rejected as the residual fix. Support-set attribution now shows
 the receiver-side candidates still reuse the same probe identities and collapse
-under normalization. The next architecture step is bake/setup-side probe
-identity classification, still proof-only.
+under normalization. Setup-side classification is archived as left-only, and
+classification-only probe-side support is rejected after mixed L0 results. The
+current architecture step is a proof-only search for a non-oracle relocation /
+placement rule that can approximate the positive L0 oracle without CPU readback.
 
 ## Current Truth
 
@@ -401,25 +403,25 @@ Reject if:
 - the rule requires proof pixels, Cornell-specific coordinates, CPU readback, or
   a broad mode system.
 
-### Promotion Decision
+### Setup-Side Promotion Decision
 
-Promote nothing until all four gates pass. If Gate 1 or Gate 2 fails, archive
-the setup-side coefficient lead as negative evidence. If Gate 3 fails, keep the
-setup helper proof-scoped and move to probe-side classification or relocation.
-If Gate 4 fails, keep the math but reject the interface.
+Promote nothing from the setup-side lane. Gate 1 explains the neutral
+descriptor comparison, Gate 2 rejects improvement over default after normalized
+reconstruction, and Gate 3 archives setup-side classification as left-only. Gate
+4 remains a product-seam test only for a future accepted rule.
 
-## Later Lanes
+## Lane Status
 
-Only after the proof-only attribution shows a non-collapsing support change:
+- Setup-time ownership reshaping remains proof-scoped.
+- Probe-side classification is tested and rejected as classification-only after
+  mixed L0 results.
+- Probe-side relocation / placement is the active proof-only lane.
+- Visibility constants are already named as policy facts for drift control.
 
-- consider setup-time ownership reshaping;
-- consider probe-side classification;
-- consider relocation/classification as a separate product lane;
-- convert visibility constants into a named policy for drift control.
+None of these are part of the authored receiver-source seam until a rule passes
+Gate 5 and then survives a product-seam review.
 
-These are not part of the authored receiver-source seam.
-
-## Current Lane: Probe-Side Classification
+## Previous Lane: Probe-Side Classification
 
 After Gate 3 archived setup-side classification, the first probe-side candidate
 is proof-only default-overlap exclusion:
@@ -467,6 +469,62 @@ rejects classification-only candidates because the right side does not produce a
 wrong-side L0 win even after occupied-support exclusion. The next candidate must
 model a non-oracle relocation/placement rule before any render gate. The oracle
 proves the atlas contains useful support; it must not become runtime logic.
+
+## Current Lane: Non-Oracle Probe Placement Proxy
+
+The first non-oracle proxy uses only support geometry/state:
+
+```text
+rank non-occupied boundary probes by farthest distance from the receiver edge
+```
+
+Focused Cornell proof reports:
+
+- `relocationProxyVerdict =
+  proxy-fails-bilateral-l0-relocation-candidate`;
+- left support changes `8/8`, keeps occupied support at `0`, and improves
+  wrong/correct L0 from `0.8599` to `0.751` (`delta = -0.1089`);
+- right support changes `8/8`, keeps occupied support at `0`, but worsens
+  wrong/correct L0 from `0.5818` to `0.6881` (`delta = 0.1063`);
+- proxy supports are farther than the oracle supports
+  (`left classifiedMeanDistanceSq = 19.0068`, `right = 21.4541`).
+
+This rejects distance alone as the non-oracle placement rule. The next proxy
+must explain why the L0 oracle picks useful non-occupied boundary probes without
+ranking by packed-atlas L0. Candidate features should stay setup/geometric:
+region class, side ownership, occupancy, visibility/moment availability,
+distance bands, or authored placement metadata. Do not add render sweeps or
+proof-pixel tuning.
+
+### Gate 5: Non-Oracle Probe Placement Proxy
+
+Question:
+
+```text
+can setup-time placement metadata pick oracle-like non-occupied boundary probes
+without reading lighting?
+```
+
+Tasks:
+
+- compare the oracle-selected support against proxy-selected support with
+  compact identity hashes, distance bands, occupancy counts, and L0 facts;
+- add one new non-oracle ranking policy at a time;
+- require complete support and `classifiedOccupiedSupportCount = 0` on both
+  sides;
+- keep L0 readback as proof attribution only, never as candidate selection;
+- reject proxies that improve only one side or win by broad darkening.
+
+Accept if:
+
+- both sides change probe identity, keep complete non-occupied support, and
+  reduce wrong/correct L0 versus default.
+
+Reject if:
+
+- either side worsens, support is incomplete, occupied support reappears, or the
+  rule requires proof pixels, Cornell coordinates, CPU readback, or scalar/WebGL
+  truth.
 
 ## Policy Guards
 
