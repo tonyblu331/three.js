@@ -3,22 +3,33 @@ const hasNoFields = ( object, ...fields ) => fields.every( field => object[ fiel
 export async function runLightProbeGridGpuVisibilitySmokeAssertions( context ) {
 
 	const { call, assert, results } = context;
-	const sealedVisibilityWeightingDiagnostic = await runLightProbeGridGpuVisibilityBaseAssertions( {
-		call,
-		assert,
-		results
-	} );
 
-	runLightProbeGridGpuVisibilityReceiverAssertions( {
-		assert,
-		results,
-		sealedVisibilityWeightingDiagnostic
-	} );
-	await runLightProbeGridGpuVisibilityNormalAssertions( {
-		call,
-		assert,
-		results
-	} );
+	await call( 'setLeakReductionMode', 'normal' );
+
+	try {
+
+		const sealedVisibilityWeightingDiagnostic = await runLightProbeGridGpuVisibilityBaseAssertions( {
+			call,
+			assert,
+			results
+		} );
+
+		runLightProbeGridGpuVisibilityReceiverAssertions( {
+			assert,
+			results,
+			sealedVisibilityWeightingDiagnostic
+		} );
+		await runLightProbeGridGpuVisibilityNormalAssertions( {
+			call,
+			assert,
+			results
+		} );
+
+	} finally {
+
+		await call( 'setLeakReductionMode', 'off' );
+
+	}
 
 }
 
@@ -44,6 +55,11 @@ function assertReceiverProbeFacts( assert, diagnostic, label ) {
 const hasVisibilityMomentFacts = inspection =>
 	inspection.mode === 'moments' &&
 	inspection.available === true &&
+	inspection.active === true &&
+	inspection.runtimeActive === true &&
+	Number.isInteger( inspection.resolution ) &&
+	inspection.resolution > 0 &&
+	inspection.texturePresent === true &&
 	inspection.bytes > 0 &&
 	inspection.samples === undefined &&
 	inspection.stats.sampleCount > 0 &&
@@ -52,7 +68,6 @@ const hasVisibilityMomentFacts = inspection =>
 	hasNoFields( inspection, 'evidenceStatus', 'proofBoundary' ) &&
 	hasNoFields( inspection,
 		'encoding',
-		'resolution',
 		'moments',
 		'texture',
 		'hitConfidenceChannel',

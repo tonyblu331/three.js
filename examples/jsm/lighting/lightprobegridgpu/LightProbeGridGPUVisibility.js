@@ -152,7 +152,7 @@ export const lightProbeGridGPUReceiverLayerCompatibility = wgslFn( `
 
 export const createLightProbeGridGPUVisibilitySamplingState = ( {
 	visibility,
-	guardedVisibilityMode,
+	visibilityActive = false,
 	resolution,
 	receiverLayerMask: receiverLayerMaskOption,
 	receiverBoundaryLayerMask: receiverBoundaryLayerMaskOption,
@@ -162,7 +162,9 @@ export const createLightProbeGridGPUVisibilitySamplingState = ( {
 	safeNormalize
 } ) => {
 
-	const useGuardedVisibility = guardedVisibilityMode === 'guarded' && visibility.depthTarget !== null;
+	const useGuardedVisibility = visibilityActive === true &&
+		visibility.depthTarget !== null &&
+		visibility.depthMode === 'moments';
 	const visibilityLoad = useGuardedVisibility ? texture3D( visibility.depthTarget.texture ).setSampler( false ) : null;
 	const receiverLayerMask = resolveReceiverLayerMaskNode( receiverLayerMaskOption, defaultReceiverLayerMask );
 	const receiverBoundaryLayerMask = resolveReceiverLayerMaskNode( receiverBoundaryLayerMaskOption, receiverLayerMask );
@@ -196,6 +198,7 @@ export const createLightProbeGridGPUVisibilitySamplingState = ( {
 		} );
 
 	};
+
 	const loadVisibilityMoment = useGuardedVisibility ? ( coord, direction ) => {
 
 		const dir = safeNormalize( direction );
@@ -216,18 +219,15 @@ export const createLightProbeGridGPUVisibilitySamplingState = ( {
 export const getLightProbeGridGPUMomentVisibility = ( {
 	moment,
 	receiverDistance,
-	visibilityBias,
-	visibilityDepthWeighting
+	visibilityBias
 } ) => {
 
 	const variance = max( moment.y.sub( moment.x.mul( moment.x ) ), VISIBILITY_MIN_VARIANCE );
 	const delta = max( receiverDistance.sub( moment.x ).sub( visibilityBias ), 0 );
 	const chebyshev = variance.div( variance.add( delta.mul( delta ) ) );
 	const hitConfidence = moment.z.clamp( 0, 1 );
-	const momentVisibility = float( 1 ).sub( hitConfidence ).add( chebyshev.mul( hitConfidence ) ).clamp( 0, 1 );
-	const visibilityMix = visibilityDepthWeighting.clamp( 0, 1 );
 
-	return float( 1 ).sub( visibilityMix ).add( momentVisibility.mul( visibilityMix ) ).clamp( 0, 1 );
+	return float( 1 ).sub( hitConfidence ).add( chebyshev.mul( hitConfidence ) ).clamp( 0, 1 );
 
 };
 
@@ -260,6 +260,14 @@ export class LightProbeGridGPUVisibilityRuntime {
 	setEnabled( enabled ) {
 
 		this.enabled = enabled === true;
+
+	}
+
+	isMomentBacked() {
+
+		return this.enabled === true &&
+			this.depthTarget !== null &&
+			this.depthMode === 'moments';
 
 	}
 
@@ -379,11 +387,16 @@ export class LightProbeGridGPUVisibilityRuntime {
 
 	getDepthInfo( memory ) {
 
-		const available = this.depthTarget !== null && this.depthMode === 'moments';
+		const available = this.isMomentBacked();
+		const targetPresent = this.depthTarget !== null;
 
 		return {
 			available,
+			enabled: this.enabled,
+			targetPresent,
+			texturePresent: targetPresent === true && this.depthTarget.texture !== null && this.depthTarget.texture !== undefined,
 			mode: this.depthMode,
+			resolution: this.depthResolution,
 			bytes: available ? memory.visibilityDepthBytes : 0
 		};
 

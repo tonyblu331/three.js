@@ -9,12 +9,76 @@
 		<meta property="og:url" content="https://threejs.org/examples/webgpu_lightprobes_sponza.html">
 		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgpu_lightprobes_sponza.jpg">
 		<link type="text/css" rel="stylesheet" href="main.css">
+		<style>
+			#lightprobeControls {
+				position: fixed;
+				right: 20px;
+				bottom: 20px;
+				z-index: 2;
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				padding: 8px 10px;
+				border: 1px solid #dcdcd8;
+				border-radius: 999px;
+				background: #fcfcfa;
+				box-shadow: 0 14px 36px rgba(0, 0, 0, 0.14);
+				font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			}
+
+			#lightprobeControls[hidden] {
+				display: none;
+			}
+
+			#lightprobeControls::before {
+				width: 8px;
+				height: 8px;
+				border-radius: 50%;
+				background: #8a8a86;
+				content: "";
+			}
+
+			#lightprobeControls.is-active::before {
+				background: #2f7a5f;
+			}
+
+			#lightprobeToggle {
+				min-width: 104px;
+				height: 34px;
+				padding: 0 14px;
+				border: 1px solid #dcdcd8;
+				border-radius: 999px;
+				background: #ffffff;
+				color: #1a1a1a;
+				font: 600 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				cursor: pointer;
+			}
+
+			#lightprobeToggle:hover {
+				background: #f4f4f2;
+			}
+
+			#lightprobeToggle[aria-pressed="true"] {
+				border-color: #1a1a1a;
+				background: #1a1a1a;
+				color: #fcfcfa;
+			}
+
+			#lightprobeToggle:disabled {
+				cursor: wait;
+				opacity: 0.55;
+			}
+		</style>
 	</head>
 	<body>
 
 		<div id="info">
 			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - light probe volume (Sponza, ours)<br/>
 			WASD to move, mouse to look &middot; floating sphere = dynamic object lit by the probe grid
+		</div>
+
+		<div id="lightprobeControls" hidden>
+			<button id="lightprobeToggle" type="button" aria-pressed="false" disabled>Show probes</button>
 		</div>
 
 		<progress id="progressBar" value="0" max="100" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)"></progress>
@@ -39,9 +103,14 @@
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 			import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 			import { LightProbeGridGPU } from 'three/addons/lighting/LightProbeGridGPU.js';
+			import {
+				createLightProbeGridGPUPlacementAuthoring
+			} from 'three/addons/lighting/lightprobegridgpu/LightProbeGridGPUPlacementAuthoring.js';
 
 			const MODEL_INDEX_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/model-index.json';
 			const SAMPLE_ASSETS_BASE_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/';
+			const queryParams = new URLSearchParams( window.location.search );
+			const showProbeControls = queryParams.has( 'probeControls' );
 
 			let camera, scene, renderer, controls, timer;
 			let probes = null, probesHelper = null;
@@ -96,6 +165,8 @@
 				controls.lookSpeed = 0.16;
 
 				const progressBar = document.getElementById( 'progressBar' );
+				const lightprobeControls = document.getElementById( 'lightprobeControls' );
+				const lightprobeToggle = document.getElementById( 'lightprobeToggle' );
 
 				const manager = new THREE.LoadingManager();
 				manager.onProgress = function ( url, loaded, total ) {
@@ -166,7 +237,7 @@
 
 				const params = {
 					enabled: true,
-					showProbes: false,
+					showProbes: queryParams.has( 'showProbes' ),
 					probeSize: 0.25,
 					boundsX: - 0.5,
 					boundsY: 6,
@@ -184,6 +255,40 @@
 					shadows: true,
 					dynamicSphere: true
 				};
+				let showProbesController = null;
+
+				function syncLightProbeControls() {
+
+					if ( showProbeControls === false || ! lightprobeControls || ! lightprobeToggle ) return;
+
+					lightprobeControls.hidden = false;
+					lightprobeControls.classList.toggle( 'is-active', params.showProbes );
+					lightprobeToggle.disabled = probesHelper === null;
+					lightprobeToggle.setAttribute( 'aria-pressed', String( params.showProbes ) );
+					lightprobeToggle.textContent = params.showProbes ? 'Hide probes' : 'Show probes';
+
+				}
+
+				function setProbeHelperVisible( visible ) {
+
+					params.showProbes = visible === true;
+					if ( probesHelper ) probesHelper.visible = params.showProbes;
+					if ( showProbesController ) showProbesController.updateDisplay();
+					syncLightProbeControls();
+
+				}
+
+				if ( showProbeControls ) {
+
+					lightprobeControls.hidden = false;
+					lightprobeToggle.addEventListener( 'click', () => {
+
+						setProbeHelperVisible( ! params.showProbes );
+
+					} );
+					syncLightProbeControls();
+
+				}
 
 				// Demo: a dynamic object that travels through the probe volume. Unlike the
 				// static Sponza geometry it is NOT baked into the probes — it is lit at runtime
@@ -302,10 +407,12 @@
 								probesHelper = probes.createHelper();
 								probesHelper.visible = params.showProbes;
 								scene.add( probesHelper );
+								syncLightProbeControls();
 
 							} else {
 
 								probesHelper.visible = params.showProbes;
+								syncLightProbeControls();
 
 							}
 
@@ -408,9 +515,9 @@
 
 				} );
 
-				gui.add( params, 'showProbes' ).name( 'Show Probes' ).onChange( ( value ) => {
+				showProbesController = gui.add( params, 'showProbes' ).name( 'Show Probes' ).onChange( ( value ) => {
 
-					if ( probesHelper ) probesHelper.visible = value;
+					setProbeHelperVisible( value );
 
 				} );
 				gui.add( params, 'probeSize', 0.05, 2.0, 0.05 ).name( 'Probe Size' ).onChange( () => {
@@ -422,6 +529,7 @@
 						probesHelper = probes.createHelper();
 						probesHelper.visible = params.showProbes;
 						scene.add( probesHelper );
+						syncLightProbeControls();
 
 					}
 
@@ -455,7 +563,7 @@
 						getMetrics() {
 
 							const resolution = probes ? probes.resolution : null;
-							const probeCount = Number.isFinite( resolution ) ? resolution ** 3 : 0;
+							const probeCount = resolution ? resolution.x * resolution.y * resolution.z : 0;
 
 							return {
 								implementation: 'ours-sponza',
@@ -465,7 +573,7 @@
 								isLightProbeGrid: probes?.isLightProbeGrid === true,
 								hasTexture: probes?.texture !== null,
 								hasBoundingBox: probes?.boundingBox !== undefined,
-								resolution: Number.isFinite( resolution ) ? resolution : 0,
+								resolution: resolution ? [ resolution.x, resolution.y, resolution.z ] : [ 0, 0, 0 ],
 								size: probes ? [ params.sizeX, params.sizeY, params.sizeZ ] : [ 0, 0, 0 ],
 								position: probes ? [ params.boundsX, params.boundsY, params.boundsZ ] : [ 0, 0, 0 ],
 								probeCount
@@ -485,9 +593,9 @@
 
 								return {
 									index: [
-										probeIndex % resolution,
-										Math.floor( probeIndex / resolution ) % resolution,
-										Math.floor( probeIndex / ( resolution * resolution ) )
+										probeIndex % resolution.x,
+										Math.floor( probeIndex / resolution.x ) % resolution.y,
+										Math.floor( probeIndex / ( resolution.x * resolution.y ) )
 									],
 									position: [ sampleProbe.x, sampleProbe.y, sampleProbe.z ]
 								};
@@ -495,6 +603,74 @@
 							} );
 
 							return { samples };
+
+						},
+						inspectPlacementAuthoringUsageFacts() {
+
+							const resolution = probes.resolution;
+							const scalarResolution = resolution.x;
+							const createSupport = ( start, occupiedStart = false ) => Array.from( { length: 8 }, ( _, offset ) => ( {
+								probeIndex: start + offset,
+								occupied: occupiedStart === true && offset < 4
+							} ) );
+							const authoring = createLightProbeGridGPUPlacementAuthoring( {
+								min: probes.boundingBox.min,
+								max: probes.boundingBox.max,
+								resolution: scalarResolution,
+								defaultLayerMask: 1,
+								layerRules: [
+									{ id: 'left-boundary', side: 'left', boundaryLayerMask: 8 },
+									{ id: 'right-boundary', side: 'right', boundaryLayerMask: 16 }
+								],
+								occupancyPolicy: {
+									policyId: 'solid-occupancy-validity'
+								},
+								sourceSelectionPolicy: {
+									policyId: 'side-shell-local-cell-source-policy'
+								},
+								receiverRegions: [
+									{
+										id: 'left-receiver-region',
+										side: 'left',
+										boundaryLayerMask: 8,
+										targetSupport: createSupport( 0, true ),
+										sourceSupport: createSupport( 8 )
+									},
+									{
+										id: 'right-receiver-region',
+										side: 'right',
+										boundaryLayerMask: 16,
+										targetSupport: createSupport( 16, true ),
+										sourceSupport: createSupport( 24 )
+									}
+								]
+							} );
+
+							return {
+								attributionPolicy: 'sponza-product-placement-authoring-usage',
+								implementation: 'ours-sponza',
+								leakMetricStatus: 'not-applicable',
+								modulePath: 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUPlacementAuthoring.js',
+								policyId: authoring.placementFacts.policyId,
+								probeValidityLength: authoring.probeValidity.length,
+								probeLayerMasksLength: authoring.probeLayerMasks.length,
+								totalProbes: authoring.placementFacts.totalProbes,
+								receiverRegionCount: authoring.placementFacts.receiverRegionCount,
+								layerRuleCount: authoring.placementFacts.layerRuleCount,
+								acceptedSideCount: authoring.placementFacts.acceptedSideCount,
+								replacementSlotCount: authoring.placementFacts.replacementSlotCount,
+								occupiedReplacementSlotCount: authoring.placementFacts.occupiedReplacementSlotCount,
+								productHasProofOnlyFacts: authoring.placementFacts.proofBoundary !== undefined ||
+									authoring.placementFacts.placementHelperPolicyId !== undefined ||
+									authoring.placementFacts.sourceSelectionPolicyFacts.forbiddenInputs !== undefined,
+								sourceSelectionPolicyFacts: authoring.placementFacts.sourceSelectionPolicyFacts,
+								sideFacts: authoring.placementFacts.sideFacts,
+								placementAuthoringUsageVerdict: authoring.probeValidity.length === authoring.placementFacts.totalProbes &&
+									authoring.probeLayerMasks.length === authoring.placementFacts.totalProbes &&
+									authoring.placementFacts.acceptedSideCount === 2 ?
+									'sponza-product-placement-authoring-usage-ready' :
+									'sponza-product-placement-authoring-usage-incomplete'
+							};
 
 						},
 						async rebake() {
@@ -514,8 +690,7 @@
 
 							if ( options.showProbes !== undefined ) {
 
-								params.showProbes = options.showProbes === true;
-								if ( probesHelper ) probesHelper.visible = params.showProbes;
+								setProbeHelperVisible( options.showProbes === true );
 
 							}
 

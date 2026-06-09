@@ -22,11 +22,15 @@ const hasBenchmarkMemoryFacts = benchmark =>
 
 const hasBenchmarkVisibilityDepthFacts = benchmark =>
 	benchmark.visibilityDepth?.available === true &&
+	benchmark.visibilityDepth?.active === true &&
+	benchmark.visibilityDepth?.runtimeActive === true &&
 	benchmark.visibilityDepth?.mode === 'moments' &&
+	Number.isInteger( benchmark.visibilityDepth?.resolution ) &&
+	benchmark.visibilityDepth?.resolution > 0 &&
+	benchmark.visibilityDepth?.texturePresent === true &&
 	benchmark.visibilityDepth?.bytes > 0 &&
 	hasNoFields( benchmark.visibilityDepth,
 		'encoding',
-		'resolution',
 		'moments',
 		'texture',
 		'samples',
@@ -67,16 +71,18 @@ export async function runLightProbeGridGpuRuntimeSmokeAssertions( context ) {
 	await startOperation( 'setLeakReductionMode', 'off' );
 	await waitUntilReady( 'leak reduction off' );
 	const leakOffMetrics = await capture( 'leak reduction off' );
-	assert( leakOffMetrics.sampling.leakReductionMode === 'off',
-		'leak setter: expected off sampling mode.' );
+	assert( leakOffMetrics.sampling.quality === 'fast' &&
+		leakOffMetrics.sampling.leakReductionMode === 'off',
+	'leak setter: expected off sampling mode to map to fast quality.' );
 	assert( leakOffMetrics.sampling.weightedProbeSampling === false,
 		'leak setter: expected off mode to disable weighted sampling.' );
 
 	await startOperation( 'setLeakReductionMode', 'normal' );
 	await waitUntilReady( 'leak reduction normal' );
 	const leakNormalMetrics = await capture( 'leak reduction normal' );
-	assert( leakNormalMetrics.sampling.leakReductionMode === 'normal',
-		'leak setter: expected normal sampling mode.' );
+	assert( leakNormalMetrics.sampling.quality === 'guarded' &&
+		leakNormalMetrics.sampling.leakReductionMode === 'normal',
+	'leak setter: expected normal sampling mode to map to guarded quality.' );
 	assert( leakNormalMetrics.sampling.weightedProbeSampling === true,
 		'leak setter: expected normal mode to enable weighted sampling.' );
 

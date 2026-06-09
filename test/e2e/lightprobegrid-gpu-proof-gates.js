@@ -7,7 +7,10 @@ export function isMomentBackedVisibility( info ) {
 
 	return !! info &&
 		info.available === true &&
+		info.active === true &&
+		info.runtimeActive === true &&
 		info.mode === 'moments' &&
+		info.texturePresent === true &&
 		info.bytes > 0 &&
 		info.stats &&
 		info.stats.finiteSampleCount > 0 &&

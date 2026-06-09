@@ -28,6 +28,35 @@ const hasProbeOccupancyFacts = probeOccupancy =>
 	hasProbeClassificationFacts( probeOccupancy ) &&
 	hasNoFields( probeOccupancy, 'occupiedProbes' );
 
+const hasProofReceiverScaffoldFacts = scaffold =>
+	scaffold?.policyId === 'lightprobegridgpu-proof-receiver-same-estimator-scaffold' &&
+	scaffold.moduleScope === 'test/e2e' &&
+	scaffold.productionRuntimeScope === false &&
+	scaffold.estimatorContract === 'production-guarded-or-shared-proof-equivalent' &&
+	scaffold.cpuReadbackRole === 'io-only-not-truth' &&
+	scaffold.receiverStructPresent === true &&
+	scaffold.receiverResultStructPresent === true &&
+	scaffold.receiverStrideLanes === 16 &&
+	scaffold.resultStrideLanes === 16 &&
+	scaffold.bufferFactoryPresent === true &&
+	scaffold.bufferScaffold?.receiverCount === 1 &&
+	scaffold.bufferScaffold?.receiverStrideLanes === 16 &&
+	scaffold.bufferScaffold?.resultStrideLanes === 16 &&
+	scaffold.bufferScaffold?.receiverBytes === 64 &&
+	scaffold.bufferScaffold?.resultBytes === 64 &&
+	scaffold.bufferScaffold?.receiverStorageBuffer === true &&
+	scaffold.bufferScaffold?.resultStorageBuffer === true &&
+	scaffold.implemented === false &&
+	scaffold.requiredResultFields.includes( 'fastIndirect' ) &&
+	scaffold.requiredResultFields.includes( 'guardedIndirect' ) &&
+	scaffold.requiredResultFields.includes( 'visibilityMass' ) &&
+	scaffold.requiredResultFields.includes( 'invalidContribution' ) &&
+	scaffold.requiredResultFields.includes( 'layerRejectedContribution' ) &&
+	scaffold.requiredResultFields.includes( 'momentVsScalarDelta' ) &&
+	scaffold.requiredSummaryFields.includes( 'sceneLinearIndirectAgreement' ) &&
+	scaffold.requiredSummaryFields.includes( 'wrongSideLeakRatio' ) &&
+	scaffold.requiredSummaryFields.includes( 'correctBouncePreservation' );
+
 const hasProofPolicyFacts = policy =>
 	policy !== undefined &&
 	policy.policyId === 'lightprobegridgpu-proof-harness-semantic-epsilons' &&
@@ -39,6 +68,7 @@ const hasProofPolicyFacts = policy =>
 	policy.computeParityContractTolerance === 0.0001 &&
 	policy.layerCompatibilityDeltaEpsilon === 0.001 &&
 	policy.debugRatioDeltaEpsilon === 0.001 &&
+	hasProofReceiverScaffoldFacts( policy.proofReceiverScaffold ) &&
 	hasNoFields( policy, 'epsilon', 'threshold', 'tolerance' );
 
 const hasLeakProofFixtureFacts = leakProofFacts =>
@@ -57,6 +87,35 @@ const hasLeakProofFixtureFacts = leakProofFacts =>
 	leakProofFacts.proofSettings.lightingMode === 'probes only' &&
 	leakProofFacts.proofSettings.materialType === 'standard' &&
 	hasNoFields( leakProofFacts, 'receiverRegionMetricMode', 'preToneMetricMode', 'proofBoundary', 'sealedWall' );
+
+const hasReceiverFixtureEndpointFacts = endpoint =>
+	endpoint !== undefined &&
+	(
+		endpoint.role === 'left' ||
+		endpoint.role === 'right'
+	) &&
+	Array.isArray( endpoint.position ) &&
+	endpoint.position.length === 3 &&
+	endpoint.position.every( Number.isFinite );
+
+const hasSealedOffsetWallFixtureAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'second-sealed-fixture-family-activation' &&
+	attribution.proofBoundary === 'fixture-family-activation-only' &&
+	attribution.fixtureId === 'sealed-offset-wall' &&
+	attribution.fixtureFamily === 'sealed-offset-wall' &&
+	attribution.activeDivider === 'sealed-offset-wall' &&
+	attribution.dividerAxis === 'z' &&
+	Number.isFinite( attribution.dividerOffset ) &&
+	hasReceiverFixtureEndpointFacts( attribution.leftReceiver ) &&
+	hasReceiverFixtureEndpointFacts( attribution.rightReceiver ) &&
+	attribution.leftReceiver.role === 'left' &&
+	attribution.rightReceiver.role === 'right' &&
+	Number.isInteger( attribution.visibleMeshCount ) &&
+	attribution.visibleMeshCount > 0 &&
+	attribution.offsetVisible === true &&
+	attribution.fixtureActivationVerdict === 'sealed-offset-wall-fixture-activates' &&
+	hasNoFields( attribution, 'rows', 'samples', 'leakProof', 'verdict', 'supported' );
 
 const hasReceiverBoundarySourceFacts = leakProofFacts => {
 
@@ -459,6 +518,21 @@ const hasSetupSideDescriptorHash = value =>
 	typeof value === 'string' &&
 	/^fnv1a32:[0-9a-f]{8}$/.test( value );
 
+const hasSetupSideGridCoordSummaryFacts = summary =>
+	summary !== undefined &&
+	Number.isFinite( summary.meanX ) &&
+	Number.isFinite( summary.meanY ) &&
+	Number.isFinite( summary.meanZ ) &&
+	Number.isInteger( summary.minX ) &&
+	Number.isInteger( summary.minY ) &&
+	Number.isInteger( summary.minZ ) &&
+	Number.isInteger( summary.maxX ) &&
+	Number.isInteger( summary.maxY ) &&
+	Number.isInteger( summary.maxZ ) &&
+	summary.minX <= summary.maxX &&
+	summary.minY <= summary.maxY &&
+	summary.minZ <= summary.maxZ;
+
 const hasSetupSideDescriptorFacts = ( descriptor, role ) =>
 	descriptor !== undefined &&
 	descriptor.descriptorRole === role &&
@@ -512,6 +586,10 @@ const hasSetupSideSupportRankFacts = side =>
 	hasSetupSideDescriptorHash( side.classifiedSupportIdentityHash ) &&
 	hasSetupSideDescriptorHash( side.defaultSupportLayerMaskHash ) &&
 	hasSetupSideDescriptorHash( side.classifiedSupportLayerMaskHash ) &&
+	hasSetupSideDescriptorHash( side.defaultSupportGridCoordHash ) &&
+	hasSetupSideDescriptorHash( side.classifiedSupportGridCoordHash ) &&
+	hasSetupSideGridCoordSummaryFacts( side.defaultSupportGridCoordSummary ) &&
+	hasSetupSideGridCoordSummaryFacts( side.classifiedSupportGridCoordSummary ) &&
 	side.supportHashPolicy === 'ordered-probe-index-fnv1a32' &&
 	Number.isInteger( side.identityChangeCount ) &&
 	Number.isFinite( side.identityChangeRatio ) &&
@@ -647,24 +725,24 @@ const hasProbeSideRelocationOracleAttributionFacts = attribution =>
 	) &&
 	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
 
-const hasProbeSideRelocationProxySideFacts = side =>
+const hasProbeSideRelocationProxySideFacts = ( side, relocationRankingPolicy ) =>
 	hasSetupSideSupportRankFacts( side ) &&
 	Number.isInteger( side.relocationCandidatePoolCount ) &&
 	side.relocationCandidatePoolCount >= side.classifiedCandidateCount &&
-	side.relocationRankingPolicy === 'non-occupied-boundary-probe-farthest-from-receiver-edge' &&
+	side.relocationRankingPolicy === relocationRankingPolicy &&
 	hasSetupSideCoefficientComparisonFacts( side.coefficientComparison );
 
-const hasProbeSideRelocationProxyAttributionFacts = attribution =>
+const hasProbeSideRelocationProxyAttributionFacts = ( attribution, options ) =>
 	attribution !== undefined &&
-	attribution.attributionPolicy === 'probe-side-relocation-distance-proxy' &&
+	attribution.attributionPolicy === options.attributionPolicy &&
 	attribution.proofBoundary === 'cpu-support-rank-and-l0-attribution-only' &&
 	attribution.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
-	attribution.candidateShape === 'non-occupied-boundary-probe-distance-ranked-relocation-proxy' &&
+	attribution.candidateShape === options.candidateShape &&
 	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
 	attribution.leftBoundaryLayerMask === 8 &&
 	attribution.rightBoundaryLayerMask === 16 &&
-	hasProbeSideRelocationProxySideFacts( attribution.left ) &&
-	hasProbeSideRelocationProxySideFacts( attribution.right ) &&
+	hasProbeSideRelocationProxySideFacts( attribution.left, options.relocationRankingPolicy ) &&
+	hasProbeSideRelocationProxySideFacts( attribution.right, options.relocationRankingPolicy ) &&
 	attribution.left.side === 'left' &&
 	attribution.right.side === 'right' &&
 	(
@@ -672,6 +750,324 @@ const hasProbeSideRelocationProxyAttributionFacts = attribution =>
 		attribution.relocationProxyVerdict === 'proxy-fails-bilateral-l0-relocation-candidate'
 	) &&
 	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasProbeSideRelocationDistanceProxyAttributionFacts = attribution =>
+	hasProbeSideRelocationProxyAttributionFacts( attribution, {
+		attributionPolicy: 'probe-side-relocation-distance-proxy',
+		candidateShape: 'non-occupied-boundary-probe-distance-ranked-relocation-proxy',
+		relocationRankingPolicy: 'non-occupied-boundary-probe-farthest-from-receiver-edge'
+	} );
+
+const hasProbeSideRelocationDividerProxyAttributionFacts = attribution =>
+	hasProbeSideRelocationProxyAttributionFacts( attribution, {
+		attributionPolicy: 'probe-side-relocation-divider-proxy',
+		candidateShape: 'non-occupied-boundary-probe-divider-ranked-relocation-proxy',
+		relocationRankingPolicy: 'non-occupied-boundary-probe-closest-to-divider-then-nearest-receiver'
+	} );
+
+const hasProbeSideRelocationVisibilityProxySideFacts = side =>
+	hasProbeSideRelocationProxySideFacts(
+		side,
+		'non-occupied-boundary-probe-highest-moment-visibility-to-receiver'
+	) &&
+	Number.isFinite( side.classifiedMeanVisibilityEstimate );
+
+const hasProbeSideRelocationVisibilityProxyAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-visibility-proxy' &&
+	attribution.proofBoundary === 'cpu-visibility-moment-rank-and-l0-attribution-only' &&
+	attribution.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
+	attribution.candidateShape === 'non-occupied-boundary-probe-visibility-ranked-relocation-proxy' &&
+	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasProbeSideRelocationVisibilityProxySideFacts( attribution.left ) &&
+	hasProbeSideRelocationVisibilityProxySideFacts( attribution.right ) &&
+	attribution.left.side === 'left' &&
+	attribution.right.side === 'right' &&
+	(
+		attribution.relocationProxyVerdict === 'proxy-finds-bilateral-l0-relocation-candidate' ||
+		attribution.relocationProxyVerdict === 'proxy-fails-bilateral-l0-relocation-candidate'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasProbeSideRelocationSideShellProxyAttributionFacts = attribution =>
+	hasProbeSideRelocationProxyAttributionFacts( attribution, {
+		attributionPolicy: 'probe-side-relocation-side-shell-proxy',
+		candidateShape: 'non-occupied-boundary-probe-side-shell-ranked-relocation-proxy',
+		relocationRankingPolicy: 'non-occupied-boundary-probe-interior-side-shell-then-nearest-receiver'
+	} );
+
+const hasGridCoordFacts = coord =>
+	coord !== undefined &&
+	Number.isFinite( coord.x ) &&
+	Number.isFinite( coord.y ) &&
+	Number.isFinite( coord.z );
+
+const hasIntegerGridCoordFacts = coord =>
+	coord !== undefined &&
+	Number.isInteger( coord.x ) &&
+	Number.isInteger( coord.y ) &&
+	Number.isInteger( coord.z );
+
+const hasSideShellLocalCellReachabilitySideFacts = side =>
+	side !== undefined &&
+	(
+		side.side === 'left' ||
+		side.side === 'right'
+	) &&
+	Number.isInteger( side.boundaryLayerMask ) &&
+	side.samplePointPolicy === 'receiver-edge-plus-normal-view-bias' &&
+	Number.isFinite( side.normalBias ) &&
+	Number.isFinite( side.viewBias ) &&
+	hasGridCoordFacts( side.probeCoord ) &&
+	hasIntegerGridCoordFacts( side.baseCoord ) &&
+	hasSetupSideDescriptorHash( side.localCellSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.localCellSupportGridCoordHash ) &&
+	hasSetupSideGridCoordSummaryFacts( side.localCellSupportGridCoordSummary ) &&
+	hasSetupSideDescriptorHash( side.sideShellSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.sideShellSupportGridCoordHash ) &&
+	hasSetupSideGridCoordSummaryFacts( side.sideShellSupportGridCoordSummary ) &&
+	Number.isInteger( side.localCellOverlapCount ) &&
+	side.localCellOverlapCount >= 0 &&
+	side.localCellOverlapCount <= 8 &&
+	Number.isFinite( side.localCellOverlapRatio ) &&
+	(
+		side.reachabilityVerdict === 'side-shell-support-fully-reachable-by-local-cell' ||
+		side.reachabilityVerdict === 'side-shell-support-partially-reachable-by-local-cell' ||
+		side.reachabilityVerdict === 'side-shell-support-not-reachable-by-local-cell'
+	);
+
+const hasSideShellLocalCellReachabilityAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-side-shell-local-cell-reachability' &&
+	attribution.proofBoundary === 'cpu-local-cell-support-overlap-only' &&
+	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasSideShellLocalCellReachabilitySideFacts( attribution.left ) &&
+	hasSideShellLocalCellReachabilitySideFacts( attribution.right ) &&
+	(
+		attribution.localCellReachabilityVerdict === 'side-shell-support-reachable-by-local-reconstruction-cell' ||
+		attribution.localCellReachabilityVerdict === 'side-shell-support-needs-true-local-cell-relocation'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasLocalCellRelocationCandidateSideFacts = side =>
+	hasSetupSideSupportRankFacts( side ) &&
+	side.samplePointPolicy === 'receiver-edge-plus-normal-view-bias' &&
+	Number.isFinite( side.normalBias ) &&
+	Number.isFinite( side.viewBias ) &&
+	hasGridCoordFacts( side.probeCoord ) &&
+	hasIntegerGridCoordFacts( side.baseCoord ) &&
+	side.relocationRankingPolicy === 'reachable-local-cell-support' &&
+	hasSetupSideCoefficientComparisonFacts( side.coefficientComparison );
+
+const hasLocalCellRelocationCandidateAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-local-cell-candidate' &&
+	attribution.proofBoundary === 'cpu-local-cell-support-and-l0-attribution-only' &&
+	attribution.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
+	attribution.candidateShape === 'reachable-local-cell-support-candidate' &&
+	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasLocalCellRelocationCandidateSideFacts( attribution.left ) &&
+	hasLocalCellRelocationCandidateSideFacts( attribution.right ) &&
+	(
+		attribution.localCellCandidateVerdict === 'local-cell-support-has-bilateral-l0-win' ||
+		attribution.localCellCandidateVerdict === 'local-cell-support-needs-physical-placement-relocation'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasPhysicalPlacementRequirementSideFacts = side =>
+	side !== undefined &&
+	(
+		side.side === 'left' ||
+		side.side === 'right'
+	) &&
+	Number.isInteger( side.boundaryLayerMask ) &&
+	side.samplePointPolicy === 'receiver-edge-plus-normal-view-bias' &&
+	Number.isFinite( side.normalBias ) &&
+	Number.isFinite( side.viewBias ) &&
+	hasGridCoordFacts( side.targetProbeCoord ) &&
+	hasIntegerGridCoordFacts( side.targetBaseCoord ) &&
+	hasSetupSideDescriptorHash( side.targetSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.targetSupportGridCoordHash ) &&
+	hasSetupSideGridCoordSummaryFacts( side.targetSupportGridCoordSummary ) &&
+	hasSetupSideDescriptorHash( side.sourceSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.sourceSupportGridCoordHash ) &&
+	hasSetupSideGridCoordSummaryFacts( side.sourceSupportGridCoordSummary ) &&
+	Number.isInteger( side.overlapCount ) &&
+	Number.isInteger( side.replacementSlotCount ) &&
+	Number.isInteger( side.occupiedReplacementSlotCount ) &&
+	Number.isInteger( side.sourceOutsideLocalCellCount ) &&
+	Number.isInteger( side.targetOccupiedSupportCount ) &&
+	Number.isInteger( side.sourceOccupiedSupportCount ) &&
+	side.overlapCount >= 0 &&
+	side.overlapCount <= 8 &&
+	side.replacementSlotCount >= 0 &&
+	side.replacementSlotCount <= 8 &&
+	side.occupiedReplacementSlotCount >= 0 &&
+	side.occupiedReplacementSlotCount <= side.replacementSlotCount &&
+	side.sourceOutsideLocalCellCount >= 0 &&
+	side.sourceOutsideLocalCellCount <= 8 &&
+	hasSetupSideCoefficientComparisonFacts( side.targetCoefficientComparison ) &&
+	hasSetupSideCoefficientComparisonFacts( side.sourceCoefficientComparison ) &&
+	(
+		side.placementRequirementVerdict === 'physical-placement-can-transplant-side-owned-l0-into-local-cell' ||
+		side.placementRequirementVerdict === 'physical-placement-source-does-not-prove-local-cell-benefit'
+	);
+
+const hasPhysicalPlacementRequirementAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-physical-placement-requirement' &&
+	attribution.proofBoundary === 'cpu-placement-requirement-and-l0-attribution-only' &&
+	attribution.coefficientPolicy === 'packed-atlas-l0-support-mean' &&
+	attribution.candidateShape === 'transplant-side-shell-support-into-reachable-local-cell' &&
+	attribution.receiverPointPolicy === 'world-bounds-near-divider-edge' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasPhysicalPlacementRequirementSideFacts( attribution.left ) &&
+	hasPhysicalPlacementRequirementSideFacts( attribution.right ) &&
+	(
+		attribution.physicalPlacementRequirementVerdict === 'physical-local-cell-placement-required-and-l0-supported' ||
+		attribution.physicalPlacementRequirementVerdict === 'physical-local-cell-placement-requirement-not-proven'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasLocalCellPlacementHelperSideFacts = side =>
+	side !== undefined &&
+	(
+		side.side === 'left' ||
+		side.side === 'right'
+	) &&
+	Number.isInteger( side.boundaryLayerMask ) &&
+	side.placementPolicyId === 'local-cell-placement-policy' &&
+	hasSetupSideDescriptorHash( side.targetSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.targetSupportGridCoordHash ) &&
+	hasSetupSideDescriptorHash( side.sourceSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.sourceSupportGridCoordHash ) &&
+	side.targetSupportSize === 8 &&
+	side.sourceSupportSize === 8 &&
+	Number.isInteger( side.overlapCount ) &&
+	Number.isInteger( side.replacementSlotCount ) &&
+	Number.isInteger( side.occupiedReplacementSlotCount ) &&
+	Number.isInteger( side.sourceOutsideLocalCellCount ) &&
+	Number.isInteger( side.targetOccupiedSupportCount ) &&
+	Number.isInteger( side.sourceOccupiedSupportCount ) &&
+	side.overlapCount >= 0 &&
+	side.overlapCount <= 8 &&
+	side.replacementSlotCount >= 0 &&
+	side.replacementSlotCount <= 8 &&
+	side.occupiedReplacementSlotCount >= 0 &&
+	side.occupiedReplacementSlotCount <= side.replacementSlotCount &&
+	(
+		side.placementPolicyVerdict === 'side-passes-local-cell-placement-policy' ||
+		side.placementPolicyVerdict === 'side-fails-local-cell-placement-policy'
+	);
+
+const hasLocalCellPlacementPolicyFacts = policy =>
+	policy !== undefined &&
+	policy.policyId === 'local-cell-placement-policy' &&
+	policy.requiredTargetSupportSize === 8 &&
+	policy.requiredSourceSupportSize === 8 &&
+	policy.minReplacementSlotCount === 1 &&
+	policy.minOccupiedReplacementSlotCount === 1 &&
+	policy.maxSourceOccupiedSupportCount === 0;
+
+const hasLocalCellPlacementHelperAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-local-cell-placement-helper' &&
+	attribution.proofBoundary === 'setup-helper-array-generation-only' &&
+	attribution.helperPolicyId === 'local-cell-placement' &&
+	hasLocalCellPlacementPolicyFacts( attribution.placementPolicyFacts ) &&
+	attribution.totalProbes === 64 &&
+	attribution.acceptedSideCount === 2 &&
+	attribution.probeValidityLength === attribution.totalProbes &&
+	attribution.probeLayerMasksLength === attribution.totalProbes &&
+	Number.isInteger( attribution.replacementSlotCount ) &&
+	Number.isInteger( attribution.occupiedReplacementSlotCount ) &&
+	Array.isArray( attribution.sideFacts ) &&
+	attribution.sideFacts.length === 2 &&
+	attribution.sideFacts.every( hasLocalCellPlacementHelperSideFacts ) &&
+	(
+		attribution.placementHelperVerdict === 'helper-emits-local-cell-placement-arrays' ||
+		attribution.placementHelperVerdict === 'helper-has-no-local-cell-placement-work'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasSealedOffsetWallPlacementHelperAttributionFacts = attribution =>
+	hasLocalCellPlacementHelperAttributionFacts( attribution ) &&
+	attribution.fixtureId === 'sealed-offset-wall' &&
+	attribution.fixtureFamily === 'sealed-offset-wall';
+
+const hasPlacementAuthoringSourceSelectionPolicyFacts = policy =>
+	policy !== undefined &&
+	policy.policyId === 'side-shell-local-cell-source-policy' &&
+	policy.ranking === 'side-shell-topology-then-receiver-distance' &&
+	policy.forbiddenInputs === undefined;
+
+const hasPlacementAuthoringAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'placement-authoring-product-module' &&
+	attribution.modulePath === 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUPlacementAuthoring.js' &&
+	attribution.authoringPolicyId === 'placement-authoring' &&
+	hasLocalCellPlacementPolicyFacts( attribution.placementPolicyFacts ) &&
+	hasPlacementAuthoringSourceSelectionPolicyFacts( attribution.sourceSelectionPolicyFacts ) &&
+	attribution.totalProbes === 64 &&
+	attribution.receiverRegionCount === 2 &&
+	attribution.layerRuleCount === 2 &&
+	attribution.occupancyPolicyId === 'solid-occupancy-validity' &&
+	attribution.acceptedSideCount === 2 &&
+	attribution.probeValidityLength === attribution.totalProbes &&
+	attribution.probeLayerMasksLength === attribution.totalProbes &&
+	Number.isInteger( attribution.replacementSlotCount ) &&
+	Number.isInteger( attribution.occupiedReplacementSlotCount ) &&
+	Array.isArray( attribution.sideFacts ) &&
+	attribution.sideFacts.length === 2 &&
+	attribution.sideFacts.every( hasLocalCellPlacementHelperSideFacts ) &&
+	attribution.productHasProofOnlyFacts === false &&
+	(
+		attribution.placementAuthoringVerdict === 'placement-authoring-product-module-emits-arrays' ||
+		attribution.placementAuthoringVerdict === 'placement-authoring-has-no-local-cell-placement-work'
+	) &&
+	hasNoFields( attribution, 'proofBoundary', 'placementHelperPolicyId', 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
+
+const hasSealedOffsetWallPlacementAuthoringAttributionFacts = attribution =>
+	hasPlacementAuthoringAttributionFacts( attribution ) &&
+	attribution.fixtureId === 'sealed-offset-wall' &&
+	attribution.fixtureFamily === 'sealed-offset-wall';
+
+const hasPlacementAuthoringParitySideHashFacts = side =>
+	side !== undefined &&
+	(
+		side.side === 'left' ||
+		side.side === 'right'
+	) &&
+	hasSetupSideDescriptorHash( side.targetSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( side.sourceSupportIdentityHash ) &&
+	Number.isInteger( side.replacementSlotCount ) &&
+	Number.isInteger( side.occupiedReplacementSlotCount );
+
+const hasPlacementAuthoringParityAttributionFacts = ( attribution, fixtureId ) =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'placement-authoring-helper-parity' &&
+	attribution.proofBoundary === 'compact-authoring-adapter-helper-fact-parity' &&
+	attribution.fixtureId === fixtureId &&
+	attribution.helperPolicyId === 'local-cell-placement' &&
+	attribution.authoringPolicyId === 'placement-authoring' &&
+	attribution.placementPolicyFactsMatch === true &&
+	attribution.summaryCountsMatch === true &&
+	attribution.sideFactsMatch === true &&
+	Array.isArray( attribution.helperSideHashes ) &&
+	attribution.helperSideHashes.length === 2 &&
+	attribution.helperSideHashes.every( hasPlacementAuthoringParitySideHashFacts ) &&
+	Array.isArray( attribution.authoringSideHashes ) &&
+	attribution.authoringSideHashes.length === 2 &&
+	attribution.authoringSideHashes.every( hasPlacementAuthoringParitySideHashFacts ) &&
+	attribution.placementAuthoringParityVerdict === 'placement-authoring-matches-helper-facts' &&
+	hasNoFields( attribution, 'placementHelperPolicyId', 'rows', 'samples', 'neighbors', 'probes', 'verdict', 'supported' );
 
 const hasSetupSideCoefficientProofDependencyFacts = proof =>
 	proof !== undefined &&
@@ -856,6 +1252,148 @@ const hasSetupSideClassificationIrradianceDeltaFacts = attribution =>
 	) &&
 	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'neighborAttribution' );
 
+const hasSideShellIrradianceDeltaFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-side-shell-final-irradiance-delta' &&
+	attribution.proofBoundary === 'debug-node-side-shell-mask-delta-only' &&
+	attribution.debugMode === 'finalIrradiance' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	hasSetupSideDescriptorHash( attribution.leftSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( attribution.rightSupportIdentityHash ) &&
+	hasSetupSideDescriptorHash( attribution.leftSupportGridCoordHash ) &&
+	hasSetupSideDescriptorHash( attribution.rightSupportGridCoordHash ) &&
+	hasSetupSideIrradianceMeanFacts( attribution.unclassifiedDefault ) &&
+	hasSetupSideIrradianceMeanFacts( attribution.sideShellBoundary ) &&
+	hasSetupSideIrradianceRatioFacts( attribution.sideShellToUnclassifiedDefault ) &&
+	(
+		attribution.sideShellIrradianceDeltaVerdict === 'side-shell-improves-final-irradiance-over-default' ||
+		attribution.sideShellIrradianceDeltaVerdict === 'side-shell-support-not-reached-by-final-irradiance-debug-node' ||
+		attribution.sideShellIrradianceDeltaVerdict === 'side-shell-does-not-change-final-irradiance-debug-signal'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'neighborAttribution' );
+
+const hasLocalCellPlacementIrradianceDeltaFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-local-cell-placement-final-irradiance-delta' &&
+	attribution.proofBoundary === 'debug-node-local-cell-placement-array-delta-only' &&
+	attribution.debugMode === 'finalIrradiance' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	attribution.helperPolicyId === 'local-cell-placement' &&
+	Number.isInteger( attribution.replacementSlotCount ) &&
+	Number.isInteger( attribution.occupiedReplacementSlotCount ) &&
+	hasSetupSideIrradianceMeanFacts( attribution.unclassifiedDefault ) &&
+	hasSetupSideIrradianceMeanFacts( attribution.placementBoundary ) &&
+	hasSetupSideIrradianceRatioFacts( attribution.placementToUnclassifiedDefault ) &&
+	(
+		attribution.placementIrradianceDeltaVerdict === 'placement-helper-arrays-not-reached-by-final-irradiance-debug-node' ||
+		attribution.placementIrradianceDeltaVerdict === 'placement-helper-arrays-improve-final-irradiance-over-default' ||
+		attribution.placementIrradianceDeltaVerdict === 'placement-helper-arrays-do-not-change-final-irradiance-debug-signal'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'neighborAttribution' );
+
+const hasLocalCellPlacementRenderStateFacts = state =>
+	state !== undefined &&
+	state.attributionPolicy === 'probe-side-relocation-local-cell-placement-render-state' &&
+	state.proofBoundary === 'rendered-ratio-attribution-only' &&
+	state.leftBoundaryLayerMask === 8 &&
+	state.rightBoundaryLayerMask === 16 &&
+	(
+		state.receiverBoundaryMode === 'select' ||
+		state.receiverBoundaryMode === 'blend'
+	) &&
+	typeof state.rawBoundaryWeight === 'boolean' &&
+	Number.isFinite( state.maskedWrongSideColorRatio ) &&
+	Number.isFinite( state.maskedVisiblePixelCount ) &&
+	Number.isFinite( state.maskedVisiblePixelRatio ) &&
+	Number.isFinite( state.maskedLeftVisiblePixelCount ) &&
+	Number.isFinite( state.maskedRightVisiblePixelCount ) &&
+	Number.isFinite( state.leftMaskedWrongSideColorRatio ) &&
+	Number.isFinite( state.rightMaskedWrongSideColorRatio ) &&
+	Number.isFinite( state.preToneMaskedWrongSideColorRatio ) &&
+	Number.isFinite( state.preToneMaskedVisiblePixelCount ) &&
+	Number.isFinite( state.preToneMaskedVisiblePixelRatio ) &&
+	Number.isFinite( state.preToneMaskedLeftVisiblePixelCount ) &&
+	Number.isFinite( state.preToneMaskedRightVisiblePixelCount ) &&
+	Number.isFinite( state.preToneMaskedCorrectBounceRatio ) &&
+	Number.isFinite( state.leftMaskedCorrectBounceRatio ) &&
+	Number.isFinite( state.rightMaskedCorrectBounceRatio ) &&
+	Number.isFinite( state.correctBounceRatio ) &&
+	hasNoFields( state, 'rows', 'samples', 'neighbors', 'neighborAttribution' );
+
+const hasLocalCellPlacementRenderRatioFacts = ratio =>
+	ratio !== undefined &&
+	Number.isFinite( ratio.maskedWrongSideColorRatio ) &&
+	Number.isFinite( ratio.leftMaskedWrongSideColorRatio ) &&
+	Number.isFinite( ratio.rightMaskedWrongSideColorRatio ) &&
+	Number.isFinite( ratio.preToneMaskedWrongSideColorRatio ) &&
+	Number.isFinite( ratio.correctBounceRatio );
+
+const hasRightSidePlacementRegressionAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'right-side-placement-render-regression-attribution' &&
+	attribution.proofBoundary === 'rendered-ratio-side-delta-only' &&
+	(
+		attribution.fixtureId === 'sealed-wall' ||
+		attribution.fixtureId === 'sealed-offset-wall'
+	) &&
+	attribution.lowBaselineSideRegressionPolicy !== undefined &&
+	attribution.lowBaselineSideRegressionPolicy.policyId === 'low-baseline-side-regression-policy' &&
+	attribution.lowBaselineSideRegressionPolicy.side === 'right' &&
+	attribution.lowBaselineSideRegressionPolicy.maxBaselineWrongSideColorRatio === 0.25 &&
+	attribution.lowBaselineSideRegressionPolicy.requireStableMaskedPixelCount === true &&
+	attribution.lowBaselineSideRegressionPolicy.requireStablePreToneMaskedPixelCount === true &&
+	attribution.lowBaselineSideRegressionPolicy.requireCombinedWrongSideImprovement === true &&
+	attribution.lowBaselineSideRegressionPolicy.requirePreToneWrongSideImprovement === true &&
+	attribution.lowBaselineSideRegressionPolicy.minCorrectBounceRatio === 0.999 &&
+	Number.isFinite( attribution.baselineRightMaskedWrongSideColorRatio ) &&
+	Number.isFinite( attribution.placementRightMaskedWrongSideColorRatio ) &&
+	Number.isFinite( attribution.rightMaskedWrongSideColorRatio ) &&
+	Number.isFinite( attribution.baselineRightMaskedVisiblePixelCount ) &&
+	Number.isFinite( attribution.placementRightMaskedVisiblePixelCount ) &&
+	typeof attribution.stableRightMaskedVisiblePixelCount === 'boolean' &&
+	Number.isFinite( attribution.baselinePreToneRightMaskedVisiblePixelCount ) &&
+	Number.isFinite( attribution.placementPreToneRightMaskedVisiblePixelCount ) &&
+	typeof attribution.stablePreToneRightMaskedVisiblePixelCount === 'boolean' &&
+	Number.isFinite( attribution.leftMaskedWrongSideColorRatio ) &&
+	Number.isFinite( attribution.combinedMaskedWrongSideColorRatio ) &&
+	Number.isFinite( attribution.preToneMaskedWrongSideColorRatio ) &&
+	Number.isFinite( attribution.correctBounceRatio ) &&
+	(
+		attribution.rightSideRegressionVerdict === 'right-side-placement-render-improves' ||
+		attribution.rightSideRegressionVerdict === 'right-side-small-baseline-regression-with-combined-placement-win' ||
+		attribution.rightSideRegressionVerdict === 'right-side-placement-render-regresses'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'neighborAttribution' );
+
+const hasLocalCellPlacementRenderLeakDeltaFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'probe-side-relocation-local-cell-placement-render-leak-delta' &&
+	attribution.proofBoundary === 'rendered-ratio-local-cell-placement-array-delta-only' &&
+	attribution.leftBoundaryLayerMask === 8 &&
+	attribution.rightBoundaryLayerMask === 16 &&
+	attribution.helperPolicyId === 'local-cell-placement' &&
+	Number.isInteger( attribution.replacementSlotCount ) &&
+	Number.isInteger( attribution.occupiedReplacementSlotCount ) &&
+	hasLocalCellPlacementRenderStateFacts( attribution.unclassifiedBoundaryRender ) &&
+	hasLocalCellPlacementRenderStateFacts( attribution.placementBoundaryRender ) &&
+	hasLocalCellPlacementRenderRatioFacts( attribution.placementToUnclassifiedBoundaryRender ) &&
+	hasRightSidePlacementRegressionAttributionFacts( attribution.rightSideRegressionAttribution ) &&
+	(
+		attribution.placementRenderLeakVerdict === 'placement-helper-arrays-improve-bilateral-render-leak-over-default' ||
+		attribution.placementRenderLeakVerdict === 'placement-helper-arrays-improve-combined-render-leak-over-default' ||
+		attribution.placementRenderLeakVerdict === 'placement-helper-arrays-do-not-improve-render-leak-over-default'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'neighbors', 'neighborAttribution' );
+
+const hasSealedOffsetWallPlacementRenderLeakDeltaFacts = attribution =>
+	hasLocalCellPlacementRenderLeakDeltaFacts( attribution ) &&
+	attribution.fixtureId === 'sealed-offset-wall' &&
+	attribution.fixtureFamily === 'sealed-offset-wall' &&
+	attribution.unclassifiedBoundaryRender.fixtureId === 'sealed-offset-wall' &&
+	attribution.placementBoundaryRender.fixtureId === 'sealed-offset-wall';
+
 const hasSetupSideProbeClassificationCandidateFacts = candidate =>
 	candidate !== undefined &&
 	(
@@ -918,8 +1456,27 @@ const hasSetupSideProbeClassificationAttributionFacts = leakProofFacts => {
 		hasSetupSideSymmetryAttributionFacts( attribution.sideSymmetryAttribution ) &&
 		hasProbeSideClassificationAttributionFacts( attribution.probeSideClassificationAttribution ) &&
 		hasProbeSideRelocationOracleAttributionFacts( attribution.probeSideRelocationOracleAttribution ) &&
-		hasProbeSideRelocationProxyAttributionFacts( attribution.probeSideRelocationProxyAttribution ) &&
+		hasProbeSideRelocationDistanceProxyAttributionFacts( attribution.probeSideRelocationProxyAttribution ) &&
+		hasProbeSideRelocationDividerProxyAttributionFacts( attribution.probeSideRelocationDividerProxyAttribution ) &&
+		hasProbeSideRelocationVisibilityProxyAttributionFacts( attribution.probeSideRelocationVisibilityProxyAttribution ) &&
+		hasProbeSideRelocationSideShellProxyAttributionFacts( attribution.probeSideRelocationSideShellProxyAttribution ) &&
+		hasSideShellLocalCellReachabilityAttributionFacts( attribution.sideShellLocalCellReachability ) &&
+		hasLocalCellRelocationCandidateAttributionFacts( attribution.localCellRelocationCandidateAttribution ) &&
+		hasPhysicalPlacementRequirementAttributionFacts( attribution.physicalPlacementRequirementAttribution ) &&
+		hasLocalCellPlacementHelperAttributionFacts( attribution.localCellPlacementHelperAttribution ) &&
+		hasPlacementAuthoringAttributionFacts( attribution.placementAuthoringAttribution ) &&
+		hasPlacementAuthoringParityAttributionFacts( attribution.placementAuthoringParityAttribution, 'sealed-wall' ) &&
+		hasSealedOffsetWallPlacementHelperAttributionFacts( attribution.sealedOffsetWallPlacementHelperAttribution ) &&
+		hasSealedOffsetWallPlacementAuthoringAttributionFacts( attribution.sealedOffsetWallPlacementAuthoringAttribution ) &&
+		hasPlacementAuthoringParityAttributionFacts(
+			attribution.sealedOffsetWallPlacementAuthoringParityAttribution,
+			'sealed-offset-wall'
+		) &&
 		hasSetupSideClassificationIrradianceDeltaFacts( attribution.setupClassificationIrradianceDelta ) &&
+		hasSideShellIrradianceDeltaFacts( attribution.sideShellIrradianceDelta ) &&
+		hasLocalCellPlacementIrradianceDeltaFacts( attribution.localCellPlacementIrradianceDelta ) &&
+		hasLocalCellPlacementRenderLeakDeltaFacts( attribution.localCellPlacementRenderLeakDelta ) &&
+		hasSealedOffsetWallPlacementRenderLeakDeltaFacts( attribution.sealedOffsetWallPlacementRenderLeakDelta ) &&
 		Array.isArray( attribution.candidates ) &&
 		attribution.candidates.length === 2 &&
 		attribution.candidates.every( hasSetupSideProbeClassificationCandidateFacts ) &&
@@ -1175,9 +1732,25 @@ const hasCoefficientContrastAttributionFacts = leakProofFacts => {
 const hasLeakProofRowFacts = row =>
 	Number.isFinite( row.wrongSideColorRatio ) &&
 	Number.isFinite( row.maskedWrongSideColorRatio ) &&
+	Number.isFinite( row.maskedVisiblePixelCount ) &&
+	Number.isFinite( row.maskedVisiblePixelRatio ) &&
+	Number.isFinite( row.maskedLeftVisiblePixelCount ) &&
+	Number.isFinite( row.maskedRightVisiblePixelCount ) &&
+	Number.isFinite( row.maskedLeftCorrectBounceRatio ) &&
+	Number.isFinite( row.maskedRightCorrectBounceRatio ) &&
 	Number.isFinite( row.correctBounceRatio ) &&
 	Number.isFinite( row.preToneMaskedWrongSideColorRatio ) &&
+	Number.isFinite( row.preToneMaskedVisiblePixelCount ) &&
+	Number.isFinite( row.preToneMaskedVisiblePixelRatio ) &&
+	Number.isFinite( row.preToneMaskedLeftVisiblePixelCount ) &&
+	Number.isFinite( row.preToneMaskedRightVisiblePixelCount ) &&
+	Number.isFinite( row.preToneMaskedLeftCorrectBounceRatio ) &&
+	Number.isFinite( row.preToneMaskedRightCorrectBounceRatio ) &&
 	Number.isFinite( row.preToneMaskedCorrectBounceRatio ) &&
+	row.maskedLeftVisiblePixelCount > 0 &&
+	row.maskedRightVisiblePixelCount > 0 &&
+	row.preToneMaskedLeftVisiblePixelCount > 0 &&
+	row.preToneMaskedRightVisiblePixelCount > 0 &&
 	row.correctBounceRatio > 0.75 &&
 	hasNoFields( row,
 		'centerWrongSideColorRatio',
@@ -1188,6 +1761,50 @@ const hasLeakProofRowFacts = row =>
 		'leakMetrics',
 		'preToneLeakMetrics'
 	);
+
+const hasSealedOffsetWallRowFacts = row =>
+	hasLeakProofRowFacts( row ) &&
+	row.fixtureId === 'sealed-offset-wall' &&
+	(
+		row.label === 'sealed-offset-wall-validity-weighted' ||
+		row.label === 'sealed-offset-wall-visibility-moments'
+	) &&
+	(
+		row.guardedVisibilityProofMode === 'off' ||
+		row.guardedVisibilityProofMode === 'guarded'
+	);
+
+const hasSealedOffsetWallRowsFacts = rows => {
+
+	if ( Array.isArray( rows ) === false || rows.length !== 2 ) return false;
+
+	const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
+	const scalarValidity = rowMap.get( 'sealed-offset-wall-validity-weighted' );
+	const visibilityMoments = rowMap.get( 'sealed-offset-wall-visibility-moments' );
+
+	return scalarValidity !== undefined &&
+		visibilityMoments !== undefined &&
+		scalarValidity.guardedVisibilityProofMode === 'off' &&
+		visibilityMoments.guardedVisibilityProofMode === 'guarded' &&
+		rows.every( hasSealedOffsetWallRowFacts );
+
+};
+
+const hasSealedOffsetWallResidualAttributionFacts = attribution =>
+	attribution !== undefined &&
+	attribution.attributionPolicy === 'sealed-offset-wall-rendered-region-source-ratios' &&
+	attribution.proofBoundary === 'second-fixture-rendered-ratio-attribution-only' &&
+	attribution.baselineLabel === 'sealed-offset-wall-validity-weighted' &&
+	attribution.candidateLabel === 'sealed-offset-wall-visibility-moments' &&
+	Number.isFinite( attribution.maskedVisibleResidualRatio ) &&
+	Number.isFinite( attribution.preToneMaskedResidualRatio ) &&
+	Number.isFinite( attribution.correctBounceRatio ) &&
+	Number.isFinite( attribution.preToneCorrectBounceRatio ) &&
+	(
+		attribution.offsetResidualVerdict === 'sealed-offset-wall-visibility-lowers-masked-wrong-side-ratio' ||
+		attribution.offsetResidualVerdict === 'sealed-offset-wall-visibility-does-not-lower-masked-wrong-side-ratio'
+	) &&
+	hasNoFields( attribution, 'rows', 'samples', 'verdict', 'supported' );
 
 const hasSamplingMassMetricFacts = metric =>
 	metric !== undefined &&
@@ -1332,6 +1949,12 @@ export async function runLightProbeGridGpuMatrixSmokeAssertions( context ) {
 	} ) }` );
 	assert( hasLeakProofFixtureFacts( leakProofFacts ),
 		'leak proof facts: expected compact sealed-wall fixture, sampling, and proof-setting facts.' );
+	assert( hasSealedOffsetWallFixtureAttributionFacts( leakProofFacts.sealedOffsetWallFixtureAttribution ),
+		'leak proof facts: expected compact sealed-offset-wall fixture activation facts before promotion.' );
+	assert( hasSealedOffsetWallRowsFacts( leakProofFacts.sealedOffsetWallRows ),
+		'leak proof facts: expected finite sealed-offset-wall leak rows before promotion.' );
+	assert( hasSealedOffsetWallResidualAttributionFacts( leakProofFacts.sealedOffsetWallResidualAttribution ),
+		'leak proof facts: expected compact sealed-offset-wall residual attribution before promotion.' );
 
 	const leakRows = new Map( leakProofFacts.rows.map( row => [ row.label, row ] ) );
 	const scalarValidity = leakRows.get( 'sealed-wall-validity-weighted' );

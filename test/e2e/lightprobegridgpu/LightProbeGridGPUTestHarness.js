@@ -9,6 +9,7 @@ import {
 	readLightProbeGridGPUDecodedPackedAtlasPixel,
 	readLightProbeGridGPUPackedAtlasPixel,
 	readLightProbeGridGPUProbeCoefficients,
+	readLightProbeGridGPUVisibilityMoment,
 	readLightProbeGridGPUVisibilityMomentPixel
 } from './LightProbeGridGPUReadback.js';
 import {
@@ -16,7 +17,8 @@ import {
 	PACKED_SH_COEFFICIENT_LAYOUT,
 	PACKED_SH_TEXTURES,
 	RECEIVER_BOUNDARY_SELECTION_THRESHOLD,
-	SH_COEFFICIENTS
+	SH_COEFFICIENTS,
+	VISIBILITY_MIN_VARIANCE
 } from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUConstants.js';
 import {
 	getLightProbeGridGPUAtlasDepth,
@@ -37,6 +39,16 @@ import {
 import {
 	createLightProbeGridGPUProbeOwnershipAssignment
 } from './LightProbeGridGPUProbeOwnership.js';
+import {
+	createLightProbeGridGPULocalCellPlacement
+} from './LightProbeGridGPULocalCellPlacement.js';
+import {
+	createLightProbeGridGPUPlacementAuthoring
+} from '../../../examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUPlacementAuthoring.js';
+import {
+	createLightProbeGridGPUProofReceiverBuffers,
+	createLightProbeGridGPUProofReceiverScaffoldFacts
+} from '../lightprobegrid-gpu-proof-receiver-scaffold.js';
 
 const PROOF_RATIO_DENOMINATOR_EPSILON = 0.0001;
 const PROOF_GEOMETRY_THIN_AXIS_EPSILON = 0.0001;
@@ -83,17 +95,49 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
-	const createProofPolicyFacts = () => ( {
-		policyId: 'lightprobegridgpu-proof-harness-semantic-epsilons',
-		ratioDenominatorEpsilon: PROOF_RATIO_DENOMINATOR_EPSILON,
-		geometryThinAxisEpsilon: PROOF_GEOMETRY_THIN_AXIS_EPSILON,
-		geometryRangeEpsilonFactor: PROOF_GEOMETRY_RANGE_EPSILON_FACTOR,
-		geometryRangeMinEpsilon: PROOF_GEOMETRY_RANGE_MIN_EPSILON,
-		computeCandidateDeltaTolerance: PROOF_COMPUTE_CANDIDATE_DELTA_TOLERANCE,
-		computeParityContractTolerance: PROOF_COMPUTE_PARITY_CONTRACT_TOLERANCE,
-		layerCompatibilityDeltaEpsilon: PROOF_LAYER_COMPATIBILITY_DELTA_EPSILON,
-		debugRatioDeltaEpsilon: PROOF_DEBUG_RATIO_DELTA_EPSILON
-	} );
+	const createProofReceiverBufferScaffoldFacts = () => {
+
+		const buffers = createLightProbeGridGPUProofReceiverBuffers( [ {
+			position: [ 0, 0, 0 ],
+			normal: [ 0, 1, 0 ],
+			layerMask: 1,
+			expectedRegion: 0,
+			referenceIndirect: [ 0, 0, 0 ]
+		} ] );
+
+		return {
+			receiverCount: buffers.receiverCount,
+			receiverStrideLanes: buffers.receiverStrideLanes,
+			resultStrideLanes: buffers.resultStrideLanes,
+			receiverBytes: buffers.receiverBytes,
+			resultBytes: buffers.resultBytes,
+			receiverStorageBuffer: buffers.receiverAttribute.isStorageBufferAttribute === true,
+			resultStorageBuffer: buffers.resultAttribute.isStorageBufferAttribute === true
+		};
+
+	};
+
+	const createProofPolicyFacts = () => {
+
+		const proofReceiverScaffold = createLightProbeGridGPUProofReceiverScaffoldFacts();
+
+		return {
+			policyId: 'lightprobegridgpu-proof-harness-semantic-epsilons',
+			ratioDenominatorEpsilon: PROOF_RATIO_DENOMINATOR_EPSILON,
+			geometryThinAxisEpsilon: PROOF_GEOMETRY_THIN_AXIS_EPSILON,
+			geometryRangeEpsilonFactor: PROOF_GEOMETRY_RANGE_EPSILON_FACTOR,
+			geometryRangeMinEpsilon: PROOF_GEOMETRY_RANGE_MIN_EPSILON,
+			computeCandidateDeltaTolerance: PROOF_COMPUTE_CANDIDATE_DELTA_TOLERANCE,
+			computeParityContractTolerance: PROOF_COMPUTE_PARITY_CONTRACT_TOLERANCE,
+			layerCompatibilityDeltaEpsilon: PROOF_LAYER_COMPATIBILITY_DELTA_EPSILON,
+			debugRatioDeltaEpsilon: PROOF_DEBUG_RATIO_DELTA_EPSILON,
+			proofReceiverScaffold: {
+				...proofReceiverScaffold,
+				bufferScaffold: createProofReceiverBufferScaffoldFacts()
+			}
+		};
+
+	};
 
 	const sampleCanvas = ( regions ) => {
 
@@ -1124,7 +1168,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const textureDepth = probeGrid.totalProbes ?? 0;
 		const createInspection = stats => ( {
 			available: info.available === true,
+			active: info.active === true,
+			runtimeActive: info.runtimeActive === true,
 			mode: info.mode ?? 'unavailable',
+			resolution: info.resolution ?? 0,
+			texturePresent: info.texturePresent === true,
 			bytes: info.bytes ?? 0,
 			stats
 		} );
@@ -1141,7 +1189,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		};
 
-		if ( target === null || info.available !== true || info.mode !== 'moments' || resolution <= 0 || textureDepth <= 0 ) {
+		if ( target === null || isActiveMomentVisibilityDepthInfo( info ) === false || resolution <= 0 || textureDepth <= 0 ) {
 
 			return unavailable();
 
@@ -1376,8 +1424,8 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const colorCanvasSample = captureCanvasSample();
 		const previousBackground = _lightProbeContext.scene.background;
 		const previousMaterials = [];
-		const leftMaskMaterial = new THREE.MeshBasicMaterial( { color: 0xff0000, toneMapped: false } );
-		const rightMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x00ff00, toneMapped: false } );
+		const leftMaskMaterial = new THREE.MeshBasicMaterial( { color: 0xff0000, side: THREE.DoubleSide, toneMapped: false } );
+		const rightMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x00ff00, side: THREE.DoubleSide, toneMapped: false } );
 		const occluderMaskMaterial = new THREE.MeshBasicMaterial( { color: 0x000000, toneMapped: false } );
 
 		try {
@@ -1568,6 +1616,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const maskedVisiblePixelRatio = maskedSamples === null ? null : roundMetric(
 			maskedSamples.leftReceiverMasked.selectedPixelRatio + maskedSamples.rightReceiverMasked.selectedPixelRatio
 		);
+		const leftMaskedCorrectBounceRatio = maskedSamples === null ? null :
+			maskedSamples.leftReceiverMasked.colorBias.redOverGreen;
+		const rightMaskedCorrectBounceRatio = maskedSamples === null ? null :
+			maskedSamples.rightReceiverMasked.colorBias.greenOverRed;
 
 		return {
 			wrongSideColorRatio: roundMetric( wrongSideColorRatio ),
@@ -1577,6 +1629,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			maskedWrongSideColorRatio: maskedWrongSideColorRatio === null ? null : roundMetric( maskedWrongSideColorRatio ),
 			maskedVisiblePixelCount,
 			maskedVisiblePixelRatio,
+			maskedLeftVisiblePixelCount: maskedSamples === null ? null : maskedSamples.leftReceiverMasked.selectedPixelCount,
+			maskedRightVisiblePixelCount: maskedSamples === null ? null : maskedSamples.rightReceiverMasked.selectedPixelCount,
+			maskedLeftVisiblePixelRatio: maskedSamples === null ? null : maskedSamples.leftReceiverMasked.selectedPixelRatio,
+			maskedRightVisiblePixelRatio: maskedSamples === null ? null : maskedSamples.rightReceiverMasked.selectedPixelRatio,
+			maskedLeftCorrectBounceRatio: leftMaskedCorrectBounceRatio === null ? null : roundMetric( leftMaskedCorrectBounceRatio ),
+			maskedRightCorrectBounceRatio: rightMaskedCorrectBounceRatio === null ? null : roundMetric( rightMaskedCorrectBounceRatio ),
 			correctBounceRatio: roundMetric( correctBounceRatio ),
 			maskedCorrectBounceRatio: maskedCorrectBounceRatio === null ? null : roundMetric( maskedCorrectBounceRatio )
 		};
@@ -2326,23 +2384,46 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
 
 			const leakMetrics = captureLeakRegionMetrics();
+			const maskedSamples = captureLeakReceiverMaskedMetrics();
 			const preToneLeakMetrics = captureLeakRegionMetricsWithRendererMapping( {
 				mode: 'pre-tone-linear-output-masked-visible-pixels',
 				toneMapping: THREE.NoToneMapping,
 				toneMappingLabel: 'NoToneMapping',
 				outputColorSpace: THREE.LinearSRGBColorSpace
 			} );
+			const leftMaskedWrongSideColorRatio = maskedSamples === null ? null :
+				maskedSamples.leftReceiverMasked.colorBias.greenOverRed;
+			const rightMaskedWrongSideColorRatio = maskedSamples === null ? null :
+				maskedSamples.rightReceiverMasked.colorBias.redOverGreen;
+			const leftMaskedCorrectBounceRatio = maskedSamples === null ? null :
+				maskedSamples.leftReceiverMasked.colorBias.redOverGreen;
+			const rightMaskedCorrectBounceRatio = maskedSamples === null ? null :
+				maskedSamples.rightReceiverMasked.colorBias.greenOverRed;
 
 			return {
 				attributionPolicy: options.attributionPolicy ?? 'swapped-boundary-mask-render-candidate',
 				proofBoundary: 'rendered-ratio-attribution-only',
+				...( options.fixtureId !== undefined ? { fixtureId: options.fixtureId } : {} ),
+				...( options.fixtureFamily !== undefined ? { fixtureFamily: options.fixtureFamily } : {} ),
 				leftBoundaryLayerMask,
 				rightBoundaryLayerMask,
 				receiverBoundaryMode: options.receiverBoundaryMode ?? 'select',
 				rawBoundaryWeight: options.rawBoundaryWeight === true,
 				maskedWrongSideColorRatio: leakMetrics.maskedWrongSideColorRatio,
+				maskedVisiblePixelCount: leakMetrics.maskedVisiblePixelCount,
+				maskedVisiblePixelRatio: leakMetrics.maskedVisiblePixelRatio,
+				maskedLeftVisiblePixelCount: leakMetrics.maskedLeftVisiblePixelCount,
+				maskedRightVisiblePixelCount: leakMetrics.maskedRightVisiblePixelCount,
+				leftMaskedWrongSideColorRatio,
+				rightMaskedWrongSideColorRatio,
 				preToneMaskedWrongSideColorRatio: preToneLeakMetrics.metrics.maskedWrongSideColorRatio,
+				preToneMaskedVisiblePixelCount: preToneLeakMetrics.metrics.maskedVisiblePixelCount,
+				preToneMaskedVisiblePixelRatio: preToneLeakMetrics.metrics.maskedVisiblePixelRatio,
+				preToneMaskedLeftVisiblePixelCount: preToneLeakMetrics.metrics.maskedLeftVisiblePixelCount,
+				preToneMaskedRightVisiblePixelCount: preToneLeakMetrics.metrics.maskedRightVisiblePixelCount,
 				preToneMaskedCorrectBounceRatio: preToneLeakMetrics.metrics.maskedCorrectBounceRatio,
+				leftMaskedCorrectBounceRatio,
+				rightMaskedCorrectBounceRatio,
 				correctBounceRatio: leakMetrics.correctBounceRatio
 			};
 
@@ -3173,6 +3254,31 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		probeHelperDepthMode: _lightProbeContext.params.probeHelperDepthMode
 	} );
 
+	const createCameraSnapshot = () => ( {
+		position: _lightProbeContext.camera.position.clone(),
+		quaternion: _lightProbeContext.camera.quaternion.clone(),
+		zoom: _lightProbeContext.camera.zoom
+	} );
+
+	const restoreCameraSnapshot = ( snapshot ) => {
+
+		_lightProbeContext.camera.position.copy( snapshot.position );
+		_lightProbeContext.camera.quaternion.copy( snapshot.quaternion );
+		_lightProbeContext.camera.zoom = snapshot.zoom;
+		_lightProbeContext.camera.updateMatrixWorld();
+		_lightProbeContext.camera.updateProjectionMatrix();
+
+	};
+
+	const applySealedOffsetWallProofCamera = () => {
+
+		_lightProbeContext.camera.position.set( 0, 15, 5.4 );
+		_lightProbeContext.camera.lookAt( 0, 1.05, 0.35 );
+		_lightProbeContext.camera.updateMatrixWorld();
+		_lightProbeContext.camera.updateProjectionMatrix();
+
+	};
+
 	const restoreHarnessState = async ( previousState, reason ) => {
 
 		_lightProbeContext.params.resolution = previousState.resolution;
@@ -3241,18 +3347,82 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		if ( _lightProbeContext.leakFixture === null ) return;
 
 		const enabled = mode !== 'off';
+		const fixtureFamily = mode === 'sealed-offset-wall' ? 'sealed-offset-wall' : 'sealed-wall';
 		_lightProbeContext.leakFixture.group.visible = enabled;
+		_lightProbeContext.leakFixture.fixtureId = enabled ? fixtureFamily : 'off';
 
 		for ( const mesh of _lightProbeContext.leakFixture.meshes ) {
 
-			mesh.visible = enabled;
+			mesh.visible = enabled && ( mesh.userData.leakFixtureFamily ?? 'sealed-wall' ) === fixtureFamily;
 
 		}
 
-		_lightProbeContext.leakFixture.thinDivider.visible = mode === 'thin-wall';
-		_lightProbeContext.leakFixture.sealedDivider.visible = mode === 'sealed-wall';
-		_lightProbeContext.leakFixture.zeroThicknessDivider.visible = mode === 'zero-thickness';
+		_lightProbeContext.leakFixture.leftReceiver = fixtureFamily === 'sealed-offset-wall' ?
+			_lightProbeContext.leakFixture.offsetLeftReceiver :
+			_lightProbeContext.leakFixture.defaultLeftReceiver;
+		_lightProbeContext.leakFixture.rightReceiver = fixtureFamily === 'sealed-offset-wall' ?
+			_lightProbeContext.leakFixture.offsetRightReceiver :
+			_lightProbeContext.leakFixture.defaultRightReceiver;
+		_lightProbeContext.leakFixture.thinDivider.visible = enabled && mode === 'thin-wall';
+		_lightProbeContext.leakFixture.sealedDivider.visible = enabled && mode === 'sealed-wall';
+		_lightProbeContext.leakFixture.zeroThicknessDivider.visible = enabled && mode === 'zero-thickness';
+		_lightProbeContext.leakFixture.offsetSealedDivider.visible = enabled && mode === 'sealed-offset-wall';
 		_lightProbeContext.leakFixture.zeroThicknessDivider.material.side = THREE.DoubleSide;
+
+	};
+
+	const createLeakFixtureFacts = () => {
+
+		const fixture = _lightProbeContext.leakFixture;
+		const divider = _lightProbeContext.getActiveLeakDivider();
+		const fixtureId = fixture?.fixtureId ?? 'unknown';
+		const dividerAxis = divider?.userData?.leakDivider === 'sealed-offset-wall' ? 'z' : 'x';
+
+		if ( fixture === null ) return null;
+
+		return {
+			fixtureId,
+			fixtureFamily: fixtureId,
+			activeDivider: divider?.userData?.leakDivider ?? 'none',
+			dividerAxis,
+			dividerOffset: divider === null || divider === undefined ? null : roundMetric( divider.position[ dividerAxis ] ),
+			leftReceiver: {
+				role: fixture.leftReceiver?.userData?.leakReceiver ?? 'none',
+				position: fixture.leftReceiver?.position?.toArray().map( roundMetric ) ?? null
+			},
+			rightReceiver: {
+				role: fixture.rightReceiver?.userData?.leakReceiver ?? 'none',
+				position: fixture.rightReceiver?.position?.toArray().map( roundMetric ) ?? null
+			},
+			visibleMeshCount: fixture.meshes.filter( mesh => mesh.visible === true ).length,
+			offsetVisible: fixture.offsetSealedDivider?.visible === true
+		};
+
+	};
+
+	const captureSealedOffsetWallFixtureAttribution = () => {
+
+		setLeakFixtureMode( 'sealed-offset-wall' );
+		_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+		const facts = createLeakFixtureFacts();
+		const isComplete = facts !== null &&
+			facts.fixtureId === 'sealed-offset-wall' &&
+			facts.activeDivider === 'sealed-offset-wall' &&
+			facts.dividerAxis === 'z' &&
+			facts.leftReceiver.role === 'left' &&
+			facts.rightReceiver.role === 'right' &&
+			facts.visibleMeshCount > 0 &&
+			facts.offsetVisible === true;
+
+		return {
+			attributionPolicy: 'second-sealed-fixture-family-activation',
+			proofBoundary: 'fixture-family-activation-only',
+			...facts,
+			fixtureActivationVerdict: isComplete ?
+				'sealed-offset-wall-fixture-activates' :
+				'sealed-offset-wall-fixture-incomplete'
+		};
 
 	};
 
@@ -3292,7 +3462,11 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 			return {
 				available: info?.available === true,
+				active: info?.active === true,
+				runtimeActive: info?.runtimeActive === true,
 				mode: info?.mode ?? 'unavailable',
+				resolution: Number.isInteger( info?.resolution ) ? info.resolution : 0,
+				texturePresent: info?.texturePresent === true,
 				bytes: info?.bytes ?? 0
 			};
 
@@ -3306,11 +3480,23 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		return {
 			available: false,
+			active: false,
+			runtimeActive: false,
 			mode: 'unavailable',
+			resolution: 0,
+			texturePresent: false,
 			bytes: 0
 		};
 
 	};
+
+	const isActiveMomentVisibilityDepthInfo = info =>
+		info?.active === true &&
+		info?.runtimeActive === true &&
+		info?.available === true &&
+		info?.mode === 'moments' &&
+		info?.texturePresent === true &&
+		info?.bytes > 0;
 
 	const readHarnessTimingFacts = () => ( {
 		totalBakeMs: _lightProbeContext.timings.totalBakeMs,
@@ -3447,7 +3633,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		return {
 			label,
-			probeIntensity: _lightProbeContext.params.probeIntensity,
+			intensity: _lightProbeContext.params.intensity,
 			band1Intensity: _lightProbeContext.params.band1Intensity,
 			band2Intensity: _lightProbeContext.params.band2Intensity,
 			normalBias: _lightProbeContext.params.normalBias,
@@ -3739,8 +3925,20 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 	const createLeakProofRowMetrics = ( metrics, rendererMetrics ) => ( {
 		wrongSideColorRatio: metrics.wrongSideColorRatio,
 		maskedWrongSideColorRatio: metrics.maskedWrongSideColorRatio,
+		maskedVisiblePixelCount: metrics.maskedVisiblePixelCount,
+		maskedVisiblePixelRatio: metrics.maskedVisiblePixelRatio,
+		maskedLeftVisiblePixelCount: metrics.maskedLeftVisiblePixelCount,
+		maskedRightVisiblePixelCount: metrics.maskedRightVisiblePixelCount,
+		maskedLeftCorrectBounceRatio: metrics.maskedLeftCorrectBounceRatio,
+		maskedRightCorrectBounceRatio: metrics.maskedRightCorrectBounceRatio,
 		correctBounceRatio: metrics.correctBounceRatio,
 		preToneMaskedWrongSideColorRatio: rendererMetrics.metrics.maskedWrongSideColorRatio,
+		preToneMaskedVisiblePixelCount: rendererMetrics.metrics.maskedVisiblePixelCount,
+		preToneMaskedVisiblePixelRatio: rendererMetrics.metrics.maskedVisiblePixelRatio,
+		preToneMaskedLeftVisiblePixelCount: rendererMetrics.metrics.maskedLeftVisiblePixelCount,
+		preToneMaskedRightVisiblePixelCount: rendererMetrics.metrics.maskedRightVisiblePixelCount,
+		preToneMaskedLeftCorrectBounceRatio: rendererMetrics.metrics.maskedLeftCorrectBounceRatio,
+		preToneMaskedRightCorrectBounceRatio: rendererMetrics.metrics.maskedRightCorrectBounceRatio,
 		preToneMaskedCorrectBounceRatio: rendererMetrics.metrics.maskedCorrectBounceRatio
 	} );
 
@@ -3901,6 +4099,30 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 	};
 
+	const createSealedOffsetWallResidualAttributionFacts = ( rows ) => {
+
+		const rowMap = new Map( rows.map( row => [ row.label, row ] ) );
+		const baseline = rowMap.get( 'sealed-offset-wall-validity-weighted' );
+		const candidate = rowMap.get( 'sealed-offset-wall-visibility-moments' );
+		const ratio = key => roundMetric( candidate[ key ] / Math.max( baseline[ key ], PROOF_RATIO_DENOMINATOR_EPSILON ) );
+		const maskedVisibleResidualRatio = ratio( 'maskedWrongSideColorRatio' );
+
+		return {
+			attributionPolicy: 'sealed-offset-wall-rendered-region-source-ratios',
+			proofBoundary: 'second-fixture-rendered-ratio-attribution-only',
+			baselineLabel: baseline.label,
+			candidateLabel: candidate.label,
+			maskedVisibleResidualRatio,
+			preToneMaskedResidualRatio: ratio( 'preToneMaskedWrongSideColorRatio' ),
+			correctBounceRatio: ratio( 'correctBounceRatio' ),
+			preToneCorrectBounceRatio: ratio( 'preToneMaskedCorrectBounceRatio' ),
+			offsetResidualVerdict: maskedVisibleResidualRatio < 1 ?
+				'sealed-offset-wall-visibility-lowers-masked-wrong-side-ratio' :
+				'sealed-offset-wall-visibility-does-not-lower-masked-wrong-side-ratio'
+		};
+
+	};
+
 	const createLeakProofSettingsSnapshot = () => ( {
 		resolution: _lightProbeContext.params.resolution,
 		cubemapSize: _lightProbeContext.params.cubemapSize,
@@ -3954,6 +4176,78 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			receiverPoint.x = side === 'left' ? receiverBox.max.x : receiverBox.min.x;
 
 			return receiverPoint.clone();
+
+		};
+		const createLocalCellSupport = ( receiver, side ) => {
+
+			const position = createReceiverEdgePoint( receiver, side );
+			const normal = new THREE.Vector3( 0, 0, 1 ).applyQuaternion( receiver.getWorldQuaternion( new THREE.Quaternion() ) ).normalize();
+			const viewDirection = new THREE.Vector3().subVectors( _lightProbeContext.camera.position, position ).normalize();
+			const probeSpacing = new THREE.Vector3(
+				( _lightProbeContext.gridMax.x - _lightProbeContext.gridMin.x ) / Math.max( resolution - 1, 1 ),
+				( _lightProbeContext.gridMax.y - _lightProbeContext.gridMin.y ) / Math.max( resolution - 1, 1 ),
+				( _lightProbeContext.gridMax.z - _lightProbeContext.gridMin.z ) / Math.max( resolution - 1, 1 )
+			);
+			const samplePosition = position.clone()
+				.add( normal.clone().multiply( probeSpacing ).multiplyScalar( _lightProbeContext.probeGrid.normalBias.value ) )
+				.add( viewDirection.multiply( probeSpacing ).multiplyScalar( _lightProbeContext.probeGrid.viewBias.value ) );
+			const gridCoord = samplePosition.clone()
+				.sub( _lightProbeContext.gridMin )
+				.divide( new THREE.Vector3().subVectors( _lightProbeContext.gridMax, _lightProbeContext.gridMin ) )
+				.clamp( new THREE.Vector3( 0, 0, 0 ), new THREE.Vector3( 1, 1, 1 ) )
+				.multiplyScalar( resolution - 1 );
+			const base = new THREE.Vector3(
+				Math.floor( gridCoord.x ),
+				Math.floor( gridCoord.y ),
+				Math.floor( gridCoord.z )
+			);
+			const x0 = Math.max( 0, Math.min( resolution - 1, base.x ) );
+			const y0 = Math.max( 0, Math.min( resolution - 1, base.y ) );
+			const z0 = Math.max( 0, Math.min( resolution - 1, base.z ) );
+			const x1 = Math.max( 0, Math.min( resolution - 1, x0 + 1 ) );
+			const y1 = Math.max( 0, Math.min( resolution - 1, y0 + 1 ) );
+			const z1 = Math.max( 0, Math.min( resolution - 1, z0 + 1 ) );
+			const support = [
+				{ x: x0, y: y0, z: z0 },
+				{ x: x1, y: y0, z: z0 },
+				{ x: x0, y: y1, z: z0 },
+				{ x: x1, y: y1, z: z0 },
+				{ x: x0, y: y0, z: z1 },
+				{ x: x1, y: y0, z: z1 },
+				{ x: x0, y: y1, z: z1 },
+				{ x: x1, y: y1, z: z1 }
+			].map( coord => {
+
+				const probeIndex = getLightProbeGridGPUProbeIndex( coord.x, coord.y, coord.z, resolution );
+				const cellProbePosition = new THREE.Vector3();
+
+				getProbePosition( probeIndex, cellProbePosition );
+
+				return {
+					probeIndex,
+					distanceSq: cellProbePosition.distanceToSquared( position ),
+					occupied: occupiedProbeIndices.has( probeIndex )
+				};
+
+			} );
+
+			return {
+				side,
+				samplePointPolicy: 'receiver-edge-plus-normal-view-bias',
+				normalBias: roundMetric( _lightProbeContext.probeGrid.normalBias.value ),
+				viewBias: roundMetric( _lightProbeContext.probeGrid.viewBias.value ),
+				probeCoord: {
+					x: roundMetric( gridCoord.x ),
+					y: roundMetric( gridCoord.y ),
+					z: roundMetric( gridCoord.z )
+				},
+				baseCoord: {
+					x: x0,
+					y: y0,
+					z: z0
+				},
+				support
+			};
 
 		};
 		const createNearestSupportCandidates = ( position, receiverMask, probeLayerMasks = assignment.probeLayerMasks ) => {
@@ -4026,6 +4320,60 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		const createSupportLayerMaskHash = ( support, probeLayerMasks = assignment.probeLayerMasks ) => createHash( support.map( probe =>
 			( probe.probeIndex + 1 ) ^ ( ( probeLayerMasks[ probe.probeIndex ] + 1 ) << 8 )
 		) );
+		const createSupportGridCoordHash = support => createHash( support.map( probe => {
+
+			const coord = getLightProbeGridGPUProbeCoord( probe.probeIndex, resolution );
+
+			return ( coord.x + 1 ) ^ ( ( coord.y + 1 ) << 8 ) ^ ( ( coord.z + 1 ) << 16 );
+
+		} ) );
+		const summarizeSupportGridCoords = support => {
+
+			const initialRange = {
+				minX: Number.POSITIVE_INFINITY,
+				minY: Number.POSITIVE_INFINITY,
+				minZ: Number.POSITIVE_INFINITY,
+				maxX: Number.NEGATIVE_INFINITY,
+				maxY: Number.NEGATIVE_INFINITY,
+				maxZ: Number.NEGATIVE_INFINITY
+			};
+			const summary = support.reduce( ( acc, probe ) => {
+
+				const coord = getLightProbeGridGPUProbeCoord( probe.probeIndex, resolution );
+
+				acc.sumX += coord.x;
+				acc.sumY += coord.y;
+				acc.sumZ += coord.z;
+				acc.minX = Math.min( acc.minX, coord.x );
+				acc.minY = Math.min( acc.minY, coord.y );
+				acc.minZ = Math.min( acc.minZ, coord.z );
+				acc.maxX = Math.max( acc.maxX, coord.x );
+				acc.maxY = Math.max( acc.maxY, coord.y );
+				acc.maxZ = Math.max( acc.maxZ, coord.z );
+
+				return acc;
+
+			}, {
+				sumX: 0,
+				sumY: 0,
+				sumZ: 0,
+				...initialRange
+			} );
+			const count = Math.max( support.length, 1 );
+
+			return {
+				meanX: roundMetric( summary.sumX / count ),
+				meanY: roundMetric( summary.sumY / count ),
+				meanZ: roundMetric( summary.sumZ / count ),
+				minX: Number.isFinite( summary.minX ) ? summary.minX : 0,
+				minY: Number.isFinite( summary.minY ) ? summary.minY : 0,
+				minZ: Number.isFinite( summary.minZ ) ? summary.minZ : 0,
+				maxX: Number.isFinite( summary.maxX ) ? summary.maxX : 0,
+				maxY: Number.isFinite( summary.maxY ) ? summary.maxY : 0,
+				maxZ: Number.isFinite( summary.maxZ ) ? summary.maxZ : 0
+			};
+
+		};
 		const createDescriptorFacts = ( descriptorRole, side, receiverBoundaryLayerMask, receiverBoundaryWeight, support ) => {
 
 			const effectiveReceiverMask = receiverBoundaryWeight >= RECEIVER_BOUNDARY_SELECTION_THRESHOLD ?
@@ -4140,6 +4488,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				classifiedSupportIdentityHash: createSupportIdentityHash( classifiedSupport ),
 				defaultSupportLayerMaskHash: createSupportLayerMaskHash( defaultSupport, probeLayerMasks ),
 				classifiedSupportLayerMaskHash: createSupportLayerMaskHash( classifiedSupport, probeLayerMasks ),
+				defaultSupportGridCoordHash: createSupportGridCoordHash( defaultSupport ),
+				classifiedSupportGridCoordHash: createSupportGridCoordHash( classifiedSupport ),
+				defaultSupportGridCoordSummary: summarizeSupportGridCoords( defaultSupport ),
+				classifiedSupportGridCoordSummary: summarizeSupportGridCoords( classifiedSupport ),
 				supportHashPolicy: 'ordered-probe-index-fnv1a32',
 				identityChangeCount: identity.identityChangeCount,
 				identityChangeRatio: identity.identityChangeRatio,
@@ -4695,7 +5047,13 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			};
 
 		};
-		const createProbeSideRelocationProxyAttribution = async () => {
+		const createProbeSideRelocationProxyAttribution = async ( {
+			attributionPolicy,
+			candidateShape,
+			relocationRankingPolicy,
+			sortCandidates,
+			createSideSortCandidates = null
+		} ) => {
 
 			const createProxySideFacts = async ( side, position, boundaryMask ) => {
 
@@ -4707,7 +5065,9 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					defaultSupportIndices.has( probe.probeIndex ) === false &&
 					probe.occupied === false
 				);
-				const proxyCandidates = [ ...relocationCandidatePool ].sort( ( a, b ) => b.distanceSq - a.distanceSq );
+				const proxyCandidates = [ ...relocationCandidatePool ].sort(
+					createSideSortCandidates === null ? sortCandidates : createSideSortCandidates( side )
+				);
 				const relocatedSupport = proxyCandidates.slice( 0, supportSize );
 				const supportRank = createSupportRankFacts( {
 					side,
@@ -4724,7 +5084,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				return {
 					...supportRank,
 					relocationCandidatePoolCount: relocationCandidatePool.length,
-					relocationRankingPolicy: 'non-occupied-boundary-probe-farthest-from-receiver-edge',
+					relocationRankingPolicy,
 					coefficientComparison
 				};
 
@@ -4742,10 +5102,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				right.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0';
 
 			return {
-				attributionPolicy: 'probe-side-relocation-distance-proxy',
+				attributionPolicy,
 				proofBoundary: 'cpu-support-rank-and-l0-attribution-only',
 				coefficientPolicy: 'packed-atlas-l0-support-mean',
-				candidateShape: 'non-occupied-boundary-probe-distance-ranked-relocation-proxy',
+				candidateShape,
 				receiverPointPolicy: 'world-bounds-near-divider-edge',
 				leftBoundaryLayerMask: leftBoundaryMask,
 				rightBoundaryLayerMask: rightBoundaryMask,
@@ -4755,6 +5115,640 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 					'proxy-finds-bilateral-l0-relocation-candidate' :
 					'proxy-fails-bilateral-l0-relocation-candidate'
 			};
+
+		};
+		const createProbeSideRelocationDistanceProxyAttribution = async () => {
+
+			return createProbeSideRelocationProxyAttribution( {
+				attributionPolicy: 'probe-side-relocation-distance-proxy',
+				candidateShape: 'non-occupied-boundary-probe-distance-ranked-relocation-proxy',
+				relocationRankingPolicy: 'non-occupied-boundary-probe-farthest-from-receiver-edge',
+				sortCandidates: ( a, b ) => b.distanceSq - a.distanceSq
+			} );
+
+		};
+		const createProbeSideRelocationDividerProxyAttribution = async () => {
+
+			const divider = _lightProbeContext.getActiveLeakDivider();
+			const dividerX = divider !== null && divider !== undefined ? divider.position.x : - 0.8667;
+			const scoreDividerDistanceSq = probe => {
+
+				getProbePosition( probe.probeIndex, probePosition );
+				const deltaX = probePosition.x - dividerX;
+
+				return deltaX * deltaX;
+
+			};
+
+			return createProbeSideRelocationProxyAttribution( {
+				attributionPolicy: 'probe-side-relocation-divider-proxy',
+				candidateShape: 'non-occupied-boundary-probe-divider-ranked-relocation-proxy',
+				relocationRankingPolicy: 'non-occupied-boundary-probe-closest-to-divider-then-nearest-receiver',
+				sortCandidates: ( a, b ) => scoreDividerDistanceSq( a ) - scoreDividerDistanceSq( b ) ||
+					a.distanceSq - b.distanceSq
+			} );
+
+		};
+		const createProbeSideRelocationVisibilityProxyAttribution = async () => {
+
+			const createVisibilitySideFacts = async ( side, position, boundaryMask ) => {
+
+				const defaultCandidates = createNearestSupportCandidates( position, defaultMask, assignment.probeLayerMasks );
+				const boundaryCandidates = createNearestSupportCandidates( position, boundaryMask, assignment.probeLayerMasks );
+				const defaultSupport = defaultCandidates.slice( 0, supportSize );
+				const defaultSupportIndices = new Set( defaultSupport.map( probe => probe.probeIndex ) );
+				const relocationCandidatePool = boundaryCandidates.filter( probe =>
+					defaultSupportIndices.has( probe.probeIndex ) === false &&
+					probe.occupied === false
+				);
+				const selfShadowBias = _lightProbeContext.probeGrid.selfShadowBias?.value ?? 0;
+				const visibilityMix = Math.max( 0, Math.min(
+					1,
+					_lightProbeContext.probeGrid.visibilityDepthWeighting?.value ?? 1
+				) );
+				const readVisibilityScore = async probe => {
+
+					const candidatePosition = new THREE.Vector3();
+					const receiverDirection = new THREE.Vector3();
+
+					getProbePosition( probe.probeIndex, candidatePosition );
+					receiverDirection.subVectors( position, candidatePosition );
+					const receiverDistance = receiverDirection.length();
+					receiverDirection.normalize();
+
+					const moment = await readLightProbeGridGPUVisibilityMoment(
+						_lightProbeContext.renderer,
+						_lightProbeContext.probeGrid,
+						receiverDirection,
+						probe.probeIndex,
+						VISIBILITY_MIN_VARIANCE
+					);
+					const variance = Math.max( moment.variance, VISIBILITY_MIN_VARIANCE );
+					const delta = Math.max( receiverDistance - moment.meanDistance - selfShadowBias, 0 );
+					const chebyshev = variance / ( variance + delta * delta );
+					const hitConfidence = Math.max( 0, Math.min( 1, moment.hitConfidence ) );
+					const momentVisibility = Math.max( 0, Math.min(
+						1,
+						1 - hitConfidence + chebyshev * hitConfidence
+					) );
+					const estimatedVisibility = 1 - visibilityMix + momentVisibility * visibilityMix;
+
+					return {
+						...probe,
+						visibilityReceiverDistance: roundMetric( receiverDistance ),
+						visibilityMeanDistance: roundMetric( moment.meanDistance ),
+						visibilityHitConfidence: roundMetric( hitConfidence ),
+						visibilityEstimate: roundMetric( estimatedVisibility )
+					};
+
+				};
+				const scoredCandidates = await Promise.all( relocationCandidatePool.map( readVisibilityScore ) );
+				const proxyCandidates = scoredCandidates.sort( ( a, b ) => b.visibilityEstimate - a.visibilityEstimate ||
+					a.distanceSq - b.distanceSq );
+				const relocatedSupport = proxyCandidates.slice( 0, supportSize );
+				const supportRank = createSupportRankFacts( {
+					side,
+					boundaryMask,
+					defaultCandidates,
+					classifiedCandidates: proxyCandidates,
+					defaultSupport,
+					classifiedSupport: relocatedSupport,
+					probeLayerMasks: assignment.probeLayerMasks
+				} );
+				const hasIdentityChange = supportRank.blockerVerdict === 'side-has-setup-identity-change';
+				const coefficientComparison = await readSupportCoefficientComparison( defaultSupport, relocatedSupport, side, hasIdentityChange );
+				const meanVisibilityEstimate = relocatedSupport.reduce( ( sum, probe ) =>
+					sum + probe.visibilityEstimate, 0 ) / Math.max( relocatedSupport.length, 1 );
+
+				return {
+					...supportRank,
+					relocationCandidatePoolCount: relocationCandidatePool.length,
+					relocationRankingPolicy: 'non-occupied-boundary-probe-highest-moment-visibility-to-receiver',
+					classifiedMeanVisibilityEstimate: roundMetric( meanVisibilityEstimate ),
+					coefficientComparison
+				};
+
+			};
+			const left = await createVisibilitySideFacts( 'left', leftReceiverPoint, leftBoundaryMask );
+			const right = await createVisibilitySideFacts( 'right', rightReceiverPoint, rightBoundaryMask );
+			const hasBilateralIdentityChange = left.blockerVerdict === 'side-has-setup-identity-change' &&
+				right.blockerVerdict === 'side-has-setup-identity-change';
+			const hasCompleteNonOccupiedSupport = left.classifiedOccupiedSupportCount === 0 &&
+				right.classifiedOccupiedSupportCount === 0 &&
+				left.classifiedCandidateCount >= supportSize &&
+				right.classifiedCandidateCount >= supportSize;
+			const hasBilateralCoefficientWin =
+				left.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0' &&
+				right.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0';
+
+			return {
+				attributionPolicy: 'probe-side-relocation-visibility-proxy',
+				proofBoundary: 'cpu-visibility-moment-rank-and-l0-attribution-only',
+				coefficientPolicy: 'packed-atlas-l0-support-mean',
+				candidateShape: 'non-occupied-boundary-probe-visibility-ranked-relocation-proxy',
+				receiverPointPolicy: 'world-bounds-near-divider-edge',
+				leftBoundaryLayerMask: leftBoundaryMask,
+				rightBoundaryLayerMask: rightBoundaryMask,
+				left,
+				right,
+				relocationProxyVerdict: hasBilateralIdentityChange && hasCompleteNonOccupiedSupport && hasBilateralCoefficientWin ?
+					'proxy-finds-bilateral-l0-relocation-candidate' :
+					'proxy-fails-bilateral-l0-relocation-candidate'
+			};
+
+		};
+		const createSideShellSort = side => ( a, b ) => {
+
+			const coordA = getLightProbeGridGPUProbeCoord( a.probeIndex, resolution );
+			const coordB = getLightProbeGridGPUProbeCoord( b.probeIndex, resolution );
+			const sideAxisDelta = side === 'left' ?
+				coordA.x - coordB.x :
+				coordB.x - coordA.x;
+
+			return sideAxisDelta || a.distanceSq - b.distanceSq;
+
+		};
+		const createSideShellSupport = ( side, position, boundaryMask ) => {
+
+			const defaultCandidates = createNearestSupportCandidates( position, defaultMask, assignment.probeLayerMasks );
+			const boundaryCandidates = createNearestSupportCandidates( position, boundaryMask, assignment.probeLayerMasks );
+			const defaultSupport = defaultCandidates.slice( 0, supportSize );
+			const defaultSupportIndices = new Set( defaultSupport.map( probe => probe.probeIndex ) );
+			const relocationCandidatePool = boundaryCandidates.filter( probe =>
+				defaultSupportIndices.has( probe.probeIndex ) === false &&
+				probe.occupied === false
+			);
+
+			return [ ...relocationCandidatePool ].sort( createSideShellSort( side ) ).slice( 0, supportSize );
+
+		};
+		const createSideShellProbeLayerMasks = baseProbeLayerMasks => {
+
+			const probeLayerMasks = baseProbeLayerMasks === null || baseProbeLayerMasks === undefined ?
+				new Uint32Array( occupancy.totalProbes ).fill( defaultMask ) :
+				Uint32Array.from( baseProbeLayerMasks );
+			const leftSupport = createSideShellSupport( 'left', leftReceiverPoint, leftBoundaryMask );
+			const rightSupport = createSideShellSupport( 'right', rightReceiverPoint, rightBoundaryMask );
+
+			for ( const probe of leftSupport ) {
+
+				probeLayerMasks[ probe.probeIndex ] = probeLayerMasks[ probe.probeIndex ] | defaultMask | leftBoundaryMask;
+
+			}
+
+			for ( const probe of rightSupport ) {
+
+				probeLayerMasks[ probe.probeIndex ] = probeLayerMasks[ probe.probeIndex ] | defaultMask | rightBoundaryMask;
+
+			}
+
+			return {
+				probeLayerMasks,
+				leftSupport,
+				rightSupport
+			};
+
+		};
+		const createProbeSideRelocationSideShellProxyAttribution = async () => {
+
+			return createProbeSideRelocationProxyAttribution( {
+				attributionPolicy: 'probe-side-relocation-side-shell-proxy',
+				candidateShape: 'non-occupied-boundary-probe-side-shell-ranked-relocation-proxy',
+				relocationRankingPolicy: 'non-occupied-boundary-probe-interior-side-shell-then-nearest-receiver',
+				sortCandidates: ( a, b ) => a.distanceSq - b.distanceSq,
+				createSideSortCandidates: side => createSideShellSort( side )
+			} );
+
+		};
+		const createSideShellLocalCellReachabilityAttribution = () => {
+
+			const createSideFacts = ( side, receiver, boundaryMask, receiverPoint ) => {
+
+				const sideShellSupport = createSideShellSupport( side, receiverPoint, boundaryMask );
+				const localCell = createLocalCellSupport( receiver, side );
+				const sideShellIndices = new Set( sideShellSupport.map( probe => probe.probeIndex ) );
+				const localCellOverlapCount = localCell.support.filter( probe => sideShellIndices.has( probe.probeIndex ) ).length;
+
+				return {
+					side,
+					boundaryLayerMask: boundaryMask,
+					samplePointPolicy: localCell.samplePointPolicy,
+					normalBias: localCell.normalBias,
+					viewBias: localCell.viewBias,
+					probeCoord: localCell.probeCoord,
+					baseCoord: localCell.baseCoord,
+					localCellSupportIdentityHash: createSupportIdentityHash( localCell.support ),
+					localCellSupportGridCoordHash: createSupportGridCoordHash( localCell.support ),
+					localCellSupportGridCoordSummary: summarizeSupportGridCoords( localCell.support ),
+					sideShellSupportIdentityHash: createSupportIdentityHash( sideShellSupport ),
+					sideShellSupportGridCoordHash: createSupportGridCoordHash( sideShellSupport ),
+					sideShellSupportGridCoordSummary: summarizeSupportGridCoords( sideShellSupport ),
+					localCellOverlapCount,
+					localCellOverlapRatio: roundMetric( localCellOverlapCount / Math.max( supportSize, 1 ) ),
+					reachabilityVerdict: localCellOverlapCount === supportSize ?
+						'side-shell-support-fully-reachable-by-local-cell' :
+						localCellOverlapCount > 0 ?
+							'side-shell-support-partially-reachable-by-local-cell' :
+							'side-shell-support-not-reachable-by-local-cell'
+				};
+
+			};
+			const left = createSideFacts( 'left', _lightProbeContext.leakFixture.leftReceiver, leftBoundaryMask, leftReceiverPoint );
+			const right = createSideFacts( 'right', _lightProbeContext.leakFixture.rightReceiver, rightBoundaryMask, rightReceiverPoint );
+			const hasFullReachability = left.reachabilityVerdict === 'side-shell-support-fully-reachable-by-local-cell' &&
+				right.reachabilityVerdict === 'side-shell-support-fully-reachable-by-local-cell';
+
+			return {
+				attributionPolicy: 'probe-side-relocation-side-shell-local-cell-reachability',
+				proofBoundary: 'cpu-local-cell-support-overlap-only',
+				receiverPointPolicy: 'world-bounds-near-divider-edge',
+				leftBoundaryLayerMask: leftBoundaryMask,
+				rightBoundaryLayerMask: rightBoundaryMask,
+				left,
+				right,
+				localCellReachabilityVerdict: hasFullReachability ?
+					'side-shell-support-reachable-by-local-reconstruction-cell' :
+					'side-shell-support-needs-true-local-cell-relocation'
+			};
+
+		};
+		const createLocalCellRelocationCandidateAttribution = async () => {
+
+			const createSideFacts = async ( side, receiver, position, boundaryMask ) => {
+
+				const defaultCandidates = createNearestSupportCandidates( position, defaultMask, assignment.probeLayerMasks );
+				const defaultSupport = defaultCandidates.slice( 0, supportSize );
+				const localCell = createLocalCellSupport( receiver, side );
+				const localCellSupport = localCell.support;
+				const supportRank = createSupportRankFacts( {
+					side,
+					boundaryMask,
+					defaultCandidates,
+					classifiedCandidates: localCellSupport,
+					defaultSupport,
+					classifiedSupport: localCellSupport,
+					probeLayerMasks: assignment.probeLayerMasks
+				} );
+				const hasIdentityChange = supportRank.blockerVerdict === 'side-has-setup-identity-change';
+				const coefficientComparison = await readSupportCoefficientComparison( defaultSupport, localCellSupport, side, hasIdentityChange );
+
+				return {
+					...supportRank,
+					samplePointPolicy: localCell.samplePointPolicy,
+					normalBias: localCell.normalBias,
+					viewBias: localCell.viewBias,
+					probeCoord: localCell.probeCoord,
+					baseCoord: localCell.baseCoord,
+					relocationRankingPolicy: 'reachable-local-cell-support',
+					coefficientComparison
+				};
+
+			};
+			const left = await createSideFacts( 'left', _lightProbeContext.leakFixture.leftReceiver, leftReceiverPoint, leftBoundaryMask );
+			const right = await createSideFacts( 'right', _lightProbeContext.leakFixture.rightReceiver, rightReceiverPoint, rightBoundaryMask );
+			const hasBilateralIdentityChange = left.blockerVerdict === 'side-has-setup-identity-change' &&
+				right.blockerVerdict === 'side-has-setup-identity-change';
+			const hasCompleteNonOccupiedSupport = left.classifiedOccupiedSupportCount === 0 &&
+				right.classifiedOccupiedSupportCount === 0 &&
+				left.classifiedCandidateCount >= supportSize &&
+				right.classifiedCandidateCount >= supportSize;
+			const hasBilateralCoefficientWin =
+				left.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0' &&
+				right.coefficientComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0';
+
+			return {
+				attributionPolicy: 'probe-side-relocation-local-cell-candidate',
+				proofBoundary: 'cpu-local-cell-support-and-l0-attribution-only',
+				coefficientPolicy: 'packed-atlas-l0-support-mean',
+				candidateShape: 'reachable-local-cell-support-candidate',
+				receiverPointPolicy: 'world-bounds-near-divider-edge',
+				leftBoundaryLayerMask: leftBoundaryMask,
+				rightBoundaryLayerMask: rightBoundaryMask,
+				left,
+				right,
+				localCellCandidateVerdict: hasBilateralIdentityChange && hasCompleteNonOccupiedSupport && hasBilateralCoefficientWin ?
+					'local-cell-support-has-bilateral-l0-win' :
+					'local-cell-support-needs-physical-placement-relocation'
+			};
+
+		};
+		const createPhysicalPlacementRequirementAttribution = async () => {
+
+			const createSideFacts = async ( side, receiver, position, boundaryMask ) => {
+
+				const defaultCandidates = createNearestSupportCandidates( position, defaultMask, assignment.probeLayerMasks );
+				const defaultSupport = defaultCandidates.slice( 0, supportSize );
+				const localCell = createLocalCellSupport( receiver, side );
+				const targetSupport = localCell.support;
+				const sourceSupport = createSideShellSupport( side, position, boundaryMask );
+				const targetIndices = new Set( targetSupport.map( probe => probe.probeIndex ) );
+				const sourceIndices = new Set( sourceSupport.map( probe => probe.probeIndex ) );
+				const overlapCount = targetSupport.filter( probe => sourceIndices.has( probe.probeIndex ) ).length;
+				const replacementSlotCount = targetSupport.filter( probe =>
+					sourceIndices.has( probe.probeIndex ) === false
+				).length;
+				const occupiedReplacementSlotCount = targetSupport.filter( probe =>
+					sourceIndices.has( probe.probeIndex ) === false && probe.occupied === true
+				).length;
+				const sourceOutsideLocalCellCount = sourceSupport.filter( probe =>
+					targetIndices.has( probe.probeIndex ) === false
+				).length;
+				const targetComparison = await readSupportCoefficientComparison( defaultSupport, targetSupport, side, false );
+				const sourceComparison = await readSupportCoefficientComparison( defaultSupport, sourceSupport, side, true );
+
+				return {
+					side,
+					boundaryLayerMask: boundaryMask,
+					samplePointPolicy: localCell.samplePointPolicy,
+					normalBias: localCell.normalBias,
+					viewBias: localCell.viewBias,
+					targetProbeCoord: localCell.probeCoord,
+					targetBaseCoord: localCell.baseCoord,
+					targetSupportIdentityHash: createSupportIdentityHash( targetSupport ),
+					targetSupportGridCoordHash: createSupportGridCoordHash( targetSupport ),
+					targetSupportGridCoordSummary: summarizeSupportGridCoords( targetSupport ),
+					sourceSupportIdentityHash: createSupportIdentityHash( sourceSupport ),
+					sourceSupportGridCoordHash: createSupportGridCoordHash( sourceSupport ),
+					sourceSupportGridCoordSummary: summarizeSupportGridCoords( sourceSupport ),
+					overlapCount,
+					replacementSlotCount,
+					occupiedReplacementSlotCount,
+					sourceOutsideLocalCellCount,
+					targetOccupiedSupportCount: targetSupport.filter( probe => probe.occupied ).length,
+					sourceOccupiedSupportCount: sourceSupport.filter( probe => probe.occupied ).length,
+					targetCoefficientComparison: targetComparison,
+					sourceCoefficientComparison: sourceComparison,
+					placementRequirementVerdict: sourceComparison.coefficientComparisonVerdict === 'identity-change-reduces-wrong-side-l0' &&
+						replacementSlotCount > 0 ?
+						'physical-placement-can-transplant-side-owned-l0-into-local-cell' :
+						'physical-placement-source-does-not-prove-local-cell-benefit'
+				};
+
+			};
+			const left = await createSideFacts( 'left', _lightProbeContext.leakFixture.leftReceiver, leftReceiverPoint, leftBoundaryMask );
+			const right = await createSideFacts( 'right', _lightProbeContext.leakFixture.rightReceiver, rightReceiverPoint, rightBoundaryMask );
+			const hasBilateralPlacementSignal = left.placementRequirementVerdict === 'physical-placement-can-transplant-side-owned-l0-into-local-cell' &&
+				right.placementRequirementVerdict === 'physical-placement-can-transplant-side-owned-l0-into-local-cell';
+
+			return {
+				attributionPolicy: 'probe-side-relocation-physical-placement-requirement',
+				proofBoundary: 'cpu-placement-requirement-and-l0-attribution-only',
+				coefficientPolicy: 'packed-atlas-l0-support-mean',
+				candidateShape: 'transplant-side-shell-support-into-reachable-local-cell',
+				receiverPointPolicy: 'world-bounds-near-divider-edge',
+				leftBoundaryLayerMask: leftBoundaryMask,
+				rightBoundaryLayerMask: rightBoundaryMask,
+				left,
+				right,
+				physicalPlacementRequirementVerdict: hasBilateralPlacementSignal ?
+					'physical-local-cell-placement-required-and-l0-supported' :
+					'physical-local-cell-placement-requirement-not-proven'
+			};
+
+		};
+		const createLocalCellPlacement = ( {
+			leftReceiver = _lightProbeContext.leakFixture.leftReceiver,
+			rightReceiver = _lightProbeContext.leakFixture.rightReceiver,
+			leftPoint = leftReceiverPoint,
+			rightPoint = rightReceiverPoint
+		} = {} ) => {
+
+			const leftTarget = createLocalCellSupport( leftReceiver, 'left' ).support;
+			const rightTarget = createLocalCellSupport( rightReceiver, 'right' ).support;
+			const leftSource = createSideShellSupport( 'left', leftPoint, leftBoundaryMask );
+			const rightSource = createSideShellSupport( 'right', rightPoint, rightBoundaryMask );
+
+			return createLightProbeGridGPULocalCellPlacement( {
+				resolution,
+				defaultMask,
+				baseProbeValidity: _lightProbeContext.probeGrid.probeValiditySource,
+				baseProbeLayerMasks: _lightProbeContext.probeGrid.probeLayerMaskSource,
+				placements: [
+					{
+						side: 'left',
+						boundaryLayerMask: leftBoundaryMask,
+						targetSupport: leftTarget,
+						sourceSupport: leftSource
+					},
+					{
+						side: 'right',
+						boundaryLayerMask: rightBoundaryMask,
+						targetSupport: rightTarget,
+						sourceSupport: rightSource
+					}
+				]
+			} );
+
+		};
+		const createPlacementAuthoringInput = ( options = {} ) => {
+
+			const leftReceiver = options.leftReceiver ?? _lightProbeContext.leakFixture.leftReceiver;
+			const rightReceiver = options.rightReceiver ?? _lightProbeContext.leakFixture.rightReceiver;
+			const leftPoint = options.leftPoint ?? leftReceiverPoint;
+			const rightPoint = options.rightPoint ?? rightReceiverPoint;
+			const leftTarget = createLocalCellSupport( leftReceiver, 'left' ).support;
+			const rightTarget = createLocalCellSupport( rightReceiver, 'right' ).support;
+			const leftSource = createSideShellSupport( 'left', leftPoint, leftBoundaryMask );
+			const rightSource = createSideShellSupport( 'right', rightPoint, rightBoundaryMask );
+
+			return {
+				min: _lightProbeContext.gridMin,
+				max: _lightProbeContext.gridMax,
+				resolution,
+				defaultLayerMask: defaultMask,
+				baseProbeValidity: _lightProbeContext.probeGrid.probeValiditySource,
+				baseProbeLayerMasks: _lightProbeContext.probeGrid.probeLayerMaskSource,
+				layerRules: [
+					{ id: 'left-boundary', side: 'left', boundaryLayerMask: leftBoundaryMask },
+					{ id: 'right-boundary', side: 'right', boundaryLayerMask: rightBoundaryMask }
+				],
+				occupancyPolicy: {
+					policyId: 'solid-occupancy-validity'
+				},
+				sourceSelectionPolicy: {
+					policyId: 'side-shell-local-cell-source-policy'
+				},
+				receiverRegions: [
+					{
+						id: 'left-receiver-region',
+						side: 'left',
+						boundaryLayerMask: leftBoundaryMask,
+						sampleRegion: 'receiver-local-cell',
+						targetSupport: leftTarget,
+						sourceSupport: leftSource
+					},
+					{
+						id: 'right-receiver-region',
+						side: 'right',
+						boundaryLayerMask: rightBoundaryMask,
+						sampleRegion: 'receiver-local-cell',
+						targetSupport: rightTarget,
+						sourceSupport: rightSource
+					}
+				]
+			};
+
+		};
+		const createPlacementAuthoring = ( options = {} ) => {
+
+			return createLightProbeGridGPUPlacementAuthoring( createPlacementAuthoringInput( options ) );
+
+		};
+		const createLocalCellPlacementHelperAttribution = ( options = {} ) => {
+
+			const placement = createLocalCellPlacement( options );
+
+			return {
+				attributionPolicy: 'probe-side-relocation-local-cell-placement-helper',
+				proofBoundary: 'setup-helper-array-generation-only',
+				...( options.fixtureId !== undefined ? { fixtureId: options.fixtureId } : {} ),
+				...( options.fixtureFamily !== undefined ? { fixtureFamily: options.fixtureFamily } : {} ),
+				helperPolicyId: placement.placementFacts.policyId,
+				placementPolicyFacts: placement.placementFacts.placementPolicyFacts,
+				totalProbes: placement.placementFacts.totalProbes,
+				acceptedSideCount: placement.placementFacts.acceptedSideCount,
+				probeValidityLength: placement.probeValidity.length,
+				probeLayerMasksLength: placement.probeLayerMasks.length,
+				replacementSlotCount: placement.placementFacts.replacementSlotCount,
+				occupiedReplacementSlotCount: placement.placementFacts.occupiedReplacementSlotCount,
+				sideFacts: placement.placementFacts.sideFacts,
+				placementHelperVerdict: placement.placementFacts.placementVerdict
+			};
+
+		};
+		const createPlacementAuthoringAttribution = ( options = {} ) => {
+
+			const authoring = createPlacementAuthoring( options );
+
+			return {
+				attributionPolicy: 'placement-authoring-product-module',
+				...( options.fixtureId !== undefined ? { fixtureId: options.fixtureId } : {} ),
+				...( options.fixtureFamily !== undefined ? { fixtureFamily: options.fixtureFamily } : {} ),
+				modulePath: 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUPlacementAuthoring.js',
+				authoringPolicyId: authoring.placementFacts.policyId,
+				placementPolicyFacts: authoring.placementFacts.placementPolicyFacts,
+				sourceSelectionPolicyFacts: authoring.placementFacts.sourceSelectionPolicyFacts,
+				totalProbes: authoring.placementFacts.totalProbes,
+				receiverRegionCount: authoring.placementFacts.receiverRegionCount,
+				layerRuleCount: authoring.placementFacts.layerRuleCount,
+				occupancyPolicyId: authoring.placementFacts.occupancyPolicyId,
+				acceptedSideCount: authoring.placementFacts.acceptedSideCount,
+				probeValidityLength: authoring.probeValidity.length,
+				probeLayerMasksLength: authoring.probeLayerMasks.length,
+				replacementSlotCount: authoring.placementFacts.replacementSlotCount,
+				occupiedReplacementSlotCount: authoring.placementFacts.occupiedReplacementSlotCount,
+				sideFacts: authoring.placementFacts.sideFacts,
+				productHasProofOnlyFacts: authoring.placementFacts.proofBoundary !== undefined ||
+					authoring.placementFacts.placementHelperPolicyId !== undefined ||
+					authoring.placementFacts.sourceSelectionPolicyFacts.forbiddenInputs !== undefined,
+				placementAuthoringVerdict: authoring.placementFacts.placementVerdict === 'placement-authoring-emits-arrays' ?
+					'placement-authoring-product-module-emits-arrays' :
+					'placement-authoring-has-no-local-cell-placement-work'
+			};
+
+		};
+		const createPlacementAuthoringParityAttribution = ( helperAttribution, authoringAttribution ) => {
+
+			const helperSideHashes = helperAttribution.sideFacts.map( side => ( {
+				side: side.side,
+				targetSupportIdentityHash: side.targetSupportIdentityHash,
+				sourceSupportIdentityHash: side.sourceSupportIdentityHash,
+				replacementSlotCount: side.replacementSlotCount,
+				occupiedReplacementSlotCount: side.occupiedReplacementSlotCount
+			} ) );
+			const authoringSideHashes = authoringAttribution.sideFacts.map( side => ( {
+				side: side.side,
+				targetSupportIdentityHash: side.targetSupportIdentityHash,
+				sourceSupportIdentityHash: side.sourceSupportIdentityHash,
+				replacementSlotCount: side.replacementSlotCount,
+				occupiedReplacementSlotCount: side.occupiedReplacementSlotCount
+			} ) );
+			const sideFactsMatch = JSON.stringify( helperSideHashes ) === JSON.stringify( authoringSideHashes );
+			const placementPolicyFactsMatch = JSON.stringify( helperAttribution.placementPolicyFacts ) ===
+				JSON.stringify( authoringAttribution.placementPolicyFacts );
+			const summaryCountsMatch =
+				helperAttribution.totalProbes === authoringAttribution.totalProbes &&
+				helperAttribution.acceptedSideCount === authoringAttribution.acceptedSideCount &&
+				helperAttribution.probeValidityLength === authoringAttribution.probeValidityLength &&
+				helperAttribution.probeLayerMasksLength === authoringAttribution.probeLayerMasksLength &&
+				helperAttribution.replacementSlotCount === authoringAttribution.replacementSlotCount &&
+				helperAttribution.occupiedReplacementSlotCount === authoringAttribution.occupiedReplacementSlotCount;
+
+			return {
+				attributionPolicy: 'placement-authoring-helper-parity',
+				proofBoundary: 'compact-authoring-adapter-helper-fact-parity',
+				fixtureId: helperAttribution.fixtureId ?? 'sealed-wall',
+				helperPolicyId: helperAttribution.helperPolicyId,
+				authoringPolicyId: authoringAttribution.authoringPolicyId,
+				placementPolicyFactsMatch,
+				summaryCountsMatch,
+				sideFactsMatch,
+				helperSideHashes,
+				authoringSideHashes,
+				placementAuthoringParityVerdict: placementPolicyFactsMatch && summaryCountsMatch && sideFactsMatch ?
+					'placement-authoring-matches-helper-facts' :
+					'placement-authoring-differs-from-helper-facts'
+			};
+
+		};
+		const createSealedOffsetWallPlacementHelperAttribution = () => {
+
+			const previousCamera = createCameraSnapshot();
+
+			try {
+
+				setLeakFixtureMode( 'sealed-offset-wall' );
+				applySealedOffsetWallProofCamera();
+
+				const leftReceiver = _lightProbeContext.leakFixture.leftReceiver;
+				const rightReceiver = _lightProbeContext.leakFixture.rightReceiver;
+
+				return createLocalCellPlacementHelperAttribution( {
+					fixtureId: 'sealed-offset-wall',
+					fixtureFamily: 'sealed-offset-wall',
+					leftReceiver,
+					rightReceiver,
+					leftPoint: createReceiverEdgePoint( leftReceiver, 'left' ),
+					rightPoint: createReceiverEdgePoint( rightReceiver, 'right' )
+				} );
+
+			} finally {
+
+				setLeakFixtureMode( 'sealed-wall' );
+				restoreCameraSnapshot( previousCamera );
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+			}
+
+		};
+		const createSealedOffsetWallPlacementAuthoringAttribution = () => {
+
+			const previousCamera = createCameraSnapshot();
+
+			try {
+
+				setLeakFixtureMode( 'sealed-offset-wall' );
+				applySealedOffsetWallProofCamera();
+
+				const leftReceiver = _lightProbeContext.leakFixture.leftReceiver;
+				const rightReceiver = _lightProbeContext.leakFixture.rightReceiver;
+
+				return createPlacementAuthoringAttribution( {
+					fixtureId: 'sealed-offset-wall',
+					fixtureFamily: 'sealed-offset-wall',
+					leftReceiver,
+					rightReceiver,
+					leftPoint: createReceiverEdgePoint( leftReceiver, 'left' ),
+					rightPoint: createReceiverEdgePoint( rightReceiver, 'right' )
+				} );
+
+			} finally {
+
+				setLeakFixtureMode( 'sealed-wall' );
+				restoreCameraSnapshot( previousCamera );
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+			}
 
 		};
 		const captureSetupClassificationIrradianceDelta = () => {
@@ -4873,9 +5867,407 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			}
 
 		};
+		const captureSideShellIrradianceDelta = () => {
+
+			if ( typeof _lightProbeContext.probeGrid._createManualIrradianceDebugNode !== 'function' ) return null;
+
+			const originalProbeLayerMasks = _lightProbeContext.probeGrid.probeLayerMaskSource;
+			const sideShell = createSideShellProbeLayerMasks( originalProbeLayerMasks );
+			const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
+			const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
+			const previousOutputColorSpace = _lightProbeContext.renderer.outputColorSpace;
+			const leftMaterial = new THREE.MeshBasicNodeMaterial();
+			const rightMaterial = new THREE.MeshBasicNodeMaterial();
+			const surfaceRegions = {
+				leftReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
+				rightReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
+			};
+			const createEdgeRegion = ( region, side ) => {
+
+				const width = region.x1 - region.x0;
+
+				return side === 'left' ? {
+					...region,
+					x0: Math.max( region.x0, region.x1 - width * 0.35 )
+				} : {
+					...region,
+					x1: Math.min( region.x1, region.x0 + width * 0.35 )
+				};
+
+			};
+			const regions = {
+				leftReceiverSurface: createEdgeRegion( surfaceRegions.leftReceiverSurface, 'left' ),
+				rightReceiverSurface: createEdgeRegion( surfaceRegions.rightReceiverSurface, 'right' )
+			};
+			const createMeans = samples => ( {
+				leftMean: roundMetric( samples.leftReceiverSurface.luminance.mean / 255 ),
+				rightMean: roundMetric( samples.rightReceiverSurface.luminance.mean / 255 ),
+				combinedMean: roundMetric( (
+					samples.leftReceiverSurface.luminance.mean +
+					samples.rightReceiverSurface.luminance.mean
+				) / ( 2 * 255 ) )
+			} );
+			const captureState = ( probeLayerMasks, leftOptions, rightOptions ) => {
+
+				_lightProbeContext.probeGrid.setOptions( {
+					probeLayerMasks
+				}, _lightProbeContext.renderer );
+
+				leftMaterial.colorNode = _lightProbeContext.probeGrid._createManualIrradianceDebugNode( 'finalIrradiance', leftOptions );
+				rightMaterial.colorNode = _lightProbeContext.probeGrid._createManualIrradianceDebugNode( 'finalIrradiance', rightOptions );
+				leftMaterial.toneMapped = false;
+				rightMaterial.toneMapped = false;
+				leftMaterial.needsUpdate = true;
+				rightMaterial.needsUpdate = true;
+				_lightProbeContext.leakFixture.leftReceiver.material = leftMaterial;
+				_lightProbeContext.leakFixture.rightReceiver.material = rightMaterial;
+				_lightProbeContext.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+				return createMeans( captureRegionArtifactMetrics( regions ) );
+
+			};
+			const createRatio = ( numerator, denominator ) => ( {
+				leftRatio: roundMetric( numerator.leftMean / Math.max( denominator.leftMean, PROOF_RATIO_DENOMINATOR_EPSILON ) ),
+				rightRatio: roundMetric( numerator.rightMean / Math.max( denominator.rightMean, PROOF_RATIO_DENOMINATOR_EPSILON ) ),
+				combinedRatio: roundMetric( numerator.combinedMean / Math.max( denominator.combinedMean, PROOF_RATIO_DENOMINATOR_EPSILON ) )
+			} );
+
+			try {
+
+				ensureAuthoredReceiverBoundaryClassAttributes();
+
+				const unclassifiedDefault = captureState( originalProbeLayerMasks, {}, {} );
+				const sideShellBoundary = captureState(
+					sideShell.probeLayerMasks,
+					createReceiverBoundaryDescriptor( leftBoundaryMask ),
+					createReceiverBoundaryDescriptor( rightBoundaryMask )
+				);
+				const sideShellToUnclassifiedDefault = createRatio( sideShellBoundary, unclassifiedDefault );
+
+				return {
+					attributionPolicy: 'probe-side-relocation-side-shell-final-irradiance-delta',
+					proofBoundary: 'debug-node-side-shell-mask-delta-only',
+					debugMode: 'finalIrradiance',
+					leftBoundaryLayerMask: leftBoundaryMask,
+					rightBoundaryLayerMask: rightBoundaryMask,
+					leftSupportIdentityHash: createSupportIdentityHash( sideShell.leftSupport ),
+					rightSupportIdentityHash: createSupportIdentityHash( sideShell.rightSupport ),
+					leftSupportGridCoordHash: createSupportGridCoordHash( sideShell.leftSupport ),
+					rightSupportGridCoordHash: createSupportGridCoordHash( sideShell.rightSupport ),
+					unclassifiedDefault,
+					sideShellBoundary,
+					sideShellToUnclassifiedDefault,
+					sideShellIrradianceDeltaVerdict: sideShellBoundary.combinedMean <= PROOF_RATIO_DENOMINATOR_EPSILON ?
+						'side-shell-support-not-reached-by-final-irradiance-debug-node' :
+						sideShellToUnclassifiedDefault.combinedRatio > 1.001 ?
+						'side-shell-improves-final-irradiance-over-default' :
+						'side-shell-does-not-change-final-irradiance-debug-signal'
+				};
+
+			} finally {
+
+				_lightProbeContext.probeGrid.setOptions( {
+					probeLayerMasks: originalProbeLayerMasks
+				}, _lightProbeContext.renderer );
+				_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
+				_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
+				_lightProbeContext.renderer.outputColorSpace = previousOutputColorSpace;
+				leftMaterial.dispose();
+				rightMaterial.dispose();
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+			}
+
+		};
+		const captureLocalCellPlacementIrradianceDelta = () => {
+
+			if ( typeof _lightProbeContext.probeGrid._createManualIrradianceDebugNode !== 'function' ) return null;
+
+			const placement = createLocalCellPlacement();
+			const originalProbeValidity = _lightProbeContext.probeGrid.probeValiditySource;
+			const originalProbeLayerMasks = _lightProbeContext.probeGrid.probeLayerMaskSource;
+			const previousLeftMaterial = _lightProbeContext.leakFixture.leftReceiver.material;
+			const previousRightMaterial = _lightProbeContext.leakFixture.rightReceiver.material;
+			const previousOutputColorSpace = _lightProbeContext.renderer.outputColorSpace;
+			const leftMaterial = new THREE.MeshBasicNodeMaterial();
+			const rightMaterial = new THREE.MeshBasicNodeMaterial();
+			const surfaceRegions = {
+				leftReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.leftReceiver ) ?? leakArtifactRegions.leftReceiver,
+				rightReceiverSurface: createObjectSurfaceScreenRegion( _lightProbeContext.leakFixture.rightReceiver ) ?? leakArtifactRegions.rightReceiver
+			};
+			const createEdgeRegion = ( region, side ) => {
+
+				const width = region.x1 - region.x0;
+
+				return side === 'left' ? {
+					...region,
+					x0: Math.max( region.x0, region.x1 - width * 0.35 )
+				} : {
+					...region,
+					x1: Math.min( region.x1, region.x0 + width * 0.35 )
+				};
+
+			};
+			const regions = {
+				leftReceiverSurface: createEdgeRegion( surfaceRegions.leftReceiverSurface, 'left' ),
+				rightReceiverSurface: createEdgeRegion( surfaceRegions.rightReceiverSurface, 'right' )
+			};
+			const createMeans = samples => ( {
+				leftMean: roundMetric( samples.leftReceiverSurface.luminance.mean / 255 ),
+				rightMean: roundMetric( samples.rightReceiverSurface.luminance.mean / 255 ),
+				combinedMean: roundMetric( (
+					samples.leftReceiverSurface.luminance.mean +
+					samples.rightReceiverSurface.luminance.mean
+				) / ( 2 * 255 ) )
+			} );
+			const captureState = ( probeValidity, probeLayerMasks, leftOptions, rightOptions ) => {
+
+				_lightProbeContext.probeGrid.setOptions( {
+					probeValidity,
+					probeLayerMasks
+				}, _lightProbeContext.renderer );
+
+				leftMaterial.colorNode = _lightProbeContext.probeGrid._createManualIrradianceDebugNode( 'finalIrradiance', leftOptions );
+				rightMaterial.colorNode = _lightProbeContext.probeGrid._createManualIrradianceDebugNode( 'finalIrradiance', rightOptions );
+				leftMaterial.toneMapped = false;
+				rightMaterial.toneMapped = false;
+				leftMaterial.needsUpdate = true;
+				rightMaterial.needsUpdate = true;
+				_lightProbeContext.leakFixture.leftReceiver.material = leftMaterial;
+				_lightProbeContext.leakFixture.rightReceiver.material = rightMaterial;
+				_lightProbeContext.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+				return createMeans( captureRegionArtifactMetrics( regions ) );
+
+			};
+			const createRatio = ( numerator, denominator ) => ( {
+				leftRatio: roundMetric( numerator.leftMean / Math.max( denominator.leftMean, PROOF_RATIO_DENOMINATOR_EPSILON ) ),
+				rightRatio: roundMetric( numerator.rightMean / Math.max( denominator.rightMean, PROOF_RATIO_DENOMINATOR_EPSILON ) ),
+				combinedRatio: roundMetric( numerator.combinedMean / Math.max( denominator.combinedMean, PROOF_RATIO_DENOMINATOR_EPSILON ) )
+			} );
+
+			try {
+
+				ensureAuthoredReceiverBoundaryClassAttributes();
+
+				const unclassifiedDefault = captureState( originalProbeValidity, originalProbeLayerMasks, {}, {} );
+				const placementBoundary = captureState(
+					placement.probeValidity,
+					placement.probeLayerMasks,
+					createReceiverBoundaryDescriptor( leftBoundaryMask ),
+					createReceiverBoundaryDescriptor( rightBoundaryMask )
+				);
+				const placementToUnclassifiedDefault = createRatio( placementBoundary, unclassifiedDefault );
+
+				return {
+					attributionPolicy: 'probe-side-relocation-local-cell-placement-final-irradiance-delta',
+					proofBoundary: 'debug-node-local-cell-placement-array-delta-only',
+					debugMode: 'finalIrradiance',
+					leftBoundaryLayerMask: leftBoundaryMask,
+					rightBoundaryLayerMask: rightBoundaryMask,
+					helperPolicyId: placement.placementFacts.policyId,
+					replacementSlotCount: placement.placementFacts.replacementSlotCount,
+					occupiedReplacementSlotCount: placement.placementFacts.occupiedReplacementSlotCount,
+					unclassifiedDefault,
+					placementBoundary,
+					placementToUnclassifiedDefault,
+					placementIrradianceDeltaVerdict: placementBoundary.combinedMean <= PROOF_RATIO_DENOMINATOR_EPSILON ?
+						'placement-helper-arrays-not-reached-by-final-irradiance-debug-node' :
+						placementToUnclassifiedDefault.combinedRatio > 1.001 ?
+							'placement-helper-arrays-improve-final-irradiance-over-default' :
+							'placement-helper-arrays-do-not-change-final-irradiance-debug-signal'
+				};
+
+			} finally {
+
+				_lightProbeContext.probeGrid.setOptions( {
+					probeValidity: originalProbeValidity,
+					probeLayerMasks: originalProbeLayerMasks
+				}, _lightProbeContext.renderer );
+				_lightProbeContext.leakFixture.leftReceiver.material = previousLeftMaterial;
+				_lightProbeContext.leakFixture.rightReceiver.material = previousRightMaterial;
+				_lightProbeContext.renderer.outputColorSpace = previousOutputColorSpace;
+				leftMaterial.dispose();
+				rightMaterial.dispose();
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+			}
+
+		};
+		const captureLocalCellPlacementRenderLeakDelta = ( options = {} ) => {
+
+			const placement = createLocalCellPlacement( options );
+			const originalProbeValidity = _lightProbeContext.probeGrid.probeValiditySource;
+			const originalProbeLayerMasks = _lightProbeContext.probeGrid.probeLayerMaskSource;
+			const captureState = ( probeValidity, probeLayerMasks ) => {
+
+				_lightProbeContext.probeGrid.setOptions( {
+					probeValidity,
+					probeLayerMasks
+				}, _lightProbeContext.renderer );
+
+				return captureReceiverBoundaryMaskAlignmentRenderFacts( {
+					attributionPolicy: 'probe-side-relocation-local-cell-placement-render-state',
+					...( options.fixtureId !== undefined ? { fixtureId: options.fixtureId } : {} ),
+					...( options.fixtureFamily !== undefined ? { fixtureFamily: options.fixtureFamily } : {} ),
+					leftBoundaryLayerMask: leftBoundaryMask,
+					rightBoundaryLayerMask: rightBoundaryMask
+				} );
+
+			};
+			const createRatio = ( numerator, denominator ) => ( {
+				maskedWrongSideColorRatio: roundMetric( numerator.maskedWrongSideColorRatio / Math.max(
+					denominator.maskedWrongSideColorRatio,
+					PROOF_RATIO_DENOMINATOR_EPSILON
+				) ),
+				leftMaskedWrongSideColorRatio: roundMetric( numerator.leftMaskedWrongSideColorRatio / Math.max(
+					denominator.leftMaskedWrongSideColorRatio,
+					PROOF_RATIO_DENOMINATOR_EPSILON
+				) ),
+				rightMaskedWrongSideColorRatio: roundMetric( numerator.rightMaskedWrongSideColorRatio / Math.max(
+					denominator.rightMaskedWrongSideColorRatio,
+					PROOF_RATIO_DENOMINATOR_EPSILON
+				) ),
+				preToneMaskedWrongSideColorRatio: roundMetric( numerator.preToneMaskedWrongSideColorRatio / Math.max(
+					denominator.preToneMaskedWrongSideColorRatio,
+					PROOF_RATIO_DENOMINATOR_EPSILON
+				) ),
+				correctBounceRatio: roundMetric( numerator.correctBounceRatio / Math.max(
+					denominator.correctBounceRatio,
+					PROOF_RATIO_DENOMINATOR_EPSILON
+				) )
+			} );
+
+			try {
+
+				ensureAuthoredReceiverBoundaryClassAttributes();
+
+				const unclassifiedBoundaryRender = captureState( originalProbeValidity, originalProbeLayerMasks );
+				const placementBoundaryRender = captureState(
+					placement.probeValidity,
+					placement.probeLayerMasks
+				);
+				const placementToUnclassifiedBoundaryRender = createRatio( placementBoundaryRender, unclassifiedBoundaryRender );
+				const reducesWrongSideLeak = placementToUnclassifiedBoundaryRender.maskedWrongSideColorRatio < 0.999;
+				const improvesBothSides = placementToUnclassifiedBoundaryRender.leftMaskedWrongSideColorRatio < 0.999 &&
+					placementToUnclassifiedBoundaryRender.rightMaskedWrongSideColorRatio < 0.999;
+				const preservesCorrectBounce = placementToUnclassifiedBoundaryRender.correctBounceRatio >= 0.999;
+				const lowBaselineSideRegressionPolicy = {
+					policyId: 'low-baseline-side-regression-policy',
+					side: 'right',
+					maxBaselineWrongSideColorRatio: 0.25,
+					requireStableMaskedPixelCount: true,
+					requireStablePreToneMaskedPixelCount: true,
+					requireCombinedWrongSideImprovement: true,
+					requirePreToneWrongSideImprovement: true,
+					minCorrectBounceRatio: 0.999
+				};
+				const hasStableRightMaskedPixelCount =
+					unclassifiedBoundaryRender.maskedRightVisiblePixelCount === placementBoundaryRender.maskedRightVisiblePixelCount;
+				const hasStableRightPreToneMaskedPixelCount =
+					unclassifiedBoundaryRender.preToneMaskedRightVisiblePixelCount === placementBoundaryRender.preToneMaskedRightVisiblePixelCount;
+				const passesLowBaselineSideRegressionPolicy =
+					unclassifiedBoundaryRender.rightMaskedWrongSideColorRatio < lowBaselineSideRegressionPolicy.maxBaselineWrongSideColorRatio &&
+					hasStableRightMaskedPixelCount &&
+					hasStableRightPreToneMaskedPixelCount &&
+					reducesWrongSideLeak &&
+					placementToUnclassifiedBoundaryRender.preToneMaskedWrongSideColorRatio < 0.999 &&
+					placementToUnclassifiedBoundaryRender.correctBounceRatio >= lowBaselineSideRegressionPolicy.minCorrectBounceRatio;
+				const rightSideRegressionAttribution = {
+					attributionPolicy: 'right-side-placement-render-regression-attribution',
+					proofBoundary: 'rendered-ratio-side-delta-only',
+					fixtureId: options.fixtureId ?? 'sealed-wall',
+					lowBaselineSideRegressionPolicy,
+					baselineRightMaskedWrongSideColorRatio: unclassifiedBoundaryRender.rightMaskedWrongSideColorRatio,
+					placementRightMaskedWrongSideColorRatio: placementBoundaryRender.rightMaskedWrongSideColorRatio,
+					rightMaskedWrongSideColorRatio: placementToUnclassifiedBoundaryRender.rightMaskedWrongSideColorRatio,
+					baselineRightMaskedVisiblePixelCount: unclassifiedBoundaryRender.maskedRightVisiblePixelCount,
+					placementRightMaskedVisiblePixelCount: placementBoundaryRender.maskedRightVisiblePixelCount,
+					stableRightMaskedVisiblePixelCount: hasStableRightMaskedPixelCount,
+					baselinePreToneRightMaskedVisiblePixelCount: unclassifiedBoundaryRender.preToneMaskedRightVisiblePixelCount,
+					placementPreToneRightMaskedVisiblePixelCount: placementBoundaryRender.preToneMaskedRightVisiblePixelCount,
+					stablePreToneRightMaskedVisiblePixelCount: hasStableRightPreToneMaskedPixelCount,
+					leftMaskedWrongSideColorRatio: placementToUnclassifiedBoundaryRender.leftMaskedWrongSideColorRatio,
+					combinedMaskedWrongSideColorRatio: placementToUnclassifiedBoundaryRender.maskedWrongSideColorRatio,
+					preToneMaskedWrongSideColorRatio: placementToUnclassifiedBoundaryRender.preToneMaskedWrongSideColorRatio,
+					correctBounceRatio: placementToUnclassifiedBoundaryRender.correctBounceRatio,
+					rightSideRegressionVerdict: placementToUnclassifiedBoundaryRender.rightMaskedWrongSideColorRatio <= 0.999 ?
+						'right-side-placement-render-improves' :
+						passesLowBaselineSideRegressionPolicy ?
+							'right-side-small-baseline-regression-with-combined-placement-win' :
+							'right-side-placement-render-regresses'
+				};
+
+				return {
+					attributionPolicy: 'probe-side-relocation-local-cell-placement-render-leak-delta',
+					proofBoundary: 'rendered-ratio-local-cell-placement-array-delta-only',
+					...( options.fixtureId !== undefined ? { fixtureId: options.fixtureId } : {} ),
+					...( options.fixtureFamily !== undefined ? { fixtureFamily: options.fixtureFamily } : {} ),
+					leftBoundaryLayerMask: leftBoundaryMask,
+					rightBoundaryLayerMask: rightBoundaryMask,
+					helperPolicyId: placement.placementFacts.policyId,
+					replacementSlotCount: placement.placementFacts.replacementSlotCount,
+					occupiedReplacementSlotCount: placement.placementFacts.occupiedReplacementSlotCount,
+					unclassifiedBoundaryRender,
+					placementBoundaryRender,
+					placementToUnclassifiedBoundaryRender,
+					rightSideRegressionAttribution,
+					placementRenderLeakVerdict: reducesWrongSideLeak && improvesBothSides && preservesCorrectBounce ?
+						'placement-helper-arrays-improve-bilateral-render-leak-over-default' :
+						reducesWrongSideLeak && preservesCorrectBounce ?
+							'placement-helper-arrays-improve-combined-render-leak-over-default' :
+							'placement-helper-arrays-do-not-improve-render-leak-over-default'
+				};
+
+			} finally {
+
+				_lightProbeContext.probeGrid.setOptions( {
+					probeValidity: originalProbeValidity,
+					probeLayerMasks: originalProbeLayerMasks
+				}, _lightProbeContext.renderer );
+
+			}
+
+		};
+		const captureSealedOffsetWallPlacementRenderLeakDelta = () => {
+
+			const previousCamera = createCameraSnapshot();
+
+			try {
+
+				setLeakFixtureMode( 'sealed-offset-wall' );
+				applySealedOffsetWallProofCamera();
+
+				const leftReceiver = _lightProbeContext.leakFixture.leftReceiver;
+				const rightReceiver = _lightProbeContext.leakFixture.rightReceiver;
+
+				return captureLocalCellPlacementRenderLeakDelta( {
+					fixtureId: 'sealed-offset-wall',
+					fixtureFamily: 'sealed-offset-wall',
+					leftReceiver,
+					rightReceiver,
+					leftPoint: createReceiverEdgePoint( leftReceiver, 'left' ),
+					rightPoint: createReceiverEdgePoint( rightReceiver, 'right' )
+				} );
+
+			} finally {
+
+				setLeakFixtureMode( 'sealed-wall' );
+				restoreCameraSnapshot( previousCamera );
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+			}
+
+		};
 
 		const renderGuard = captureRenderOnlyGuard();
 		const finalIrradianceDebug = captureFinalIrradianceDebug();
+		const localCellPlacementHelperAttribution = createLocalCellPlacementHelperAttribution();
+		const placementAuthoringAttribution = createPlacementAuthoringAttribution();
+		const sealedOffsetWallPlacementHelperAttribution = createSealedOffsetWallPlacementHelperAttribution();
+		const sealedOffsetWallPlacementAuthoringAttribution = createSealedOffsetWallPlacementAuthoringAttribution();
 
 		return {
 			attributionPolicy: 'setup-side-probe-identity-classification-candidate',
@@ -4909,8 +6301,30 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			sideSymmetryAttribution: createSideSymmetryAttribution(),
 			probeSideClassificationAttribution: await createProbeSideClassificationAttribution(),
 			probeSideRelocationOracleAttribution: await createProbeSideRelocationOracleAttribution(),
-			probeSideRelocationProxyAttribution: await createProbeSideRelocationProxyAttribution(),
+			probeSideRelocationProxyAttribution: await createProbeSideRelocationDistanceProxyAttribution(),
+			probeSideRelocationDividerProxyAttribution: await createProbeSideRelocationDividerProxyAttribution(),
+			probeSideRelocationVisibilityProxyAttribution: await createProbeSideRelocationVisibilityProxyAttribution(),
+			probeSideRelocationSideShellProxyAttribution: await createProbeSideRelocationSideShellProxyAttribution(),
+			sideShellLocalCellReachability: createSideShellLocalCellReachabilityAttribution(),
+			localCellRelocationCandidateAttribution: await createLocalCellRelocationCandidateAttribution(),
+			physicalPlacementRequirementAttribution: await createPhysicalPlacementRequirementAttribution(),
+			localCellPlacementHelperAttribution,
+			placementAuthoringAttribution,
+			placementAuthoringParityAttribution: createPlacementAuthoringParityAttribution(
+				localCellPlacementHelperAttribution,
+				placementAuthoringAttribution
+			),
+			sealedOffsetWallPlacementHelperAttribution,
+			sealedOffsetWallPlacementAuthoringAttribution,
+			sealedOffsetWallPlacementAuthoringParityAttribution: createPlacementAuthoringParityAttribution(
+				sealedOffsetWallPlacementHelperAttribution,
+				sealedOffsetWallPlacementAuthoringAttribution
+			),
 			setupClassificationIrradianceDelta: captureSetupClassificationIrradianceDelta(),
+			sideShellIrradianceDelta: captureSideShellIrradianceDelta(),
+			localCellPlacementIrradianceDelta: captureLocalCellPlacementIrradianceDelta(),
+			localCellPlacementRenderLeakDelta: captureLocalCellPlacementRenderLeakDelta(),
+			sealedOffsetWallPlacementRenderLeakDelta: captureSealedOffsetWallPlacementRenderLeakDelta(),
 			candidates
 		};
 
@@ -4924,8 +6338,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		};
 		const previousState = createHarnessStateSnapshot();
+		const previousCamera = createCameraSnapshot();
 		const previousVisibility = createProbeVisibilitySnapshot();
 		const rows = [];
+		const sealedOffsetWallRows = [];
 		const residualAttributionRows = [];
 		let proofSettings = null;
 		let sampling = null;
@@ -4944,6 +6360,7 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 		let coefficientSideWeightingAttribution = null;
 		let supportSetAttribution = null;
 		let setupSideProbeClassificationAttribution = null;
+		let sealedOffsetWallFixtureAttribution = null;
 		const cases = [
 			{
 				label: 'sealed-wall-validity-weighted',
@@ -4955,13 +6372,19 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				label: 'sealed-wall-visibility-moments',
 				leakReductionMode: 'normal',
 				useProbeValidity: true,
-				receiverScopedMask: true
+				receiverScopedMask: true,
+				requiresActiveVisibility: true
 			}
 		];
+		const resolveProofCaseLabel = ( proofCase, label ) =>
+			proofCase.requiresActiveVisibility === true && isActiveMomentVisibilityDepthInfo( readVisibilityDepthInfo() ) === false ?
+				label.replace( 'visibility-moments', 'visibility-inactive' ) :
+				label;
 
 		const restoreState = async () => {
 
 			restoreProbeVisibilitySnapshot( previousVisibility );
+			restoreCameraSnapshot( previousCamera );
 			await restoreHarnessState( previousState, 'leak proof restore' );
 
 		};
@@ -4993,13 +6416,14 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				if ( proofCase.receiverScopedMask === true ) applyLeakFixtureReceiverMasks();
 
 				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+				const proofLabel = resolveProofCaseLabel( proofCase, proofCase.label );
 
 				if ( proofSettings === null ) proofSettings = createLeakProofSettingsSnapshot();
 				if ( sampling === null ) sampling = _lightProbeContext.probeGrid.getSamplingInfo();
 
-				traceProof( `leak metrics ${ proofCase.label }` );
+				traceProof( `leak metrics ${ proofLabel }` );
 				const leakMetrics = captureLeakRegionMetrics();
-				traceProof( `pre-tone metrics ${ proofCase.label }` );
+				traceProof( `pre-tone metrics ${ proofLabel }` );
 				const preToneLeakMetrics = captureLeakRegionMetricsWithRendererMapping( {
 					mode: 'pre-tone-linear-output-masked-visible-pixels',
 					toneMapping: THREE.NoToneMapping,
@@ -5055,12 +6479,12 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				}
 
 				rows.push( {
-					label: proofCase.label,
+					label: proofLabel,
 					guardedVisibilityProofMode,
 					...createLeakProofRowMetrics( leakMetrics, preToneLeakMetrics )
 				} );
 				residualAttributionRows.push( createResidualAttributionRow(
-					proofCase.label,
+					proofLabel,
 					leakMetrics,
 					preToneLeakMetrics,
 					irradianceMetrics,
@@ -5071,6 +6495,60 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 				) );
 
 			}
+
+			for ( const proofCase of cases ) {
+
+				const offsetBaseLabel = proofCase.label.replace( 'sealed-wall', 'sealed-offset-wall' );
+
+				traceProof( `start ${ offsetBaseLabel }` );
+				applyProofBakeSettings( {
+					fixtureMode: 'sealed-offset-wall',
+					hideBaseCornell: true,
+					leakReductionMode: proofCase.leakReductionMode,
+					useProbeValidity: proofCase.useProbeValidity
+				} );
+				applySealedOffsetWallProofCamera();
+
+				await _lightProbeContext.recreateAndBakeRequired( `leak proof ${ offsetBaseLabel }` );
+				traceProof( `baked ${ offsetBaseLabel }` );
+
+				const guardedVisibilityProofMode = proofCase.disableVisibilityDepth === true ? 'off' : 'guarded';
+
+				if ( typeof _lightProbeContext.probeGrid._setGuardedVisibilityMode === 'function' ) {
+
+					_lightProbeContext.probeGrid._setGuardedVisibilityMode( guardedVisibilityProofMode );
+					_lightProbeContext.syncProbeGridBindings();
+
+				}
+
+				if ( proofCase.receiverScopedMask === true ) applyLeakFixtureReceiverMasks();
+
+				_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+				const offsetLabel = resolveProofCaseLabel( proofCase, offsetBaseLabel );
+
+				traceProof( `leak metrics ${ offsetLabel }` );
+				const leakMetrics = captureLeakRegionMetrics();
+				traceProof( `pre-tone metrics ${ offsetLabel }` );
+				const preToneLeakMetrics = captureLeakRegionMetricsWithRendererMapping( {
+					mode: 'pre-tone-linear-output-masked-visible-pixels',
+					toneMapping: THREE.NoToneMapping,
+					toneMappingLabel: 'NoToneMapping',
+					outputColorSpace: THREE.LinearSRGBColorSpace
+				} );
+
+				const sealedOffsetWallRow = {
+					label: offsetLabel,
+					fixtureId: 'sealed-offset-wall',
+					guardedVisibilityProofMode,
+					...createLeakProofRowMetrics( leakMetrics, preToneLeakMetrics )
+				};
+				sealedOffsetWallRows.push( sealedOffsetWallRow );
+				traceProof( `row ${ offsetLabel } ${ JSON.stringify( sealedOffsetWallRow ) }` );
+
+			}
+
+			traceProof( 'sealed offset fixture attribution' );
+			sealedOffsetWallFixtureAttribution = captureSealedOffsetWallFixtureAttribution();
 
 		} finally {
 
@@ -5099,7 +6577,10 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 			coefficientSideWeightingAttribution,
 			supportSetAttribution,
 			setupSideProbeClassificationAttribution,
+			sealedOffsetWallFixtureAttribution,
 			rows,
+			sealedOffsetWallRows,
+			sealedOffsetWallResidualAttribution: createSealedOffsetWallResidualAttributionFacts( sealedOffsetWallRows ),
 			residualAttribution: createResidualAttributionFacts( residualAttributionRows ),
 			restored: {
 				lightingMode: _lightProbeContext.params.lightingMode,
@@ -5171,6 +6652,19 @@ export function createLightProbeGridGPUTestHarness( readLightProbeContext ) {
 
 		},
 		setLeakReductionMode: value => setBakeParameter( 'leakReductionMode', value ),
+		setLeakFixtureMode: ( value ) => {
+
+			setLeakFixtureMode( value );
+			_lightProbeContext.renderer.render( _lightProbeContext.scene, _lightProbeContext.camera );
+
+			return window.__webgpuLightProbeGridCornell.inspectLeakFixtureFacts();
+
+		},
+		inspectLeakFixtureFacts: () => {
+
+			return createLeakFixtureFacts();
+
+		},
 		inspectAddonContract: () => {
 
 			const contractGrid = createContractProbeGrid();

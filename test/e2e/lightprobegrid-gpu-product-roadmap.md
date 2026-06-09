@@ -1,6 +1,6 @@
 # LightProbeGridGPU Product Hardening Roadmap
 
-Verified: 2026-06-04.
+Verified: 2026-06-05.
 
 ## Peer Review Verdict
 
@@ -177,6 +177,18 @@ Exit gate:
 
 - Product branch ships with a known residual state, clear non-claims, and proof gates that can fail loudly.
 
+## Phase 1-5 Status Audit
+
+Current rating: `9.1/10`.
+
+| Phase | Status | Evidence | Remaining gap |
+| --- | --- | --- | --- |
+| Phase 1 authoring semantics | mostly proven | receiver source shapes, boundary weight semantics, public non-claims, local-cell placement semantics, product-shaped placement authoring contract, and second-fixture activation/row/placement-helper/render-delta facts are documented | placement semantics still need bilateral second-fixture render improvement, not just combined improvement |
+| Phase 2 ownership helper | proof-scoped | `probeLayerMasks`, `probeValidity`, compact assignment/placement facts, product module facts, helper/product parity, validation policies, placement authoring invariants, migration guard, and bounded Sponza product usage exist | do not promote the proof helper; closure audit must keep non-claims explicit |
+| Phase 3 receiver boundary sources | archived for residual fix | TSL uniform, UV-band, and geometry attribute sources proved GPU-resident inputs but did not reduce residual | keep as product source seam only, not leak-control claim |
+| Phase 4 visibility policy | named, not residual-solving | semantic constants and `proofPolicyFacts` replace magic-number drift | future visibility sweeps need policy facts and over-occlusion gates |
+| Phase 5 probe placement / relocation | closed as guarded product candidate | side-shell proxy, local-cell reachability, physical placement requirement, policy-backed helper, product-shaped authoring module, helper/product parity on sealed-wall and sealed-offset-wall, placement authoring invariants, explicit examples/jsm migration guard, bounded Sponza product usage, Cornell render/leak proof, Sponza visual/runtime coverage, sealed-offset-wall leak rows, combined-positive offset placement render delta, machine-checked low-baseline right-side policy, and closure audit | broader hardening only; no stronger leak claim yet |
+
 ## Roadmap Diagram
 
 ```mermaid
@@ -222,7 +234,28 @@ flowchart LR
 - [x] Add occupied-support exclusion candidate after mixed probe-side L0 result.
 - [x] Add proof-only relocation / placement oracle after classification-only probe-side failure.
 - [x] Test first non-oracle distance-ranked relocation / placement proxy.
-- [ ] Derive second non-oracle relocation / placement proxy after distance-only failure.
+- [x] Test second non-oracle divider-ranked relocation / placement proxy.
+- [x] Test receiver-visibility-ranked relocation / placement proxy.
+- [x] Derive side-shell topology relocation proxy after geometry and receiver-visibility failures.
+- [x] Add reconstruction/final-irradiance attribution for the side-shell proxy.
+- [x] Add local-cell reachability attribution for the side-shell proxy.
+- [x] Model local-cell support candidate after zero side-shell overlap.
+- [x] Model physical local-cell placement / relocation requirement after local-cell support stays default/occupied.
+- [x] Shape product API for setup-time local-cell placement / relocation.
+- [x] Implement proof-scoped local-cell placement helper that emits `probeValidity` and `probeLayerMasks`.
+- [x] Add explicit local-cell placement policy facts and acceptance thresholds.
+- [x] Add reconstruction/final-irradiance attribution using local-cell placement helper arrays.
+- [x] Add render/leak attribution using local-cell placement helper arrays.
+- [x] Implement product module for `createLightProbeGridGPUPlacementAuthoring(...)`.
+- [x] Gate placement authoring product facts in the runner matrix.
+- [x] Gate helper/adapter parity for sealed-wall and sealed-offset-wall.
+- [x] Add placement authoring schema/source invariants to the smoke path.
+- [x] Add migration guard for future `examples/jsm` placement authoring module.
+- [x] Add initial guarded `examples/jsm` placement authoring module.
+- [x] Add helper/product integration parity checks for the guarded module.
+- [x] Gate focused product module usage facts in the Cornell matrix.
+- [x] Add bounded Sponza product-facing usage hook without leak-proof claim.
+- [x] Add phases 1-5 closure audit.
 - [x] Name receiver-boundary selector threshold, visibility moment tap count, and octahedral normalization epsilon.
 - [x] Split remaining proof/harness epsilons into semantic constants or policy facts.
 - [x] Add source invariants forbidding Cornell divider coordinates, proof pixels, scalar/WebGL truth, and CPU readback in runtime leak control.
@@ -231,6 +264,29 @@ flowchart LR
 ## Continuation Metaprompt
 
 Use `test/e2e/lightprobegrid-gpu-product-metaprompt.md` when handing this work to another run or reviewer. It captures the active proof state, rejected shortcut families, next valid product direction, expected code seams, and verification boundaries.
+
+Use `test/e2e/lightprobegrid-gpu-placement-promotion-decision.md` for the
+current promotion decision. It keeps the placement helper proof-scoped and
+requires a second sealed-wall-like fixture before moving the seam out of
+`test/e2e`.
+
+Use `test/e2e/lightprobegrid-gpu-product-authoring-module-contract.md` for the
+setup-owned product module shape. It names
+`createLightProbeGridGPUPlacementAuthoring(...)` as the product-shaped
+interface and keeps the current helper as proof-scoped implementation evidence.
+
+Use `test/e2e/lightprobegrid-gpu-placement-authoring-migration-guard.md` before
+any move toward `examples/jsm`. It forbids importing/copying the proof helper
+and requires the promoted module to keep compact facts and placement authoring
+invariants as its interface test surface.
+
+Use `test/e2e/lightprobegrid-gpu-phases-1-5-closure-audit.md` as the closure
+record for this SDD slice.
+
+Use `test/e2e/lightprobegrid-gpu-second-sealed-fixture-design.md` for the
+second fixture contract. The fixture is designed as `sealed-offset-wall` and is
+implemented as an activatable family with proof-captured activation facts, leak
+rows, and residual attribution.
 
 Focused Cornell proof can run beside an existing local server with:
 
@@ -247,9 +303,25 @@ Current decision:
 - Keep `LightProbeGridGPUProbeOwnership.js` proof-scoped.
 - Do not add another receiver-source mode.
 - Do not promote authored-boundary examples as leak-control product proof.
-- Next work is deriving a second non-oracle relocation / placement proxy. The
+- Next work is modeling true local-cell relocation / placement. The
   L0 oracle proves useful support exists, but it is CPU/readback proof evidence,
-  not product logic. The first distance-only proxy failed on the right side.
+  not product logic. The first distance-only proxy failed on the right side,
+  the divider-proximity proxy also failed on the right side, and the
+  receiver-visibility proxy reports full visibility while still failing on the
+  right side. The side-shell proxy is the first non-oracle rule to pass the
+  bilateral L0 gate, but final-irradiance debug cannot reach that nonlocal
+  support through the current trilinear reconstruction path. Local-cell
+  reachability proves `0/8` overlap on both sides, and the current local-cell
+  support candidate keeps default identity and occupied probes. Physical
+  placement requirement now proves the useful source support is non-occupied but
+  must replace all reachable local-cell slots on both sides. The product API
+  shape is now implemented proof-side as a setup helper that emits
+  `probeValidity`, `probeLayerMasks`, and compact `placementFacts`.
+  The helper now exposes explicit placement policy facts instead of implicit
+  thresholds. Reconstruction/final-irradiance debug proves the emitted arrays
+  are consumed. Render/leak attribution also proves a narrow bilateral visible
+  improvement in Cornell, but the right-side delta is small and the helper is
+  still proof-scoped rather than a production placement module.
 
 Why:
 
@@ -276,6 +348,19 @@ Why:
 - Occupied-support exclusion removes right occupied support (`4 -> 0`) but still misses the L0 gate: right wrong/correct is `0.5818 -> 0.5907`, delta `+0.0089`; lane verdict is `candidate-needs-relocation-after-probe-side-classification`.
 - Proof-only relocation oracle finds a bilateral L0 win over non-occupied boundary probes: left `0.8599 -> 0.664`, right `0.5818 -> 0.2158`, both occupied counts `0`. It pays high distance (`13.189` left, `13.6172` right), so it proves existence, not product readiness.
 - Distance-ranked non-oracle proxy changes identity and keeps occupied support at `0`, but fails the right L0 gate: left `0.8599 -> 0.751`, right `0.5818 -> 0.6881`. Distance alone is rejected as the placement rule.
+- Divider-ranked non-oracle proxy changes identity and keeps occupied support at `0`, but also fails the right L0 gate: left `0.8599 -> 0.6683`, right `0.5818 -> 0.7493`. Divider proximity alone is rejected as the placement rule.
+- Receiver-visibility-ranked non-oracle proxy changes identity and keeps occupied support at `0`, but reports `classifiedMeanVisibilityEstimate = 1` on both sides while right worsens to `0.8182`. Direct visibility to the receiver is rejected as the missing placement selector.
+- Side-shell topology proxy changes identity, keeps occupied support at `0`, and passes the bilateral L0 gate: left `0.8599 -> 0.6683`, right `0.5818 -> 0.3045`. It ranks by setup/grid topology, not packed-atlas L0.
+- Side-shell final-irradiance attribution preserves the same support hashes but reports `sideShellBoundary.combinedMean = 0` and `sideShellToUnclassifiedDefault.combinedRatio = 0`. The support-selection win is not reachable by the current trilinear reconstruction cell.
+- Local-cell reachability attribution confirms the miss: left local cell base coord `(0, 0, 2)` overlaps side-shell support `0/8`, and right local cell base coord `(1, 0, 2)` overlaps side-shell support `0/8`. The next candidate must move/author useful support into the reachable cell or define an explicit nonlocal support seam.
+- Local-cell support candidate rejects remasking as relocation: left keeps wrong/correct L0 at `0.8599`, right keeps `0.5818`, both report `blocked-no-probe-identity-change`, and both retain `4` occupied probes.
+- Physical placement requirement is now explicit: both sides require replacing `8/8` reachable local-cell slots, including `4` occupied slots, with non-occupied side-owned source support. Expected source-side wrong/correct L0 is `0.6683` left and `0.3045` right.
+- Product API shape is setup-owned: `createLightProbeGridGPUPlacementAuthoring(...)` should accept authored receiver regions, layer rules, occupancy policy, placement policy, and source-selection policy, then produce `probeValidity`, `probeLayerMasks`, and `placementFacts`. It must not add another receiver-source mode or shader-side nonlocal support without an explainable product seam.
+- Proof-scoped local-cell placement helper now emits arrays with length `64/64`, total replacement slots `16`, occupied replacement slots `8`, `acceptedSideCount = 2`, and policy facts: target support `8`, source support `8`, minimum replacement slots `1`, minimum occupied replacement slots `1`, and maximum source occupied support `0`.
+- Product `createLightProbeGridGPUPlacementAuthoring(...)` now accepts product-shaped receiver regions, layer rules, occupancy policy, placement policy, and source-selection policy while emitting compact authoring facts without a legacy e2e wrapper. Focused Cornell reports `placement-authoring-product-module-emits-arrays`, `acceptedSideCount = 2`, replacement slots `16`, occupied replacement slots `8`, and `productHasProofOnlyFacts = false`. Sealed-wall and sealed-offset-wall both report `placement-authoring-matches-helper-facts`; offset side hashes match left target/source `fnv1a32:f7b1180d` / `fnv1a32:1eb3d3a1` and right target/source `fnv1a32:e50b2bcd` / `fnv1a32:519a6495`. The smoke path now also runs `lightprobegrid-gpu-placement-authoring-invariants.js`, which validates the product module, proves one positive contract, rejects thirteen source/schema violations, scans current/future `examples/jsm` LightProbeGridGPU authoring sources for proof-helper imports and proof-only tokens, and verifies base-array integration behavior.
+- Local-cell placement final-irradiance attribution proves the helper arrays are consumed by the debug path: `placementIrradianceDeltaVerdict = placement-helper-arrays-improve-final-irradiance-over-default`, `combinedRatio = 1.3271`, left ratio `1`, and right ratio `1.3512`. This is proof-positive for the setup array seam, but not yet product-positive because the helper does not move baked coefficients or probe positions, the improvement is right-heavy, and it still needs a render/leak gate.
+- Local-cell placement render/leak attribution is now proof-positive in focused Cornell: `placementRenderLeakVerdict = placement-helper-arrays-improve-bilateral-render-leak-over-default`, combined masked wrong-side ratio improves `0.7288 -> 0.7246`, left improves `0.5918 -> 0.5465`, right improves `0.7288 -> 0.7246`, pre-tone wrong-side improves `0.8446 -> 0.8204`, and correct bounce improves `1.2654 -> 1.2754`. This is a narrow visible win, not yet a hardened product claim.
+- Non-Cornell coverage is now green for Sponza visual/runtime controls. `webgpu_lightprobes_sponza` passes with `probeCount = 147`, ready initial/rebake metrics, and screenshot diff `0.0%`; its rebake path now refreshes material `lightsNode` after atlas resources are recreated. `webgpu_lightprobes_sponza_ours` passes with `probeCount = 343`, ready initial/rebake metrics, screenshot diff `0.0%`, and bounded product placement authoring usage: `sponza-product-placement-authoring-usage-ready`, `totalProbes = 343`, replacement slots `16`, occupied replacement slots `8`, `productHasProofOnlyFacts = false`, and `leakMetricStatus = not-applicable`. Both Sponza rows remain non-leak-proof controls.
 - Cross-side coefficient contrast exists (`4.4402x`), but current receiver-side support selection does not expose it safely.
 - Source invariants now run with the smoke harness and forbid Cornell divider coordinates, proof pixel regions, scalar/WebGL truth claims, and CPU readback in runtime leak-control sources.
 - Remaining proof/harness epsilon values are named as semantic constants and surfaced as `proofPolicyFacts`.
@@ -283,15 +368,21 @@ Why:
 
 Next concrete task:
 
-- Derive a second non-oracle relocation / placement rule that approximates the
-  L0 oracle without CPU readback or proof pixels. It must preserve complete
-  support, keep occupied support at `0`, change identity bilaterally, and
-  improve wrong/correct L0 on both sides before any render gate.
+- Move to broader hardening only after this closure record. The second fixture
+  still proves only a combined render/leak win: combined offset render leakage
+  improves from `0.8278` to `0.6576` and pre-tone wrong-side improves from
+  `0.7464` to `0.6118`, while the right masked wrong-side ratio worsens
+  `1.0252x` under the machine-checked low-baseline policy. Do not use Sponza as
+  sealed-wall leak proof; the eval harness explicitly limits those ratios to
+  Cornell.
 
 Promotion gate:
 
-- Promote nothing until bake-time or probe-side attribution shows a non-collapsing support identity change and the API can be explained without Cornell proof details.
-- Receiver-side support routing is archived for this gate; the next promoted experiment must change probe identity at bake/setup time or through probe-side classification.
+- Promote nothing until the setup-owned placement module passes the acceptance
+  gates in `test/e2e/lightprobegrid-gpu-placement-promotion-decision.md`.
+- Receiver-side support routing is archived for this gate; the next promoted
+  experiment must change probe identity at bake/setup time or through
+  probe-side classification.
 
 ## Final Review Pressure
 

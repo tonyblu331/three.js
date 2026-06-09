@@ -27,7 +27,7 @@ export const smokeHarnesses = {
 		source: 'examples/jsm/lighting/LightProbeGridGPU.js',
 		implementation: 'ours-sponza',
 		imageRegionSet: 'sponza',
-		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma' ]
+		capabilities: [ 'runtime', 'rebake', 'probe-positions', 'image-luma', 'placement-authoring-usage' ]
 	}
 };
 

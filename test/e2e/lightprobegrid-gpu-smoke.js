@@ -1,5 +1,6 @@
 import { runLightProbeGridGpuCoreSmokeAssertions } from './lightprobegrid-gpu-runner-core-assertions.js';
 import { runLightProbeGridGpuMatrixSmokeAssertions } from './lightprobegrid-gpu-runner-matrix-assertions.js';
+import { runLightProbeGridGpuPlacementAuthoringInvariantAssertions } from './lightprobegrid-gpu-placement-authoring-invariants.js';
 import { runLightProbeGridGpuProofGateAssertions } from './lightprobegrid-gpu-proof-gates.js';
 import { runLightProbeGridGpuRuntimeSmokeAssertions } from './lightprobegrid-gpu-runner-runtime-assertions.js';
 import { runLightProbeGridGpuSourceInvariantAssertions } from './lightprobegrid-gpu-source-invariants.js';
@@ -112,6 +113,7 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 	};
 
 	runLightProbeGridGpuSourceInvariantAssertions( { assert } );
+	runLightProbeGridGpuPlacementAuthoringInvariantAssertions();
 
 	const waitUntilReady = async ( step ) => {
 
@@ -206,7 +208,62 @@ export async function runSmokeHarness( page, file, smokeHarness ) {
 
 	}
 
+	if ( smokeHarness.capabilities?.includes( 'placement-authoring-usage' ) === true ) {
+
+		assert(
+			await hasMethod( 'inspectPlacementAuthoringUsageFacts' ),
+			'placement authoring usage: expected inspectPlacementAuthoringUsageFacts().'
+		);
+		trace( `${ file}: placement authoring usage facts` );
+		const placementAuthoringUsageFacts = await call( 'inspectPlacementAuthoringUsageFacts' );
+		assertPlacementAuthoringUsageFacts( assert, placementAuthoringUsageFacts );
+		results.push( { step: 'placement authoring usage', placementAuthoringUsageFacts } );
+
+	}
+
 	return results;
+
+}
+
+function assertPlacementAuthoringUsageFacts( assert, facts ) {
+
+	assert( facts !== null && typeof facts === 'object', 'placement authoring usage: expected object payload.' );
+	assert( facts.attributionPolicy === 'sponza-product-placement-authoring-usage',
+		'placement authoring usage: expected product usage attribution policy.' );
+	assert( facts.leakMetricStatus === 'not-applicable',
+		'placement authoring usage: expected non-leak-proof status.' );
+	assert( facts.modulePath === 'examples/jsm/lighting/lightprobegridgpu/LightProbeGridGPUPlacementAuthoring.js',
+		'placement authoring usage: expected product module path.' );
+	assert( facts.policyId === 'placement-authoring',
+		'placement authoring usage: expected placement-authoring policy.' );
+	assert( facts.productHasProofOnlyFacts === false,
+		'placement authoring usage: expected no proof-only product facts.' );
+	assert( facts.probeValidityLength === facts.totalProbes,
+		'placement authoring usage: expected probeValidity length to match total probes.' );
+	assert( facts.probeLayerMasksLength === facts.totalProbes,
+		'placement authoring usage: expected probeLayerMasks length to match total probes.' );
+	assert( facts.totalProbes > 0,
+		'placement authoring usage: expected positive total probe count.' );
+	assert( facts.receiverRegionCount === 2,
+		'placement authoring usage: expected two receiver regions.' );
+	assert( facts.layerRuleCount === 2,
+		'placement authoring usage: expected two layer rules.' );
+	assert( facts.acceptedSideCount === 2,
+		'placement authoring usage: expected two accepted sides.' );
+	assert( facts.replacementSlotCount === 16,
+		'placement authoring usage: expected sixteen replacement slots.' );
+	assert( facts.occupiedReplacementSlotCount === 8,
+		'placement authoring usage: expected eight occupied replacement slots.' );
+	assert( facts.sourceSelectionPolicyFacts?.policyId === 'side-shell-local-cell-source-policy',
+		'placement authoring usage: expected source policy id.' );
+	assert( facts.sourceSelectionPolicyFacts?.ranking === 'side-shell-topology-then-receiver-distance',
+		'placement authoring usage: expected source ranking.' );
+	assert( facts.sourceSelectionPolicyFacts?.forbiddenInputs === undefined,
+		'placement authoring usage: expected no proof-only forbidden input facts.' );
+	assert( Array.isArray( facts.sideFacts ) && facts.sideFacts.length === 2,
+		'placement authoring usage: expected compact side facts.' );
+	assert( facts.placementAuthoringUsageVerdict === 'sponza-product-placement-authoring-usage-ready',
+		'placement authoring usage: expected ready verdict.' );
 
 }
 

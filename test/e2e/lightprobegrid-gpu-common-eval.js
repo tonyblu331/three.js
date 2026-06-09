@@ -65,6 +65,9 @@ const createCommonEvalRows = ( file, smokeHarness, smokeResults, image ) => {
 	const initial = smokeResults.find( row => row.step === 'initial' );
 	const rebake = smokeResults.find( row => row.step === 'rebake' );
 	const leakProofFacts = smokeResults.find( row => row.step === 'sealed-wall leak proof' )?.leakProofFacts ?? null;
+	const placementAuthoringUsageFacts = smokeResults.find( row =>
+		row.step === 'placement authoring usage'
+	)?.placementAuthoringUsageFacts ?? null;
 
 	return {
 		file,
@@ -79,6 +82,7 @@ const createCommonEvalRows = ( file, smokeHarness, smokeResults, image ) => {
 			artifactPressure,
 			regions
 		},
+		placementAuthoringUsage: placementAuthoringUsageFacts,
 		leakProof: leakProofFacts
 	};
 

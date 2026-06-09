@@ -21,7 +21,8 @@ import {
 	Scene,
 	SphereGeometry,
 	StorageTexture,
-	Vector3
+	Vector3,
+	Vector4
 } from 'three/webgpu';
 import {
 	clamp,
@@ -49,9 +50,13 @@ import {
 	ATLAS_PADDING,
 	BACKEND_LABELS,
 	DEFAULT_PROBE_LAYER_MASK,
+	MAX_PROBE_LAYER_MASK,
+	MIN_PROBE_SPACING,
 	PACKED_SH_TEXTURES,
 	PROBE_VALIDITY_FLOOR,
-	SH_COEFFICIENTS
+	SAFE_NORMALIZE_EPSILON,
+	SH_COEFFICIENTS,
+	VISIBILITY_WEIGHT_SUM_FLOOR
 } from './lightprobegridgpu/LightProbeGridGPUConstants.js';
 import {
 	createLightProbeGridGPUAtlasRepackMaterial,
@@ -70,11 +75,12 @@ import {
 	getLightProbeGridGPUMomentVisibility,
 	LightProbeGridGPUVisibilityRuntime
 } from './lightprobegridgpu/LightProbeGridGPUVisibility.js';
+
 import {
-	captureLightProbeGridGPUBakeState,
-	createLightProbeGridGPUBakeResult,
-	restoreLightProbeGridGPUBakeState
-} from './lightprobegridgpu/LightProbeGridGPUBake.js';
+	createProbeValidityTexture,
+	validateProbeLayerMasks,
+	validateProbeValidity
+} from './lightprobegridgpu/LightProbeGridGPUMetadata.js';
 
 const _probePosition = /*@__PURE__*/ new Vector3();
 const _gridSize = /*@__PURE__*/ new Vector3();
@@ -143,8 +149,8 @@ const createLightProbeGridGPUHelper = (
 	const evaluateInstanceProbe = Fn( () => {
 
 		const index = int( instanceIndex );
-		const nx = resolution.x;
-		const ny = resolution.y;
+		const nx = int( resolution.x );
+		const ny = int( resolution.y );
 		const z = index.div( nx.mul( ny ) );
 		const y = index.sub( z.mul( nx.mul( ny ) ) ).div( nx );
 		const x = index.sub( z.mul( nx.mul( ny ) ) ).sub( y.mul( nx ) );
@@ -225,7 +231,132 @@ const getBakeTimingSourceKind = ( timingSource ) => timingSource === 'gpu-timest
 	'gpu-timestamp' :
 	timingSource === 'unavailable' ?
 		'unavailable' :
-		'performance.now diagnostic';
+
+const _bakeViewport = /*@__PURE__*/ new Vector4();
+const _bakeScissor = /*@__PURE__*/ new Vector4();
+
+const roundLightProbeGridGPUBakeMs = ( value ) => Number( value.toFixed( 2 ) );
+
+
+const captureLightProbeGridGPUBakeState = ( renderer, scene, grid ) => {
+
+	renderer.getViewport( _bakeViewport );
+	renderer.getScissor( _bakeScissor );
+
+	const shadowMap = renderer.shadowMap;
+
+	return {
+		renderTarget: renderer.getRenderTarget(),
+		scissorTest: renderer.getScissorTest(),
+		autoClear: renderer.autoClear,
+		matrixWorldAutoUpdate: scene.matrixWorldAutoUpdate,
+		overrideMaterial: scene.overrideMaterial,
+		shadowMap,
+		shadowAutoUpdate: shadowMap !== undefined ? shadowMap.autoUpdate : undefined,
+		intensity: grid.intensity.value,
+		helperVisible: grid.helper?.visible ?? false
+	};
+
+};
+
+const restoreLightProbeGridGPUBakeState = ( renderer, scene, grid, state ) => {
+
+	renderer.setRenderTarget( state.renderTarget );
+	renderer.setViewport( _bakeViewport );
+	renderer.setScissor( _bakeScissor );
+	renderer.setScissorTest( state.scissorTest );
+	renderer.autoClear = state.autoClear;
+	scene.matrixWorldAutoUpdate = state.matrixWorldAutoUpdate;
+	scene.overrideMaterial = state.overrideMaterial;
+
+	if ( state.shadowMap !== undefined ) state.shadowMap.autoUpdate = state.shadowAutoUpdate;
+
+	grid.intensity.value = state.intensity;
+	if ( grid.helper !== null ) grid.helper.visible = state.helperVisible;
+	grid.coefficientTarget.viewport.set( 0, 0, SH_COEFFICIENTS, grid.totalProbes );
+	grid.coefficientTarget.scissor.set( 0, 0, SH_COEFFICIENTS, grid.totalProbes );
+
+};
+
+const createLightProbeGridGPUBakeResult = ( grid, renderer, {
+	sceneUpdateMs,
+	cubemapMs,
+	projectionMs,
+	copyMs,
+	visibilityCubemapMs,
+	visibilityRepackMs,
+	projectionBackendOverride,
+	projectionBackend,
+	projectionCubemapSweepsPerProbe,
+	projectionTexelVisits,
+	totalBakeMs,
+	timingSource,
+	timingSourceKind,
+	deterministicTimerDetected
+} ) => {
+
+	const roundedSceneUpdateMs = roundLightProbeGridGPUBakeMs( sceneUpdateMs );
+	const roundedCubemapMs = roundLightProbeGridGPUBakeMs( cubemapMs );
+	const roundedProjectionMs = roundLightProbeGridGPUBakeMs( projectionMs );
+	const roundedCopyMs = roundLightProbeGridGPUBakeMs( copyMs );
+
+	grid.visibility.cubemapMs = roundLightProbeGridGPUBakeMs( visibilityCubemapMs );
+	grid.visibility.repackMs = roundLightProbeGridGPUBakeMs( visibilityRepackMs );
+
+	const timingBuckets = {
+		sceneUpdateMs: roundedSceneUpdateMs,
+		radianceCubemapCaptureMs: roundedCubemapMs,
+		distanceCubemapCaptureMs: grid.visibility.cubemapMs,
+		computeShProjectionMs: roundedProjectionMs,
+		visibilityRepackMs: grid.visibility.repackMs,
+		atlasRepackMs: roundedCopyMs,
+		verifierReadbackMs: 0,
+		runtimeFastAtlasMs: null,
+		runtimeGuardedGatherMs: null,
+		runtimeMomentTextureLoadMs: null,
+		runtimeKernelMathMs: null,
+		runtimeVisibilityMassMs: null,
+		runtimeShEvaluationMs: null,
+		source: timingSourceKind,
+		legacySource: timingSource,
+		verifierReadbackTimingSource: 'unavailable',
+		runtimeTimingSource: 'unavailable'
+	};
+
+	return {
+		sceneUpdateMs: roundedSceneUpdateMs,
+		cubemapMs: roundedCubemapMs,
+		radianceCubemapCaptureMs: roundedCubemapMs,
+		projectionMs: roundedProjectionMs,
+		computeShProjectionMs: roundedProjectionMs,
+		copyMs: roundedCopyMs,
+		atlasRepackMs: roundedCopyMs,
+		visibilityCubemapMs: grid.visibility.cubemapMs,
+		distanceCubemapCaptureMs: grid.visibility.cubemapMs,
+		visibilityRepackMs: grid.visibility.repackMs,
+		verifierReadbackMs: 0,
+		verifierReadbackTimingSource: 'unavailable',
+		visibilityDepthMode: grid.visibility.depthMode,
+		projectionBackendRequest: projectionBackendOverride,
+		projectionBackend: grid._activeProjectionBackend,
+		projectionBackendForced: projectionBackendOverride !== 'auto',
+		projectionCubemapSweepsPerProbe,
+		projectionTexelVisits,
+		projectionTexelVisitReductionRatio: projectionBackend === 'compute-probe-reduction' ?
+			Number( ( 1 - ( 1 / SH_COEFFICIENTS ) ).toFixed( 4 ) ) :
+			0,
+		computeProjectionFallbackReason: grid.computeProjectionFallbackReason,
+		totalBakeMs: roundLightProbeGridGPUBakeMs( totalBakeMs ),
+		timingSource,
+		timingSourceKind,
+		gpuTimestampStatus: 'unavailable',
+		projectionTimingSource: timingSource,
+		deterministicTimerDetected,
+		timingBuckets,
+		precision: { requested: grid.projectionPrecision, active: grid.activeProjectionPrecision }
+	};
+
+};
 
 /**
  * GPU-resident L2 spherical harmonics irradiance probe grid.
@@ -256,7 +387,7 @@ class LightProbeGridGPU extends Object3D {
 	 * Constructs a WebGPU irradiance probe grid.
 	 *
 	 * The grid owns its bake render targets and helper resources. Applications
-	 * should treat the runtime fields (`texture`, `boundingBox`, and
+	 * should treat the runtime fields (	exture`, `boundingBox`, and
 	 * `activeProjectionPrecision`) as read-only inspection data.
 	 *
 	 * @param {Vector3} min - Minimum world-space grid corner.
@@ -265,12 +396,11 @@ class LightProbeGridGPU extends Object3D {
 	 * @param {number} [options.resolution=4] - Probe count per axis, must be at least 2.
 	 * @param {number} [options.cubemapSize=8] - Cubemap face size used during bake.
 	 * @param {'auto'|'half float'|'float'} [options.projectionPrecision='auto'] - Projection texture precision policy.
-	 * @param {number} [options.probeIntensity=1] - Runtime irradiance intensity.
+	 * @param {number} [options.intensity=1] - Runtime irradiance intensity.
 	 * @param {number} [options.helperIntensity=1] - Helper display intensity.
-	 * @param {number} [options.band1Intensity=1] - Diagnostic multiplier for first-band SH coefficients.
-	 * @param {number} [options.band2Intensity=1] - Runtime multiplier for second-band SH coefficients.
 	 * @param {number} [options.normalBias=0.5] - Sample offset along the receiver normal, in probe-spacing units.
 	 * @param {number} [options.viewBias=0] - Sample offset toward the active camera, in probe-spacing units.
+	 * @param {'fast'|'guarded'} [options.quality] - Runtime sampling quality. Defaults to `'fast'`, or maps from `leakReductionMode` for compatibility.
 	 * @param {'off'|'normal'} [options.leakReductionMode='off'] - Optional scoped probe leak reduction.
 	 * @param {boolean} [options.enableVisibility=false] - Enables the internal moment-visibility bake path used by validation examples.
 	 * @param {?ArrayLike<number>} [options.probeValidity=null] - Optional per-probe validity weights packed during bake. Length must equal resolution^3.
@@ -313,21 +443,20 @@ class LightProbeGridGPU extends Object3D {
 		this.activeProjectionPrecision = 'half-linear';
 		this.projectionFallbackType = null;
 
-		this.probeIntensity = uniform( options.probeIntensity ?? 1 );
+		this.intensity = uniform( options.intensity ?? 1 );
 		this.helperIntensity = uniform( options.helperIntensity ?? 1 );
 		this.helperDebugMode = uniform( this._validateHelperDebugMode( options.helperDebugMode ?? 'irradiance' ) );
 		this.helperDepthMode = this._validateHelperDepthMode( options.helperDepthMode ?? 'depth-tested' );
-		this.band1Intensity = uniform( options.band1Intensity ?? 1 );
-		this.band2Intensity = uniform( options.band2Intensity ?? 1 );
 		this.normalBias = uniform( options.normalBias ?? 0.5 );
 		this.viewBias = uniform( options.viewBias ?? 0 );
-		this.leakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? 'off' );
+		this.quality = this._resolveQualityOption( options, 'fast' );
+		this.leakReductionMode = this._getLeakReductionModeForQuality( this.quality );
 		this.enableVisibility = options.enableVisibility === true;
-		this.probeValiditySource = this._validateProbeValidity(
+		this.probeValiditySource = validateProbeValidity(
 			options.probeValidity ?? null,
 			this._getTotalProbeCount()
 		);
-		this.probeLayerMaskSource = this._validateProbeLayerMasks(
+		this.probeLayerMaskSource = validateProbeLayerMasks(
 			options.probeLayerMasks ?? null,
 			this._getTotalProbeCount()
 		);
@@ -346,8 +475,7 @@ class LightProbeGridGPU extends Object3D {
 		this.probeValidityTextureHeight = 0;
 		this.invalidProbeCount = 0;
 		this.receiverLayerMask = uniform( DEFAULT_PROBE_LAYER_MASK, 'uint' );
-		this._guardedVisibilityMode = 'off';
-		this._probeKernelData = null;
+		this._guardedVisibilityMode = this.quality === 'guarded' ? 'guarded' : 'off';
 
 		/**
 		 * The atlas texture containing the packed SH coefficients.
@@ -384,140 +512,22 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	get visibilityDepthResolution() {
-
-		return this.visibility.depthResolution;
-
-	}
-
-	get visibilityDepthTarget() {
-
-		return this.visibility.depthTarget;
-
-	}
-
-	get visibilityDistanceTarget() {
-
-		return this.visibility.distanceTarget;
-
-	}
-
-	get visibilityDistanceCamera() {
-
-		return this.visibility.distanceCamera;
-
-	}
-
-	get visibilityDistanceMaterial() {
-
-		return this.visibility.distanceMaterial;
-
-	}
-
-	get visibilityRepackScene() {
-
-		return this.visibility.repackScene;
-
-	}
-
-	get visibilityRepackCamera() {
-
-		return this.visibility.repackCamera;
-
-	}
-
-	get visibilityRepackMesh() {
-
-		return this.visibility.repackMesh;
-
-	}
-
-	get visibilityRepackMaterial() {
-
-		return this.visibility.repackMaterial;
-
-	}
-
-	get visibilityRepackProbeIndex() {
-
-		return this.visibility.repackProbeIndex;
-
-	}
-
-	get visibilityProbePosition() {
-
-		return this.visibility.probePosition;
-
-	}
-
-	get visibilityProbeSpacing() {
-
-		return this.visibility.probeSpacing;
-
-	}
-
-	get visibilityMaxDistance() {
-
-		return this.visibility.maxDistance;
-
-	}
-
-	get visibilityBias() {
-
-		return this.visibility.bias;
-
-	}
-
-	get visibilityDepthWeighting() {
-
-		return this.visibility.depthWeighting;
-
-	}
-
-	get visibilityDepthMode() {
-
-		return this.visibility.depthMode;
-
-	}
-
-	get visibilityCubemapMs() {
-
-		return this.visibility.cubemapMs;
-
-	}
-
-	set visibilityCubemapMs( value ) {
-
-		this.visibility.cubemapMs = value;
-
-	}
-
-	get visibilityRepackMs() {
-
-		return this.visibility.repackMs;
-
-	}
-
-	set visibilityRepackMs( value ) {
-
-		this.visibility.repackMs = value;
-
-	}
 
 	setOptions( options = {}, renderer = null ) {
 
 		const nextResolution = this._validateResolution( options.resolution ?? this.resolution );
 		const nextCubemapSize = options.cubemapSize ?? this.cubemapSize;
 		const nextProjectionPrecision = options.projectionPrecision ?? this.projectionPrecision;
-		const nextLeakReductionMode = this._validateLeakReductionMode( options.leakReductionMode ?? this.leakReductionMode );
+		const nextQuality = this._resolveQualityOption( options, this.quality );
+		const nextLeakReductionMode = this._getLeakReductionModeForQuality( nextQuality );
 		const nextEnableVisibility = Object.prototype.hasOwnProperty.call( options, 'enableVisibility' ) ? options.enableVisibility === true : this.enableVisibility;
 		const hasProbeValidityOption = Object.prototype.hasOwnProperty.call( options, 'probeValidity' );
 		const hasProbeLayerMasksOption = Object.prototype.hasOwnProperty.call( options, 'probeLayerMasks' );
-		const nextProbeValiditySource = this._validateProbeValidity(
+		const nextProbeValiditySource = validateProbeValidity(
 			hasProbeValidityOption ? options.probeValidity : this.probeValiditySource,
 			nextResolution.x * nextResolution.y * nextResolution.z
 		);
-		const nextProbeLayerMaskSource = this._validateProbeLayerMasks(
+		const nextProbeLayerMaskSource = validateProbeLayerMasks(
 			hasProbeLayerMasksOption ? options.probeLayerMasks : this.probeLayerMaskSource,
 			nextResolution.x * nextResolution.y * nextResolution.z
 		);
@@ -525,29 +535,29 @@ class LightProbeGridGPU extends Object3D {
 		const recreate = nextResolution.equals( this.resolution ) === false ||
 			nextCubemapSize !== this.cubemapSize ||
 			nextProjectionPrecision !== this.projectionPrecision ||
-			nextLeakReductionMode !== this.leakReductionMode ||
+			nextQuality !== this.quality ||
 			nextEnableVisibility !== this.enableVisibility;
 
 		this.resolution.copy( nextResolution );
 		this.cubemapSize = nextCubemapSize;
 		this.projectionPrecision = nextProjectionPrecision;
+		this.quality = nextQuality;
 		this.leakReductionMode = nextLeakReductionMode;
+		this._guardedVisibilityMode = nextQuality === 'guarded' ? 'guarded' : 'off';
 		this.enableVisibility = nextEnableVisibility;
 		this.visibility.setEnabled( this.enableVisibility );
 		this.probeValiditySource = nextProbeValiditySource;
 		this.probeLayerMaskSource = nextProbeLayerMaskSource;
 
-		if ( options.probeIntensity !== undefined ) this.probeIntensity.value = options.probeIntensity;
+		if ( options.intensity !== undefined ) this.intensity.value = options.intensity;
 		if ( options.helperIntensity !== undefined ) this.helperIntensity.value = options.helperIntensity;
 		if ( options.helperDebugMode !== undefined ) this.setHelperDebugMode( options.helperDebugMode );
 		if ( options.helperDepthMode !== undefined ) this.setHelperDepthMode( options.helperDepthMode );
-		if ( options.band1Intensity !== undefined ) this.band1Intensity.value = options.band1Intensity;
-		if ( options.band2Intensity !== undefined ) this.band2Intensity.value = options.band2Intensity;
 		if ( options.normalBias !== undefined ) this.normalBias.value = options.normalBias;
 		if ( options.viewBias !== undefined ) this.viewBias.value = options.viewBias;
 
 		if ( recreate ) this._createResources( renderer );
-		else if ( hasProbeValidityOption || hasProbeLayerMasksOption ) this._createProbeValidityTexture();
+		else if ( hasProbeValidityOption || hasProbeLayerMasksOption ) createProbeValidityTexture( this );
 
 	}
 
@@ -569,6 +579,58 @@ class LightProbeGridGPU extends Object3D {
 		}
 
 		return resolutionVector;
+
+	}
+
+	_resolveQualityOption( options, fallbackQuality ) {
+
+		const hasQualityOption = Object.prototype.hasOwnProperty.call( options, 'quality' );
+		const hasLeakReductionModeOption = Object.prototype.hasOwnProperty.call( options, 'leakReductionMode' );
+		const leakReductionQuality = hasLeakReductionModeOption ?
+			this._getQualityForLeakReductionMode( this._validateLeakReductionMode( options.leakReductionMode ) ) :
+			null;
+
+		if ( hasQualityOption ) {
+
+			const quality = this._validateQuality( options.quality );
+
+			if ( leakReductionQuality !== null && leakReductionQuality !== quality ) {
+
+				throw new Error( 'LightProbeGridGPU: quality and leakReductionMode must describe the same runtime sampling path.' );
+
+			}
+
+			return quality;
+
+		}
+
+		if ( leakReductionQuality !== null ) return leakReductionQuality;
+
+		return this._validateQuality( fallbackQuality );
+
+	}
+
+	_validateQuality( quality ) {
+
+		if ( quality !== 'fast' && quality !== 'guarded' ) {
+
+			throw new Error( 'LightProbeGridGPU: quality must be "fast" or "guarded".' );
+
+		}
+
+		return quality;
+
+	}
+
+	_getQualityForLeakReductionMode( mode ) {
+
+		return mode === 'off' ? 'fast' : 'guarded';
+
+	}
+
+	_getLeakReductionModeForQuality( quality ) {
+
+		return quality === 'fast' ? 'off' : 'normal';
 
 	}
 
@@ -607,69 +669,8 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	_validateProbeValidity( probeValidity, totalProbes ) {
 
-		if ( probeValidity === null || probeValidity === undefined ) return null;
 
-		if ( typeof probeValidity.length !== 'number' ) {
-
-			throw new Error( 'LightProbeGridGPU: probeValidity must be an array-like object.' );
-
-		}
-
-		if ( probeValidity.length !== totalProbes ) {
-
-			throw new Error( `LightProbeGridGPU: probeValidity length must equal resolution^3 (${ totalProbes }).` );
-
-		}
-
-		for ( let i = 0; i < probeValidity.length; i ++ ) {
-
-			const value = probeValidity[ i ];
-
-			if ( Number.isFinite( value ) === false || value < 0 || value > 1 ) {
-
-				throw new Error( 'LightProbeGridGPU: probeValidity values must be finite numbers between 0 and 1.' );
-
-			}
-
-		}
-
-		return probeValidity;
-
-	}
-
-	_validateProbeLayerMasks( probeLayerMasks, totalProbes ) {
-
-		if ( probeLayerMasks === null || probeLayerMasks === undefined ) return null;
-
-		if ( typeof probeLayerMasks.length !== 'number' ) {
-
-			throw new Error( 'LightProbeGridGPU: probeLayerMasks must be an array-like object.' );
-
-		}
-
-		if ( probeLayerMasks.length !== totalProbes ) {
-
-			throw new Error( `LightProbeGridGPU: probeLayerMasks length must equal resolution^3 (${ totalProbes }).` );
-
-		}
-
-		for ( let i = 0; i < probeLayerMasks.length; i ++ ) {
-
-			const value = probeLayerMasks[ i ];
-
-			if ( Number.isInteger( value ) === false || value < 0 || value > 0xFFFFFF ) {
-
-				throw new Error( 'LightProbeGridGPU: probeLayerMasks values must be integer masks between 0 and 0xFFFFFF.' );
-
-			}
-
-		}
-
-		return probeLayerMasks;
-
-	}
 
 	dispose() {
 
@@ -746,7 +747,7 @@ class LightProbeGridGPU extends Object3D {
 				_gridSize.y / ( this.resolution.y - 1 ),
 				_gridSize.z / ( this.resolution.z - 1 )
 			),
-			0.0001
+			MIN_PROBE_SPACING
 		);
 
 	}
@@ -757,16 +758,6 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	getPrecisionInfo( renderer = null ) {
-
-		return {
-			requestedPrecision: this.projectionPrecision,
-			activePrecision: this.activeProjectionPrecision,
-			textureType: this._getTextureType() === FloatType ? 'float' : 'half float',
-			float32Filterable: renderer !== null ? renderer.hasFeature( 'float32-filterable' ) : null
-		};
-
-	}
 
 	getMemoryInfo() {
 
@@ -803,68 +794,32 @@ class LightProbeGridGPU extends Object3D {
 	getSamplingInfo() {
 
 		return {
+			quality: this.quality,
 			normalBias: this.normalBias.value,
 			viewBias: this.viewBias.value,
 			leakReductionMode: this.leakReductionMode,
 			probeValidityMode: this.probeValiditySource === null ? 'constant' : 'custom',
 			invalidProbeCount: this.invalidProbeCount,
-			probeMeta: {
-				validityChannel: 'probeMeta.r',
-				confidenceChannel: 'probeMeta.g',
-				layerMaskChannel: 'probeMeta.b',
-				defaultLayerMask: DEFAULT_PROBE_LAYER_MASK,
-				probeLayerMaskMode: this.probeLayerMaskSource === null ? 'constant' : 'custom',
-				receiverLayerMask: this.receiverLayerMask.value,
-				receiverLayerMaskScope: 'grid-default-or-node-input',
-				receiverBoundaryLayerMaskDefault: 'receiverLayerMask',
-				receiverBoundaryWeightDefault: 0,
-				receiverBoundarySelector: 'receiverBoundaryWeight >= 0.5'
-			},
-			visibilityDepthMode: this.visibilityDepthMode,
-			visibilityDepthResolution: this.visibilityDepthResolution,
-			visibilityDepthWeighting: this.visibilityDepthWeighting.value,
 			visibilityEnabled: this.enableVisibility,
-			guardedVisibilityMode: this._guardedVisibilityMode,
-			probeKernelMode: this._probeKernelData === null ? 'default-ellipsoid' : 'custom-data',
-			probeKernelDefaultRegionId: 0,
-			probeKernelDefaultLayerMask: 1,
-			probeKernelDefaultSoftness: 1,
-			manualIrradianceSampling: this._usesManualIrradianceSampling(),
-			weightedProbeSampling: this._usesWeightedProbeSampling()
+			visibilityActive: this._isVisibilityRuntimeActive()
 		};
 
 	}
 
-	getVisibilityDepthInfo() {
 
-		const memory = this.getMemoryInfo();
-		return this.visibility.getDepthInfo( memory );
+	_isVisibilityRuntimeActive() {
 
-	}
-
-	_setGuardedVisibilityMode( mode ) {
-
-		if ( mode !== 'off' && mode !== 'guarded' ) {
-
-			throw new Error( 'LightProbeGridGPU: guarded visibility mode must be "off" or "guarded".' );
-
-		}
-
-		this._guardedVisibilityMode = mode;
-		return this._guardedVisibilityMode;
+		return this.enableVisibility === true &&
+			this.visibility.isMomentBacked() &&
+			this._guardedVisibilityMode === 'guarded' &&
+			this.quality === 'guarded';
 
 	}
 
-	_setProbeKernelData( data ) {
-
-		this._probeKernelData = data ?? null;
-		return this._probeKernelData;
-
-	}
 
 	_usesWeightedProbeSampling() {
 
-		return this.leakReductionMode !== 'off';
+		return this.quality === 'guarded';
 
 	}
 
@@ -905,15 +860,15 @@ class LightProbeGridGPU extends Object3D {
 	 * multiplier. A value below `0.5` keeps `receiverLayerMask`; a saturated
 	 * value at or above `0.5` selects `receiverBoundaryLayerMask` before probe
 	 * interpolation. Continuous boundary coverage should be converted to an
-	 * explicit receiver class before passing it here.
-	 * Set `receiverBoundaryMode` to `'blend'` only when the authored weight is
-	 * meant to blend layer compatibility instead of selecting a discrete mask.
+	 * explicit receiver class before passing it here. Production sampling always
+	 * uses binary boundary selection; blended boundary compatibility is reserved
+	 * for debug/proof sampling.
 	 *
 	 * @param {Object} [options] - Receiver sampling options.
 	 * @param {?number|Node} [options.receiverLayerMask] - Default receiver ownership mask.
 	 * @param {?number|Node} [options.receiverBoundaryLayerMask] - Boundary receiver ownership mask.
 	 * @param {?number|Node} [options.receiverBoundaryWeight] - Saturated boundary-class selector.
-	 * @param {'select'|'blend'} [options.receiverBoundaryMode='select'] - Boundary mask compatibility mode.
+	 * @param {'select'} [options.receiverBoundaryMode='select'] - Production boundary mask compatibility mode.
 	 * @return {Node} The irradiance sampling node.
 	 */
 	createIrradianceNode( options = {} ) {
@@ -924,9 +879,16 @@ class LightProbeGridGPU extends Object3D {
 
 	_safeNormalize( vector ) {
 
-		return vector.div( vector.length().max( 0.0001 ) );
+		return vector.div( vector.length().max( SAFE_NORMALIZE_EPSILON ) );
 
 	}
+
+	_getRuntimeSoftProbeValidityWeight( meta ) {
+
+		return meta.x.max( PROBE_VALIDITY_FLOOR );
+
+	}
+
 
 	_getBiasedSamplePosition( probeSpacing ) {
 
@@ -972,7 +934,7 @@ class LightProbeGridGPU extends Object3D {
 			const s5 = probesSH.sample( vec3( uvw.x, uvw.y, this._getPackedAtlasSampleZ( gridZ, 5 ) ) );
 			const s6 = probesSH.sample( vec3( uvw.x, uvw.y, this._getPackedAtlasSampleZ( gridZ, 6 ) ) );
 
-			return this._evaluatePackedSH( s0, s1, s2, s3, s4, s5, s6 ).mul( this.probeIntensity );
+			return this._evaluatePackedSHProduction( s0, s1, s2, s3, s4, s5, s6 ).mul( this.intensity );
 
 		} );
 
@@ -982,11 +944,11 @@ class LightProbeGridGPU extends Object3D {
 
 	_createManualIrradianceNode( options = {} ) {
 
-		return this._createManualIrradianceDebugNode( 'finalIrradiance', options );
+		return this._createGuardedIrradianceNode( options );
 
 	}
 
-	_createManualIrradianceDebugNode( debugMode = 'finalIrradiance', options = {} ) {
+	_createGuardedIrradianceNode( options = {} ) {
 
 		const resolution = this.resolution;
 		const resolutionMinusOne = vec3( resolution.x - 1, resolution.y - 1, resolution.z - 1 );
@@ -1000,14 +962,14 @@ class LightProbeGridGPU extends Object3D {
 		const probeMetaTextureWidth = this.probeValidityTextureWidth;
 		const visibilitySampling = createLightProbeGridGPUVisibilitySamplingState( {
 			visibility: this.visibility,
-			guardedVisibilityMode: this._guardedVisibilityMode,
+			visibilityActive: this._isVisibilityRuntimeActive(),
 			resolution,
 			receiverLayerMask: options.receiverLayerMask,
 			receiverBoundaryLayerMask: options.receiverBoundaryLayerMask,
 			receiverBoundaryWeight: options.receiverBoundaryWeight,
-			receiverBoundaryMode: options.receiverBoundaryMode,
+			receiverBoundaryMode: 'select',
 			defaultReceiverLayerMask: this.receiverLayerMask,
-			safeNormalize: ( vector ) => this._safeNormalize( vector )
+			safeNormalize: vector => this._safeNormalize( vector )
 		} );
 
 		const loadPackedSamples = ( coord ) => {
@@ -1033,7 +995,7 @@ class LightProbeGridGPU extends Object3D {
 			probeIndex.div( probeMetaTextureWidth )
 		) );
 
-		const sampleManual = Fn( () => {
+		const sampleGuarded = Fn( () => {
 
 			const probeSpacing = gridExtentNode.div( resolutionMinusOne );
 			const samplePosition = this._getBiasedSamplePosition( probeSpacing );
@@ -1049,21 +1011,8 @@ class LightProbeGridGPU extends Object3D {
 			const z1 = int( clamp( base.z.add( 1 ), 0, resolutionMinusOne.z ) );
 
 			const weightedSamples = [];
-			const scalarSamples = [];
-			const debugProbeTrilinearWeights = [];
-			const debugProbeNormalWeights = [];
-			const debugProbeValidityWeights = [];
-			const debugProbeConfidenceWeights = [];
-			const debugProbeLayerCompatibility = [];
-			const debugProbeCompatibleKernels = [];
-			const debugProbeDirections = [];
-			const debugProbeBaseWeights = [];
-			const debugProbeVisibilityWeights = [];
-			const debugProbeVisibilities = [];
-			const debugProbeIrradiance = [];
-			const debugProbeIndices = [];
-			const totalWeight = float( 0 ).toVar();
-			const baseWeight = float( 0 ).toVar();
+			const visibleWeightSum = float( 0 ).toVar();
+			const baseWeightSum = float( 0 ).toVar();
 			const normal = normalWorld.normalize();
 			const wx0 = blend.x.oneMinus();
 			const wy0 = blend.y.oneMinus();
@@ -1072,28 +1021,10 @@ class LightProbeGridGPU extends Object3D {
 			for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
 
 				weightedSamples.push( vec4( 0 ).toVar() );
-				scalarSamples.push( vec4( 0 ).toVar() );
 
 			}
 
-			for ( let i = 0; i < 8; i ++ ) {
-
-				debugProbeTrilinearWeights.push( float( 0 ).toVar() );
-				debugProbeNormalWeights.push( float( 0 ).toVar() );
-				debugProbeValidityWeights.push( float( 0 ).toVar() );
-				debugProbeConfidenceWeights.push( float( 0 ).toVar() );
-				debugProbeLayerCompatibility.push( float( 0 ).toVar() );
-				debugProbeCompatibleKernels.push( float( 0 ).toVar() );
-				debugProbeDirections.push( vec3( 0.5 ).toVar() );
-				debugProbeBaseWeights.push( float( 0 ).toVar() );
-				debugProbeVisibilityWeights.push( float( 0 ).toVar() );
-				debugProbeVisibilities.push( float( 0 ).toVar() );
-				debugProbeIrradiance.push( vec3( 0 ).toVar() );
-				debugProbeIndices.push( float( 0 ).toVar() );
-
-			}
-
-			const addProbe = ( coord, trilinearWeight, debugSlot ) => {
+			const addProbe = ( coord, trilinearWeight ) => {
 
 				const sample = loadPackedSamples( coord );
 				const probeIndex = int( coord.x ).add( int( coord.y ).mul( resolution.x ) ).add( int( coord.z ).mul( resolution.x * resolution.y ) );
@@ -1103,22 +1034,11 @@ class LightProbeGridGPU extends Object3D {
 				const probeDirection = this._safeNormalize( probePosition.sub( positionWorld ) );
 				const wrapShading = normal.dot( probeDirection ).add( 1 ).mul( 0.5 );
 				const normalWeight = wrapShading.mul( 0.5 ).add( 0.5 );
-				const validityWeight = meta.x.max( PROBE_VALIDITY_FLOOR );
+				const validityWeight = this._getRuntimeSoftProbeValidityWeight( meta );
 				const confidenceWeight = meta.y.clamp( 0, 1 );
 				const sameLayer = visibilitySampling.getReceiverLayerCompatibility( meta.z.toUint() );
-				const kernelOffset = positionWorld.sub( probePosition ).div( probeSpacing.max( vec3( 0.0001 ) ) );
-				const compatibleKernel = visibilitySampling.useGuardedVisibility ? kernelOffset.dot( kernelOffset ).negate().exp2() : float( 1 );
 				const layerCompatibility = visibilitySampling.useGuardedVisibility ? sameLayer : float( 1 );
-				const base = trilinearWeight.mul( normalWeight ).mul( validityWeight ).mul( confidenceWeight ).mul( layerCompatibility ).mul( compatibleKernel );
-				const probeIrradiance = this._evaluatePackedSH(
-					sample[ 0 ],
-					sample[ 1 ],
-					sample[ 2 ],
-					sample[ 3 ],
-					sample[ 4 ],
-					sample[ 5 ],
-					sample[ 6 ]
-				).mul( this.probeIntensity );
+				const baseWeightValue = trilinearWeight.mul( normalWeight ).mul( validityWeight ).mul( confidenceWeight ).mul( layerCompatibility );
 				const visibility = float( 1 ).toVar();
 
 				if ( visibilitySampling.useGuardedVisibility ) {
@@ -1130,135 +1050,54 @@ class LightProbeGridGPU extends Object3D {
 					visibility.assign( getLightProbeGridGPUMomentVisibility( {
 						moment,
 						receiverDistance,
-						visibilityBias: this.visibilityBias,
-						visibilityDepthWeighting: this.visibilityDepthWeighting
+						selfShadowBias: this.selfShadowBias
 					} ) );
 
 				}
 
-				const weight = base.mul( visibility );
-
-				debugProbeTrilinearWeights[ debugSlot ].assign( trilinearWeight );
-				debugProbeNormalWeights[ debugSlot ].assign( normalWeight );
-				debugProbeValidityWeights[ debugSlot ].assign( validityWeight );
-				debugProbeConfidenceWeights[ debugSlot ].assign( confidenceWeight );
-				debugProbeLayerCompatibility[ debugSlot ].assign( layerCompatibility );
-				debugProbeCompatibleKernels[ debugSlot ].assign( compatibleKernel );
-				debugProbeDirections[ debugSlot ].assign( probeDirection.mul( 0.5 ).add( 0.5 ) );
-				debugProbeBaseWeights[ debugSlot ].assign( base );
-				debugProbeVisibilityWeights[ debugSlot ].assign( weight );
-				debugProbeVisibilities[ debugSlot ].assign( visibility );
-				debugProbeIrradiance[ debugSlot ].assign( probeIrradiance );
-				debugProbeIndices[ debugSlot ].assign( probeIndex.toFloat() );
+				const visibleWeight = baseWeightValue.mul( visibility );
 
 				for ( let i = 0; i < PACKED_SH_TEXTURES; i ++ ) {
 
-					// Accumulate packed SH coefficients. `_evaluateCoefficients()` clamps
-					// negative ringing, so evaluating each probe first would break hardware
-					// filtering equivalence.
-					weightedSamples[ i ].addAssign( sample[ i ].mul( weight ) );
-					scalarSamples[ i ].addAssign( sample[ i ].mul( base ) );
+					weightedSamples[ i ].addAssign( sample[ i ].mul( visibleWeight ) );
 
 				}
 
-				totalWeight.addAssign( weight );
-				baseWeight.addAssign( base );
+				visibleWeightSum.addAssign( visibleWeight );
+				baseWeightSum.addAssign( baseWeightValue );
 
 			};
 
-			addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ), 0 );
-			addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ), 1 );
-			addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ), 2 );
-			addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ), 3 );
-			addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ), 4 );
-			addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ), 5 );
-			addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ), 6 );
-			addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ), 7 );
+			addProbe( vec3( x0, y0, z0 ), wx0.mul( wy0 ).mul( wz0 ) );
+			addProbe( vec3( x1, y0, z0 ), blend.x.mul( wy0 ).mul( wz0 ) );
+			addProbe( vec3( x0, y1, z0 ), wx0.mul( blend.y ).mul( wz0 ) );
+			addProbe( vec3( x1, y1, z0 ), blend.x.mul( blend.y ).mul( wz0 ) );
+			addProbe( vec3( x0, y0, z1 ), wx0.mul( wy0 ).mul( blend.z ) );
+			addProbe( vec3( x1, y0, z1 ), blend.x.mul( wy0 ).mul( blend.z ) );
+			addProbe( vec3( x0, y1, z1 ), wx0.mul( blend.y ).mul( blend.z ) );
+			addProbe( vec3( x1, y1, z1 ), blend.x.mul( blend.y ).mul( blend.z ) );
 
-			const safeWeight = totalWeight.max( 0.0001 );
-			const safeBaseWeight = baseWeight.max( 0.0001 );
-			const visibilityMass = visibilitySampling.useGuardedVisibility ? totalWeight.div( baseWeight.max( 0.0001 ) ).clamp( 0, 1 ) : float( 1 );
-			const scalarCoefficientAccumulator = this._evaluatePackedSH(
-				scalarSamples[ 0 ],
-				scalarSamples[ 1 ],
-				scalarSamples[ 2 ],
-				scalarSamples[ 3 ],
-				scalarSamples[ 4 ],
-				scalarSamples[ 5 ],
-				scalarSamples[ 6 ]
-			).mul( this.probeIntensity );
-			const visibilityCoefficientAccumulator = this._evaluatePackedSH(
-				weightedSamples[ 0 ],
-				weightedSamples[ 1 ],
-				weightedSamples[ 2 ],
-				weightedSamples[ 3 ],
-				weightedSamples[ 4 ],
-				weightedSamples[ 5 ],
-				weightedSamples[ 6 ]
-			).mul( this.probeIntensity );
-			const scalarIrradiance = this._evaluatePackedSH(
-				scalarSamples[ 0 ].div( safeBaseWeight ),
-				scalarSamples[ 1 ].div( safeBaseWeight ),
-				scalarSamples[ 2 ].div( safeBaseWeight ),
-				scalarSamples[ 3 ].div( safeBaseWeight ),
-				scalarSamples[ 4 ].div( safeBaseWeight ),
-				scalarSamples[ 5 ].div( safeBaseWeight ),
-				scalarSamples[ 6 ].div( safeBaseWeight )
-			).mul( this.probeIntensity );
-			const visibilityIrradiance = this._evaluatePackedSH(
-				weightedSamples[ 0 ].div( safeWeight ),
-				weightedSamples[ 1 ].div( safeWeight ),
-				weightedSamples[ 2 ].div( safeWeight ),
-				weightedSamples[ 3 ].div( safeWeight ),
-				weightedSamples[ 4 ].div( safeWeight ),
-				weightedSamples[ 5 ].div( safeWeight ),
-				weightedSamples[ 6 ].div( safeWeight )
-			).mul( this.probeIntensity );
-			const finalVisibilityIrradiance = visibilityIrradiance.mul( visibilityMass );
-			const visibilityBlend = this.visibilityDepthWeighting.clamp( 0, 1 );
-			const finalIrradiance = scalarIrradiance.mul( float( 1 ).sub( visibilityBlend ) ).add( finalVisibilityIrradiance.mul( visibilityBlend ) );
-			const probeIndexScale = float( resolution.x * resolution.y * resolution.z - 1 ).max( 1 );
+			const safeVisibleWeight = visibleWeightSum.max( VISIBILITY_WEIGHT_SUM_FLOOR );
+			const visibilityMass = visibilitySampling.useGuardedVisibility ? visibleWeightSum.div( baseWeightSum.max( VISIBILITY_WEIGHT_SUM_FLOOR ) ).clamp( 0, 1 ) : float( 1 );
+			const visibilityIrradiance = this._evaluatePackedSHProduction(
+				weightedSamples[ 0 ].div( safeVisibleWeight ),
+				weightedSamples[ 1 ].div( safeVisibleWeight ),
+				weightedSamples[ 2 ].div( safeVisibleWeight ),
+				weightedSamples[ 3 ].div( safeVisibleWeight ),
+				weightedSamples[ 4 ].div( safeVisibleWeight ),
+				weightedSamples[ 5 ].div( safeVisibleWeight ),
+				weightedSamples[ 6 ].div( safeVisibleWeight )
+			).mul( this.intensity );
 
-			if ( debugMode === 'samplePositionGrid' ) return clamp( samplePosition.sub( gridMinNode ).div( gridExtentNode ), 0, 1 );
-			if ( debugMode === 'manualNormalWorld' ) return normal.mul( 0.5 ).add( 0.5 );
-			if ( debugMode === 'baseProbeCoordGrid' ) return base.div( resolutionMinusOne );
-			if ( debugMode === 'trilinearBlend' ) return blend;
-			if ( debugMode === 'probeCoordGrid' ) return probeCoord.div( resolutionMinusOne );
-
-			for ( let i = 0; i < 8; i ++ ) {
-
-				if ( debugMode === `neighbor${ i }TrilinearWeight` ) return vec3( debugProbeTrilinearWeights[ i ] );
-				if ( debugMode === `neighbor${ i }NormalWeight` ) return vec3( debugProbeNormalWeights[ i ] );
-				if ( debugMode === `neighbor${ i }ValidityWeight` ) return vec3( debugProbeValidityWeights[ i ] );
-				if ( debugMode === `neighbor${ i }ConfidenceWeight` ) return vec3( debugProbeConfidenceWeights[ i ] );
-				if ( debugMode === `neighbor${ i }LayerCompatibility` ) return vec3( debugProbeLayerCompatibility[ i ] );
-				if ( debugMode === `neighbor${ i }CompatibleKernel` ) return vec3( debugProbeCompatibleKernels[ i ] );
-				if ( debugMode === `neighbor${ i }ProbeDirectionEncoded` ) return debugProbeDirections[ i ];
-				if ( debugMode === `neighbor${ i }BaseWeight` ) return vec3( debugProbeBaseWeights[ i ] );
-				if ( debugMode === `neighbor${ i }VisibilityWeight` ) return vec3( debugProbeVisibilityWeights[ i ] );
-				if ( debugMode === `neighbor${ i }Visibility` ) return vec3( debugProbeVisibilities[ i ] );
-				if ( debugMode === `neighbor${ i }Irradiance` ) return debugProbeIrradiance[ i ];
-				if ( debugMode === `neighbor${ i }ProbeIndex` ) return vec3( debugProbeIndices[ i ].div( probeIndexScale ) );
-
-			}
-
-			if ( debugMode === 'scalarWeight' ) return vec3( baseWeight );
-			if ( debugMode === 'visibilityWeight' ) return vec3( totalWeight );
-			if ( debugMode === 'visibilityMix' || debugMode === 'visibilityOverScalar' ) return vec3( visibilityMass );
-			if ( debugMode === 'scalarCoefficientAccumulator' ) return scalarCoefficientAccumulator;
-			if ( debugMode === 'visibilityCoefficientAccumulator' ) return visibilityCoefficientAccumulator;
-			if ( debugMode === 'scalarIrradiance' ) return scalarIrradiance;
-			if ( debugMode === 'visibilityIrradiance' ) return visibilityIrradiance;
-
-			return finalIrradiance;
+			return visibilityIrradiance.mul( visibilityMass );
 
 		} );
 
-		return sampleManual();
+		return sampleGuarded();
 
 	}
 
-	_evaluatePackedSH( s0, s1, s2, s3, s4, s5, s6 ) {
+	_evaluatePackedSHProduction( s0, s1, s2, s3, s4, s5, s6 ) {
 
 		const c0 = s0.xyz;
 		const c1 = vec3( s0.w, s1.x, s1.y );
@@ -1270,33 +1109,24 @@ class LightProbeGridGPU extends Object3D {
 		const c7 = s5.yzw;
 		const c8 = s6.xyz;
 
-		return this._evaluateCoefficients( c0, c1, c2, c3, c4, c5, c6, c7, c8 );
-
-	}
-
-	_evaluateCoefficients( c0, c1, c2, c3, c4, c5, c6, c7, c8 ) {
-
 		const normal = normalWorld.normalize();
 		const x = normal.x;
 		const y = normal.y;
 		const z = normal.z;
-		const band1Intensity = this.band1Intensity;
-		const band2Intensity = this.band2Intensity;
 
 		let result = c0.mul( 0.886227 );
-		result = result.add( c1.mul( 2.0 * 0.511664 ).mul( y ).mul( band1Intensity ) );
-		result = result.add( c2.mul( 2.0 * 0.511664 ).mul( z ).mul( band1Intensity ) );
-		result = result.add( c3.mul( 2.0 * 0.511664 ).mul( x ).mul( band1Intensity ) );
-		result = result.add( c4.mul( 2.0 * 0.429043 ).mul( x ).mul( y ).mul( band2Intensity ) );
-		result = result.add( c5.mul( 2.0 * 0.429043 ).mul( y ).mul( z ).mul( band2Intensity ) );
-		result = result.add( c6.mul( z.mul( z ).mul( 0.743125 ).sub( 0.247708 ) ).mul( band2Intensity ) );
-		result = result.add( c7.mul( 2.0 * 0.429043 ).mul( x ).mul( z ).mul( band2Intensity ) );
-		result = result.add( c8.mul( 0.429043 ).mul( x.mul( x ).sub( y.mul( y ) ) ).mul( band2Intensity ) );
+		result = result.add( c1.mul( 2.0 * 0.511664 ).mul( y ) );
+		result = result.add( c2.mul( 2.0 * 0.511664 ).mul( z ) );
+		result = result.add( c3.mul( 2.0 * 0.511664 ).mul( x ) );
+		result = result.add( c4.mul( 2.0 * 0.429043 ).mul( x ).mul( y ) );
+		result = result.add( c5.mul( 2.0 * 0.429043 ).mul( y ).mul( z ) );
+		result = result.add( c6.mul( z.mul( z ).mul( 0.743125 ).sub( 0.247708 ) ) );
+		result = result.add( c7.mul( 2.0 * 0.429043 ).mul( x ).mul( z ) );
+		result = result.add( c8.mul( 0.429043 ).mul( x.mul( x ).sub( y.mul( y ) ) ) );
 
 		return max( result, vec3( 0 ) );
 
 	}
-
 	createHelper() {
 
 		if ( this.helper === null ) {
@@ -1477,7 +1307,7 @@ class LightProbeGridGPU extends Object3D {
 
 			}
 
-			this.probeIntensity.value = 0;
+			this.intensity.value = 0;
 			if ( this.helper !== null ) this.helper.visible = false;
 
 			this.coefficientTarget.scissorTest = false;
@@ -1486,6 +1316,15 @@ class LightProbeGridGPU extends Object3D {
 			renderer.setScissorTest( false );
 
 			for ( let i = 0; i < this.totalProbes; i ++ ) {
+
+				// Skip capture for invalid probes (inside geometry)
+				// They remain with zero coefficients from the clear() above
+				if ( this.probeValiditySource !== null && this.probeValiditySource[ i ] === 0 ) {
+
+					continue;
+
+				}
+
 
 				this.getProbePosition( i, _probePosition );
 				this.cubeCamera.position.copy( _probePosition );
@@ -1660,7 +1499,7 @@ class LightProbeGridGPU extends Object3D {
 		} );
 		this.texture = this.atlasTarget.texture;
 
-		this._createProbeValidityTexture();
+		createProbeValidityTexture( this );
 		this.projectionMaterial = createLightProbeGridGPUProjectionMaterial( this.cubeRenderTarget.texture, this.cubemapSize );
 		this.computeProjectionNode = createLightProbeGridGPUComputeProjectionNode(
 			this.cubeRenderTarget.texture,
@@ -1718,83 +1557,6 @@ class LightProbeGridGPU extends Object3D {
 
 	}
 
-	_createProbeValidityTexture() {
-
-		const textureWidth = Math.ceil( Math.sqrt( this.totalProbes ) );
-		const textureHeight = Math.ceil( this.totalProbes / textureWidth );
-		const recreateTexture = this.probeValidityTexture === null ||
-			this.probeValidityTextureWidth !== textureWidth ||
-			this.probeValidityTextureHeight !== textureHeight;
-
-		if ( recreateTexture && this.probeValidityTexture !== null ) this.probeValidityTexture.dispose();
-
-		this.probeValidityTextureWidth = textureWidth;
-		this.probeValidityTextureHeight = textureHeight;
-		this.invalidProbeCount = 0;
-
-		const data = recreateTexture ?
-			new Float32Array( this.probeValidityTextureWidth * this.probeValidityTextureHeight * 4 ) :
-			this.probeValidityTexture.image.data;
-
-		data.fill( 0 );
-
-		for ( let i = 0; i < this.totalProbes; i ++ ) {
-
-			const validity = this.probeValiditySource === null ? 1 : this.probeValiditySource[ i ];
-			const layerMask = this.probeLayerMaskSource === null ? DEFAULT_PROBE_LAYER_MASK : this.probeLayerMaskSource[ i ];
-			const offset = i * 4;
-
-			data[ offset ] = validity;
-			data[ offset + 1 ] = validity;
-			data[ offset + 2 ] = layerMask;
-			data[ offset + 3 ] = 1;
-
-			if ( validity < 1 ) this.invalidProbeCount ++;
-
-		}
-
-		if ( recreateTexture ) {
-
-			this.probeValidityTexture = new DataTexture(
-				data,
-				this.probeValidityTextureWidth,
-				this.probeValidityTextureHeight,
-				RGBAFormat,
-				FloatType
-			);
-			this.probeValidityTexture.minFilter = NearestFilter;
-			this.probeValidityTexture.magFilter = NearestFilter;
-			this.probeValidityTexture.generateMipmaps = false;
-
-		}
-
-		this.probeValidityTexture.needsUpdate = true;
-
-	}
-
-
-	_resolvePrecision( renderer ) {
-
-		const requested = this.projectionPrecision;
-		const hasFloatFiltering = renderer !== null && renderer.hasFeature( 'float32-filterable' );
-
-		if ( this.projectionFallbackType === HalfFloatType || requested === 'half' || requested === 'half float' ) {
-
-			this.activeProjectionPrecision = this.projectionFallbackType === HalfFloatType ? 'half-linear (fallback)' : 'half-linear';
-			return;
-
-		}
-
-		if ( requested === 'float' ) {
-
-			this.activeProjectionPrecision = hasFloatFiltering ? 'float-linear' : 'half-linear (fallback)';
-			return;
-
-		}
-
-		this.activeProjectionPrecision = hasFloatFiltering ? 'float-linear' : 'half-linear';
-
-	}
 
 	_getTextureType() {
 
