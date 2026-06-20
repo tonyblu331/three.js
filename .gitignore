@@ -3,6 +3,7 @@
 .idea/
 .project
 .puppeteer_profile/
+.puppeteer_profile_*/
 .vs/
 .vscode/
 
